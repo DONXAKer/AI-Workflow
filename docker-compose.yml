@@ -1,0 +1,21 @@
+services:
+  workflow-core:
+    build:
+      context: ./workflow-core
+    ports:
+      - "8080:8080"
+    volumes:
+      - workflow-state:/app/.workflow
+    environment:
+      WORKFLOW_MODE: gui
+
+  workflow-ui:
+    build:
+      context: ./workflow-ui
+    ports:
+      - "5173:80"
+    depends_on:
+      - workflow-core
+
+volumes:
+  workflow-state:

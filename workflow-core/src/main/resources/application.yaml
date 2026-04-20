@@ -1,0 +1,44 @@
+spring:
+  datasource:
+    url: jdbc:h2:file:./workflow-db;AUTO_SERVER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+  h2:
+    console:
+      enabled: true
+  main:
+    banner-mode: off
+
+workflow:
+  mode: cli  # cli | gui
+  config-dir: ./config
+  state-dir: ./.workflow/state
+  encryption:
+    # 32 bytes (AES-256), Base64-encoded. Override via WORKFLOW_ENCRYPTION_KEY in prod.
+    # When absent, a development key is used with a loud warning at startup.
+    key: ${WORKFLOW_ENCRYPTION_KEY:}
+
+logging:
+  level:
+    root: WARN
+    com.workflow: INFO
+
+server:
+  port: 8020
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    prometheus:
+      enabled: true
+  metrics:
+    tags:
+      application: workflow

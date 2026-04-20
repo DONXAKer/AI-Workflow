@@ -1,0 +1,36 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Java / Gradle
+workflow-core/build/
+workflow-core/.gradle/
+workflow-core/out/
+*.class
+*.jar
+*.war
+*.ear
+*.log
+workflow-db.mv.db
+workflow-db.trace.db
+
+# Node / React
+workflow-ui/node_modules/
+workflow-ui/dist/
+workflow-ui/.cache/
+
+# Docker
+docker-compose.override.yml
+
+# Misc
+*.tmp
+*.bak

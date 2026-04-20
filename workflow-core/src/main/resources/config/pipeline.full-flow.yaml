@@ -1,0 +1,236 @@
+name: full-flow-example
+description: |
+  Полный flow от постановки бизнес-задачи до деплоя в прод.
+  Демонстрирует новые поля approval_mode (manual|auto|auto_notify) и enabled.
+
+integrations:
+  youtrack: youtrack-default
+  gitlab: gitlab-default
+  openrouter: openrouter-default
+
+knowledgeBase:
+  sources:
+    - type: git
+      url: https://github.com/example/docs.git
+      branch: main
+      path: docs/
+
+entry_points:
+  - id: from_raw_text
+    name: "Бизнес-запрос свободным текстом"
+    from_block: intake
+    requires_input: requirement
+
+  - id: from_tracker_issue
+    name: "Задача уже заведена в YouTrack"
+    from_block: analysis
+    requires_input: youtrack_issue
+    inject:
+      - { block_id: intake, source: empty }
+
+triggers:
+  - id: youtrack_ready_for_dev
+    type: webhook
+    provider: youtrack
+    event: status_change
+    conditions:
+      new_status: "Ready for Dev"
+    entry_point_id: from_tracker_issue
+    enabled: true
+
+pipeline:
+  # 1. Formalize raw business ask → structured requirement
+  - id: intake
+    block: business_intake
+    approval_mode: manual
+    depends_on: []
+
+  # 2. Technical analysis
+  - id: analysis
+    block: analysis
+    approval_mode: auto_notify
+    depends_on: [intake]
+    agent:
+      model: claude-opus-4-6
+      temperature: 1.0
+
+  # 3. Clarifying Q&A — skipped for low-complexity work
+  - id: clarification
+    block: clarification
+    approval_mode: manual
+    depends_on: [analysis]
+    condition: "$.analysis.estimated_complexity != 'low'"
+
+  # 4. Decomposition into sub-tasks in tracker
+  - id: tasks
+    block: youtrack_tasks
+    approval_mode: manual
+    depends_on: [analysis, clarification]
+
+  # 5. TDD: generate tests first — can be toggled off
+  - id: test_gen
+    block: test_generation
+    approval_mode: auto_notify
+    enabled: true
+    depends_on: [tasks]
+
+  # 6. Generate implementation code
+  - id: codegen
+    block: code_generation
+    approval_mode: auto_notify
+    depends_on: [tasks, test_gen]
+
+  # 7. Structural + LLM verify with loopback
+  - id: verify_code
+    block: verify
+    approval_mode: auto
+    depends_on: [codegen]
+    verify:
+      subject: codegen
+      checks:
+        - { field: changes, rule: min_items, value: 1 }
+      llm_check:
+        enabled: true
+        prompt: "Оцени качество изменений кода 0-10."
+        min_score: 7
+      on_fail:
+        action: loopback
+        target: codegen
+        max_iterations: 2
+
+  # 8. AI code review — can be toggled off per project policy
+  - id: ai_review
+    block: ai_review
+    approval_mode: auto_notify
+    enabled: true
+    depends_on: [codegen, verify_code]
+    agent:
+      model: claude-sonnet-4-6
+      temperature: 0.3
+
+  # 9. Open MR/PR
+  - id: mr
+    block: gitlab_mr
+    approval_mode: manual
+    depends_on: [ai_review]
+
+  # 10. Wait for CI
+  - id: ci
+    block: gitlab_ci
+    approval_mode: auto
+    depends_on: [mr]
+    on_failure:
+      action: loopback
+      target: codegen
+      max_iterations: 2
+      failed_statuses: [failed, canceled]
+
+  # 11. Merge MR — point of no return in main
+  - id: merge
+    block: vcs_merge
+    approval_mode: manual
+    depends_on: [ci]
+    config:
+      strategy: squash
+      delete_branch_after: true
+    on_failure:
+      action: loopback
+      target: codegen
+      max_iterations: 2
+      failed_statuses: [conflict]
+      inject_context:
+        conflict_files: "$.merge.conflicts"
+        main_diff: "$.merge.main_diff"
+
+  # 12. Build artifact once — promoted to all envs
+  - id: build
+    block: build
+    approval_mode: auto
+    depends_on: [merge]
+    config:
+      artifact_type: docker
+      registry: registry.example.com/app
+
+  # 13. Deploy to test env
+  - id: deploy_test
+    block: deploy
+    approval_mode: auto
+    depends_on: [build]
+    config:
+      environment: test
+      strategy: rolling
+
+  # 14. Acceptance/smoke tests — loopback on failure
+  - id: acceptance
+    block: run_tests
+    approval_mode: auto
+    depends_on: [deploy_test]
+    config:
+      type: smoke
+      environment: test
+      timeout_seconds: 1200
+    on_failure:
+      action: loopback
+      target: codegen
+      max_iterations: 2
+      failed_statuses: [failed]
+
+  # 15. Deploy to staging
+  - id: deploy_staging
+    block: deploy
+    approval_mode: auto_notify
+    depends_on: [acceptance]
+    config:
+      environment: staging
+
+  # 16. Deploy to prod — always manual + strict preconditions + escalation
+  - id: deploy_prod
+    block: deploy
+    approval_mode: manual
+    depends_on: [deploy_staging]
+    timeout: 172800  # 48h — если release_manager не одобрил, эскалация
+    on_timeout:
+      action: escalate
+      target: release_manager
+      description: "Эскалация если approval прод-деплоя висит 48 часов"
+    required_gates:
+      - name: staging_ok
+        expr: "$.deploy_staging.status == 'success'"
+        description: "Staging деплой должен завершиться успешно"
+      - name: smoke_ok
+        expr: "$.acceptance.status == 'passed'"
+        description: "Smoke-тесты должны пройти"
+      - name: review_ok
+        expr: "$.ai_review.verdict == 'approve'"
+        description: "AI code review должен быть approve"
+    config:
+      environment: prod
+      strategy: blue_green
+
+  # 17. Post-deploy verification
+  - id: verify_prod
+    block: verify_prod
+    approval_mode: auto
+    depends_on: [deploy_prod]
+    config:
+      observation_window_seconds: 180
+      checks:
+        - { name: health, type: http, url: "https://app.example.com/health" }
+        - { name: error_rate, type: prometheus, query: "rate(errors_total[5m])", threshold: 0.01 }
+
+  # 18. Rollback — runs only if verify_prod failed; always manual
+  - id: rollback
+    block: rollback
+    approval_mode: manual
+    depends_on: [verify_prod]
+    condition: "$.verify_prod.passed == false"
+    config:
+      strategy: manual
+      environment: prod
+
+  # 19. Release notes → post to tracker/Slack
+  - id: notes
+    block: release_notes
+    approval_mode: auto
+    depends_on: [verify_prod]
+    condition: "$.verify_prod.passed == true"
