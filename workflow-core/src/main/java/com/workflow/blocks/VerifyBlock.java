@@ -160,6 +160,20 @@ public class VerifyBlock implements Block {
         Object ruleValue = check.getValue();
 
         return switch (check.getRule()) {
+            case "equals" -> {
+                if (value == null && ruleValue == null) yield null;
+                if (value == null || ruleValue == null) {
+                    yield field + " is " + value + ", expected " + ruleValue;
+                }
+                // Numeric-aware comparison so {rule: equals, value: 0} matches
+                // whether the block returned 0, 0L, or 0.0.
+                if (value instanceof Number a && ruleValue instanceof Number b) {
+                    yield a.doubleValue() == b.doubleValue()
+                        ? null : field + " is " + value + ", expected " + ruleValue;
+                }
+                yield value.equals(ruleValue) || value.toString().equals(ruleValue.toString())
+                    ? null : field + " is " + value + ", expected " + ruleValue;
+            }
             case "not_empty" -> {
                 if (value == null) yield field + " is null";
                 if (value instanceof String s && s.isBlank()) yield field + " is empty";
