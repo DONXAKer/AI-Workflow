@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * <p>Uses an in-memory H2 so the shared dev DB (workflow-db) is not touched
  * and assertions on {@link LlmCallRepository} run against a clean slate.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 @TestPropertySource(properties = {
     "spring.datasource.url=jdbc:h2:mem:tooluse-it;DB_CLOSE_DELAY=-1",
     "spring.jpa.hibernate.ddl-auto=create-drop",
