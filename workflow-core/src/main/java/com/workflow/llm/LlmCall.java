@@ -47,6 +47,22 @@ public class LlmCall {
     @Column(nullable = false)
     private String projectSlug = "default";
 
+    /**
+     * Iteration index within a tool-use loop. Zero for plain {@code complete()} calls
+     * (single-shot). 1..N for each API round-trip inside
+     * {@code LlmClient.completeWithTools}. Enables per-step audit of agentic blocks.
+     */
+    @Column(nullable = false)
+    private int iteration = 0;
+
+    /**
+     * JSON array of tool names invoked in this iteration (e.g. {@code ["Read","Edit"]}).
+     * Null for non-tool-use calls. Kept as text to avoid touching the schema when the
+     * set of tools grows.
+     */
+    @Column(columnDefinition = "TEXT")
+    private String toolCallsMadeJson;
+
     public LlmCall() {}
 
     public Long getId() { return id; }
@@ -71,4 +87,10 @@ public class LlmCall {
     public void setProjectSlug(String projectSlug) {
         this.projectSlug = projectSlug != null ? projectSlug : "default";
     }
+
+    public int getIteration() { return iteration; }
+    public void setIteration(int iteration) { this.iteration = iteration; }
+
+    public String getToolCallsMadeJson() { return toolCallsMadeJson; }
+    public void setToolCallsMadeJson(String toolCallsMadeJson) { this.toolCallsMadeJson = toolCallsMadeJson; }
 }

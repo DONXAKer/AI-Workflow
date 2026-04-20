@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.workflow.llm.tooluse.ToolExecutor;
+import com.workflow.llm.tooluse.ToolUseRequest;
+import com.workflow.llm.tooluse.ToolUseResponse;
 import com.workflow.model.IntegrationConfig;
 import com.workflow.model.IntegrationConfigRepository;
 import com.workflow.model.IntegrationType;
@@ -174,6 +177,26 @@ public class LlmClient {
         } catch (Exception e) {
             log.debug("LlmCall persist failed: {}", e.getMessage());
         }
+    }
+
+    /**
+     * Runs an agentic tool-use loop against the configured provider.
+     *
+     * <p>Each iteration: POST messages+tools → parse response → if {@code stop_reason ==
+     * tool_use}, dispatch each requested {@link com.workflow.llm.tooluse.ToolCall} to the
+     * {@code executor}, append tool results as the next user turn, and loop. Stops when
+     * the model signals {@code end_turn}, exhausts {@code maxIterations}, exceeds
+     * {@code budgetUsdCap}, or hits {@code max_tokens}.
+     *
+     * <p>Every API iteration persists its own {@link LlmCall} row tagged with the
+     * iteration index, so per-step audit is preserved.
+     *
+     * <p>Implementation lands in M1.3 — this stub exists to pin the public surface and
+     * let blocks compile against it.
+     */
+    public ToolUseResponse completeWithTools(ToolUseRequest request, ToolExecutor executor) {
+        throw new UnsupportedOperationException(
+            "completeWithTools not implemented yet (M1.3 pending) — see project_ai_workflow_phase1_plan.md");
     }
 
     /**
