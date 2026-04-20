@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.workflow.config.AgentConfig;
 import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
+import com.workflow.core.expr.StringInterpolator;
 import com.workflow.llm.LlmClient;
 import com.workflow.llm.tooluse.ToolDefinition;
 import com.workflow.llm.tooluse.ToolUseRequest;
@@ -70,6 +71,7 @@ public class AgentWithToolsBlock implements Block {
     @Autowired private ObjectMapper objectMapper;
     @Autowired(required = false) private ToolCallAuditRepository auditRepository;
     @Autowired(required = false) private ProjectRepository projectRepository;
+    @Autowired(required = false) private StringInterpolator stringInterpolator;
 
     @Override public String getName() { return "agent_with_tools"; }
 
@@ -90,7 +92,13 @@ public class AgentWithToolsBlock implements Block {
         }
 
         String userTemplate = asRequiredString(cfg, "user_message");
-        String userMessage = interpolate(userTemplate, input);
+        // Resolve ${block.field} / ${input.key} against prior-block outputs first,
+        // then the legacy {key} form against the block's input map. Existing blocks
+        // stay compatible; new pipelines can cross-reference freely.
+        String expanded = stringInterpolator != null
+            ? stringInterpolator.interpolate(userTemplate, run, input)
+            : userTemplate;
+        String userMessage = interpolate(expanded, input);
 
         List<String> allowedTools = asStringList(cfg, "allowed_tools");
         if (allowedTools.isEmpty()) {
