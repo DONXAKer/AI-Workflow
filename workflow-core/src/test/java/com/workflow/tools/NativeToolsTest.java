@@ -275,5 +275,23 @@ class NativeToolsTest {
             assertThrows(ToolInvocationException.class,
                 () -> DenyList.assertBashAllowed("git  push  --force"));
         }
+
+        @Test
+        void bashCatchesEscapedSpaces() {
+            // "rm\ -rf" and similar shell-escape tricks collapse back to "rm -rf"
+            assertThrows(ToolInvocationException.class,
+                () -> DenyList.assertBashAllowed("rm\\ -rf /tmp/x"));
+            assertThrows(ToolInvocationException.class,
+                () -> DenyList.assertBashAllowed("git\\ push\\ --force origin"));
+        }
+
+        @Test
+        void bashIsCaseInsensitive() {
+            // POSIX sh won't run "RM -RF", but if an LLM suggests it we still refuse.
+            assertThrows(ToolInvocationException.class,
+                () -> DenyList.assertBashAllowed("RM -RF /"));
+            assertThrows(ToolInvocationException.class,
+                () -> DenyList.assertBashAllowed("Git Push --Force"));
+        }
     }
 }

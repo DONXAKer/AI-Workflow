@@ -10,6 +10,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -116,6 +117,41 @@ class BashToolsTest {
             // Allowlist says "anything goes", but DenyList must still block rm -rf.
             assertThrows(ToolInvocationException.class,
                 () -> tool.execute(ctx(wd, List.of("Bash(*)")), input("rm -rf /tmp/whatever")));
+        }
+
+        @Test
+        void scrubsSecretEnvVars(@TempDir Path wd) throws Exception {
+            String marker = "scrubs-it-" + System.nanoTime();
+            String parentValue = "visible-only-to-parent-" + marker;
+
+            // Simulate a secret in the parent env. We can't really mutate JVM env at
+            // runtime (setenv is OS-only), so we drive ProcessBuilder directly to
+            // verify scrubSecrets removes entries we put in its env map.
+            ProcessBuilder pb = new ProcessBuilder("sh", "-c",
+                "echo OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-MISSING}; "
+                    + "echo GITHUB_TOKEN=${GITHUB_TOKEN:-MISSING}; "
+                    + "echo MY_API_KEY=${MY_API_KEY:-MISSING}; "
+                    + "echo HARMLESS=${HARMLESS:-MISSING}");
+            pb.redirectErrorStream(true);
+            pb.environment().put("OPENROUTER_API_KEY", parentValue);
+            pb.environment().put("GITHUB_TOKEN", parentValue);
+            pb.environment().put("MY_API_KEY", parentValue);
+            pb.environment().put("HARMLESS", "kept");
+
+            BashTool.scrubSecrets(pb);
+
+            Process proc = pb.start();
+            String out = new String(proc.getInputStream().readAllBytes());
+            proc.waitFor(10, TimeUnit.SECONDS);
+
+            assertFalse(out.contains(parentValue),
+                "scrubbed secrets must not leak into subprocess stdout: " + out);
+            assertTrue(out.contains("OPENROUTER_API_KEY=MISSING"));
+            assertTrue(out.contains("GITHUB_TOKEN=MISSING"));
+            assertTrue(out.contains("MY_API_KEY=MISSING"),
+                "suffix _API_KEY should catch custom names");
+            assertTrue(out.contains("HARMLESS=kept"),
+                "non-secret vars must survive");
         }
 
         @Test

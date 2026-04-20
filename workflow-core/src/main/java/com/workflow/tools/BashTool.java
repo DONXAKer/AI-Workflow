@@ -10,6 +10,8 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -29,6 +31,22 @@ public class BashTool implements Tool {
 
     static final int DEFAULT_TIMEOUT_SEC = 120;
     static final int MAX_OUTPUT_BYTES = 64 * 1024;
+
+    /**
+     * Env vars stripped from the subprocess environment before the shell runs. Keeps the
+     * app's own credentials out of reach of whatever the LLM decides to run, even under a
+     * narrow bash allowlist — defence in depth, not the primary boundary.
+     *
+     * <p>Matching is literal + suffix-based: any var whose name equals or ends in one of
+     * these tokens gets dropped. Catches {@code OPENROUTER_API_KEY}, {@code FOO_API_KEY},
+     * {@code GITHUB_TOKEN}, etc.
+     */
+    static final List<String> SECRET_ENV_SUFFIXES = List.of(
+        "_API_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_PRIVATE_KEY",
+        "OPENROUTER_API_KEY", "WORKFLOW_ENCRYPTION_KEY",
+        "GITHUB_TOKEN", "GITLAB_TOKEN", "YOUTRACK_TOKEN",
+        "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"
+    );
 
     @Override
     public String name() { return "Bash"; }
@@ -66,6 +84,7 @@ public class BashTool implements Tool {
         ProcessBuilder pb = new ProcessBuilder("sh", "-c", command);
         pb.directory(ctx.workingDir().toFile());
         pb.redirectErrorStream(true);
+        scrubSecrets(pb);
 
         log.debug("Bash exec in {}: {}", ctx.workingDir(), command);
 
@@ -106,6 +125,19 @@ public class BashTool implements Tool {
         if (!output.endsWith("\n")) sb.append('\n');
         sb.append("[exit ").append(exit).append(']');
         return sb.toString();
+    }
+
+    static void scrubSecrets(ProcessBuilder pb) {
+        Map<String, String> env = pb.environment();
+        env.entrySet().removeIf(e -> {
+            String name = e.getKey();
+            if (name == null) return false;
+            String upper = name.toUpperCase();
+            for (String suffix : SECRET_ENV_SUFFIXES) {
+                if (upper.equals(suffix) || upper.endsWith(suffix)) return true;
+            }
+            return false;
+        });
     }
 
     private static String readCapped(InputStream in, int maxBytes) throws IOException {

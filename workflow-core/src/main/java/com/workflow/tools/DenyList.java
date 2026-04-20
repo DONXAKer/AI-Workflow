@@ -70,10 +70,17 @@ public final class DenyList {
 
     public static void assertBashAllowed(String command) {
         if (command == null) return;
-        // Insert spaces around pipes so "curl|sh" normalizes the same as "curl | sh".
+        // Normalize so simple evasions collapse to the canonical form we match against:
+        //   - backslash-escaped spaces ("rm\ -rf") -> real spaces
+        //   - pipe without surrounding spaces ("curl|sh") -> spaced pipe
+        //   - repeated whitespace -> single space
+        //   - uppercase ("RM -RF") -> lowercase (POSIX sh is case-sensitive so this is
+        //     only relevant to the LLM picking a weird form; cheap to cover)
         String normalized = command.trim()
+            .replace("\\ ", " ")
             .replace("|", " | ")
-            .replaceAll("\\s+", " ");
+            .replaceAll("\\s+", " ")
+            .toLowerCase();
         for (String needle : BASH_DENY_SUBSTRINGS) {
             if (normalized.contains(needle)) {
                 throw new ToolInvocationException(
