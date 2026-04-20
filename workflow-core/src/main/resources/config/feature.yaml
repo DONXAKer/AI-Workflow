@@ -1,0 +1,133 @@
+name: feature
+description: |
+  Native WarCard-style feature pipeline (Phase 1).
+
+  Flow: task.md → implementation via tool-use agent → tests → verify →
+  squash commit. All cross-block wiring uses ${block.field} interpolation;
+  the agent sees auto-appended issues on verify loopback.
+
+  Drop this file at <project>/.ai-workflow/pipelines/feature.yaml and
+  start a run with entry point "implement". The run input is the path to
+  the task.md file (usually tasks/active/<FEAT>_<slug>.md).
+
+entry_points:
+  - id: implement
+    name: "Implement a task.md ticket"
+    from_block: task_md
+    requires_input: task_file
+
+pipeline:
+  - id: task_md
+    block: task_md_input
+    approval: false
+    depends_on: []
+    config:
+      file_path: "${input.task_file}"
+
+  - id: impl
+    block: agent_with_tools
+    approval: true
+    depends_on: [task_md]
+    agent:
+      model: anthropic/claude-sonnet-4-6
+      maxTokens: 8192
+      temperature: 0.2
+      systemPrompt: |
+        You implement feature tickets precisely. Use the provided tools to
+        read the codebase, edit existing files, and write new ones. Stay
+        inside the working directory. When the task is done, end your turn
+        with one short confirmation sentence.
+    config:
+      user_message: |
+        Feature: ${task_md.title}
+
+        ## Как надо
+        ${task_md.to_be}
+
+        ## Критерии приёмки
+        ${task_md.acceptance}
+
+        Implement the feature above. Keep changes scoped — no unrelated
+        refactors. Prefer Edit over Write for existing files.
+      allowed_tools: [Read, Write, Edit, Glob, Grep, Bash]
+      bash_allowlist:
+        - Bash(git status)
+        - Bash(git diff*)
+        - Bash(git add*)
+        - Bash(cat *)
+      max_iterations: 40
+      budget_usd_cap: 5.0
+
+  - id: build
+    block: shell_exec
+    approval: false
+    depends_on: [impl]
+    config:
+      command: "${input.build_command}"
+      timeout_sec: 600
+      allow_nonzero_exit: true    # capture failure for verify_build
+
+  - id: verify_build
+    block: verify
+    approval: false
+    depends_on: [build]
+    config:
+      subject: build
+      checks:
+        - { field: success, rule: equals, value: true }
+    verify:
+      subject: build
+      checks:
+        - { field: success, rule: equals, value: true }
+      on_fail:
+        action: loopback
+        target: impl
+        max_iterations: 3
+        inject_context:
+          build_stderr: "$.build.stderr"
+          build_exit: "$.build.exit_code"
+
+  - id: tests
+    block: shell_exec
+    approval: false
+    depends_on: [verify_build]
+    config:
+      command: "${input.test_command}"
+      timeout_sec: 900
+      allow_nonzero_exit: true
+
+  - id: verify_tests
+    block: verify
+    approval: false
+    depends_on: [tests]
+    config:
+      subject: tests
+      checks:
+        - { field: success, rule: equals, value: true }
+    verify:
+      subject: tests
+      checks:
+        - { field: success, rule: equals, value: true }
+      on_fail:
+        action: loopback
+        target: impl
+        max_iterations: 3
+        inject_context:
+          test_failures: "$.tests.stdout"
+
+  - id: commit
+    block: shell_exec
+    approval: true
+    depends_on: [verify_tests]
+    config:
+      # Stage everything the agent produced, then one squash commit for the feature.
+      # Branch management (checkout / push) lives outside this pipeline — this block
+      # just produces a local commit. Operator reviews before the approval gate clears.
+      command: |
+        git add -A && \
+        git commit -m "${task_md.feat_id}: ${task_md.title}
+
+        ${task_md.to_be}
+
+        Implements acceptance criteria from ${task_md.slug}.md"
+      allow_nonzero_exit: false

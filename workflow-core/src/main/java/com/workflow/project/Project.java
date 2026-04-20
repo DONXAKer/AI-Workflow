@@ -33,6 +33,16 @@ public class Project {
     /** Path to this project's pipeline config directory, relative to workflow.config-dir. */
     private String configDir;
 
+    /**
+     * Absolute filesystem path to the project's source tree on this host. Tools scoped
+     * to a project use this as the root for {@link com.workflow.tools.PathScope} — any
+     * path resolution that escapes this root is rejected.
+     *
+     * <p>Null for projects that don't represent a local checkout (e.g. metadata-only
+     * project rows). Block YAML may supply {@code working_dir} inline as a fallback.
+     */
+    private String workingDir;
+
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -54,6 +64,8 @@ public class Project {
     public void setDescription(String description) { this.description = description; }
     public String getConfigDir() { return configDir; }
     public void setConfigDir(String configDir) { this.configDir = configDir; }
+    public String getWorkingDir() { return workingDir; }
+    public void setWorkingDir(String workingDir) { this.workingDir = workingDir; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 }
