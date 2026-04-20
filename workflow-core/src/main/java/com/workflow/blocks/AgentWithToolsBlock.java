@@ -98,7 +98,7 @@ public class AgentWithToolsBlock implements Block {
         String expanded = stringInterpolator != null
             ? stringInterpolator.interpolate(userTemplate, run, input)
             : userTemplate;
-        String userMessage = interpolate(expanded, input);
+        String userMessage = appendLoopbackFeedback(interpolate(expanded, input), input);
 
         List<String> allowedTools = asStringList(cfg, "allowed_tools");
         if (allowedTools.isEmpty()) {
@@ -221,5 +221,40 @@ public class AgentWithToolsBlock implements Block {
             out = out.replace("{" + e.getKey() + "}", val);
         }
         return out;
+    }
+
+    /**
+     * Auto-append loopback feedback when the block is re-entered from a verify failure.
+     * PipelineRunner places the previous iteration's issues under the {@code _loopback}
+     * input key (see {@code gatherInputs}). Surfacing it as a post-script on the user
+     * message is safer than forcing every YAML author to remember the right
+     * {@code ${input._loopback.issues}} syntax — fresh agent sessions still see the
+     * diagnosis on retry.
+     */
+    @SuppressWarnings("unchecked")
+    private static String appendLoopbackFeedback(String userMessage, Map<String, Object> input) {
+        Object raw = input.get("_loopback");
+        if (!(raw instanceof Map<?, ?> loopback)) return userMessage;
+        if (loopback.isEmpty()) return userMessage;
+
+        StringBuilder sb = new StringBuilder(userMessage);
+        sb.append("\n\n---\n");
+        Object iter = loopback.get("iteration");
+        sb.append("Previous attempt").append(iter != null ? " (iteration " + iter + ")" : "")
+            .append(" did not pass verification. Address the issues below before retrying:\n");
+        Object issues = loopback.get("issues");
+        if (issues instanceof List<?> list && !list.isEmpty()) {
+            for (Object item : list) {
+                sb.append("- ").append(item).append('\n');
+            }
+        } else {
+            sb.append("(no structured issues recorded)\n");
+        }
+        for (Map.Entry<?, ?> e : ((Map<?, ?>) loopback).entrySet()) {
+            String key = e.getKey().toString();
+            if ("iteration".equals(key) || "issues".equals(key)) continue;
+            sb.append(key).append(": ").append(e.getValue()).append('\n');
+        }
+        return sb.toString();
     }
 }

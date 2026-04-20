@@ -23,6 +23,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -142,6 +143,54 @@ class AgentWithToolsBlockTest {
         } finally {
             ProjectContext.clear();
         }
+    }
+
+    @Test
+    void loopbackFeedbackAppendedToUserMessage(@TempDir Path wd) throws Exception {
+        when(llmClient.completeWithTools(any(), any()))
+            .thenReturn(new ToolUseResponse("done", StopReason.END_TURN, List.of(), 1, 0, 0, 0));
+
+        Map<String, Object> config = new HashMap<>();
+        config.put("working_dir", wd.toString());
+        config.put("user_message", "Do the thing");
+        config.put("allowed_tools", List.of("Read"));
+
+        Map<String, Object> loopback = new LinkedHashMap<>();
+        loopback.put("iteration", 2);
+        loopback.put("issues", List.of("USTRUCT missing", "client test failed"));
+        loopback.put("verify_from", "verify_contract_drift");
+        Map<String, Object> input = new HashMap<>();
+        input.put("_loopback", loopback);
+
+        block.run(input, cfg(config), new PipelineRun());
+
+        ArgumentCaptor<ToolUseRequest> req = ArgumentCaptor.forClass(ToolUseRequest.class);
+        verify(llmClient).completeWithTools(req.capture(), any());
+        String msg = req.getValue().userMessage();
+
+        assertTrue(msg.startsWith("Do the thing"), "original message preserved at the top");
+        assertTrue(msg.contains("iteration 2"));
+        assertTrue(msg.contains("USTRUCT missing"));
+        assertTrue(msg.contains("client test failed"));
+        assertTrue(msg.contains("verify_from: verify_contract_drift"),
+            "extra loopback keys carried through");
+    }
+
+    @Test
+    void noLoopbackLeavesUserMessageClean(@TempDir Path wd) throws Exception {
+        when(llmClient.completeWithTools(any(), any()))
+            .thenReturn(new ToolUseResponse("done", StopReason.END_TURN, List.of(), 1, 0, 0, 0));
+
+        Map<String, Object> config = new HashMap<>();
+        config.put("working_dir", wd.toString());
+        config.put("user_message", "Clean request");
+        config.put("allowed_tools", List.of("Read"));
+
+        block.run(Map.of(), cfg(config), new PipelineRun());
+
+        ArgumentCaptor<ToolUseRequest> req = ArgumentCaptor.forClass(ToolUseRequest.class);
+        verify(llmClient).completeWithTools(req.capture(), any());
+        assertEquals("Clean request", req.getValue().userMessage());
     }
 
     @Test
