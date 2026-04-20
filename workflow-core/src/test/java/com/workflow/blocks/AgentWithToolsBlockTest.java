@@ -9,6 +9,9 @@ import com.workflow.llm.tooluse.StopReason;
 import com.workflow.llm.tooluse.ToolExecutor;
 import com.workflow.llm.tooluse.ToolUseRequest;
 import com.workflow.llm.tooluse.ToolUseResponse;
+import com.workflow.project.Project;
+import com.workflow.project.ProjectContext;
+import com.workflow.project.ProjectRepository;
 import com.workflow.tools.ReadTool;
 import com.workflow.tools.ToolRegistry;
 import com.workflow.tools.WriteTool;
@@ -22,6 +25,7 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -112,6 +116,32 @@ class AgentWithToolsBlockTest {
         config.put("allowed_tools", List.of());
         assertThrows(IllegalArgumentException.class,
             () -> block.run(Map.of(), cfg(config), new PipelineRun()));
+    }
+
+    @Test
+    void fallsBackToProjectWorkingDir(@TempDir Path wd) throws Exception {
+        Project project = new Project();
+        project.setSlug("myproj");
+        project.setWorkingDir(wd.toString());
+        ProjectRepository projectRepo = mock(ProjectRepository.class);
+        when(projectRepo.findBySlug("myproj")).thenReturn(Optional.of(project));
+        ReflectionTestUtils.setField(block, "projectRepository", projectRepo);
+
+        when(llmClient.completeWithTools(any(), any()))
+            .thenReturn(new ToolUseResponse("done", StopReason.END_TURN, List.of(), 1, 0, 0, 0));
+
+        Map<String, Object> config = new HashMap<>();
+        // no working_dir in config on purpose
+        config.put("user_message", "x");
+        config.put("allowed_tools", List.of("Read"));
+
+        ProjectContext.set("myproj");
+        try {
+            Map<String, Object> out = block.run(Map.of(), cfg(config), new PipelineRun());
+            assertEquals("END_TURN", out.get("stop_reason"));
+        } finally {
+            ProjectContext.clear();
+        }
     }
 
     @Test

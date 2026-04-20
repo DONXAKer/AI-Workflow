@@ -8,6 +8,9 @@ import com.workflow.llm.LlmClient;
 import com.workflow.llm.tooluse.ToolDefinition;
 import com.workflow.llm.tooluse.ToolUseRequest;
 import com.workflow.llm.tooluse.ToolUseResponse;
+import com.workflow.project.Project;
+import com.workflow.project.ProjectContext;
+import com.workflow.project.ProjectRepository;
 import com.workflow.tools.DefaultToolExecutor;
 import com.workflow.tools.Tool;
 import com.workflow.tools.ToolCallAuditRepository;
@@ -66,6 +69,7 @@ public class AgentWithToolsBlock implements Block {
     @Autowired private ToolRegistry toolRegistry;
     @Autowired private ObjectMapper objectMapper;
     @Autowired(required = false) private ToolCallAuditRepository auditRepository;
+    @Autowired(required = false) private ProjectRepository projectRepository;
 
     @Override public String getName() { return "agent_with_tools"; }
 
@@ -78,7 +82,7 @@ public class AgentWithToolsBlock implements Block {
     public Map<String, Object> run(Map<String, Object> input, BlockConfig blockConfig, PipelineRun run) throws Exception {
         Map<String, Object> cfg = blockConfig.getConfig() != null ? blockConfig.getConfig() : Map.of();
 
-        String workingDirStr = asRequiredString(cfg, "working_dir");
+        String workingDirStr = resolveWorkingDir(cfg);
         Path workingDir = Paths.get(workingDirStr).toAbsolutePath();
         if (!workingDir.toFile().isDirectory()) {
             throw new IllegalArgumentException(
@@ -147,6 +151,30 @@ public class AgentWithToolsBlock implements Block {
             throw new IllegalArgumentException("agent_with_tools: config." + key + " is required");
         }
         return v.toString();
+    }
+
+    /**
+     * Resolves working_dir in priority order: block config → current project's
+     * {@link Project#getWorkingDir()}. Fails if neither is set.
+     */
+    private String resolveWorkingDir(Map<String, Object> cfg) {
+        Object inline = cfg.get("working_dir");
+        if (inline != null && !inline.toString().isBlank()) {
+            return inline.toString();
+        }
+        if (projectRepository != null) {
+            String slug = ProjectContext.get();
+            if (slug != null && !slug.isBlank()) {
+                Project project = projectRepository.findBySlug(slug).orElse(null);
+                if (project != null && project.getWorkingDir() != null
+                    && !project.getWorkingDir().isBlank()) {
+                    return project.getWorkingDir();
+                }
+            }
+        }
+        throw new IllegalArgumentException(
+            "agent_with_tools: working_dir not set in block config and current project "
+                + "has no workingDir — supply config.working_dir or set Project.workingDir");
     }
 
     @SuppressWarnings("unchecked")
