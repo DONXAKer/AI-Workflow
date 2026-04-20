@@ -37,7 +37,7 @@ public class AesSecretStore implements SecretStore {
     private static final int IV_LENGTH_BYTES = 12;
     private static final int TAG_LENGTH_BITS = 128;
     private static final int KEY_LENGTH_BYTES = 32;
-    private static final String DEV_KEY_BASE64 = "ZGV2LWtleS0zMi1ieXRlcy1ub3QtZm9yLXByb2R1Y3Rpb24h";
+    private static final String DEV_KEY_BASE64 = "ZGV2LWtleS1BRVMyNTYtdW5zYWZlLWRldm9ubHkteHg=";
 
     @Value("${workflow.encryption.key:}")
     private String configuredKeyBase64;
