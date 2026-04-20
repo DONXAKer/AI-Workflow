@@ -1,10 +1,14 @@
 package com.workflow.tools;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.workflow.llm.LlmCallContext;
 import com.workflow.llm.tooluse.ToolCall;
 import com.workflow.llm.tooluse.ToolExecutor;
 import com.workflow.llm.tooluse.ToolResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.time.Instant;
 
 /**
  * Production {@link ToolExecutor} that dispatches each {@link ToolCall} to the matching
@@ -27,34 +31,81 @@ public class DefaultToolExecutor implements ToolExecutor {
 
     private final ToolRegistry registry;
     private final ToolContext context;
+    private final ObjectMapper objectMapper;
+    private final ToolCallAuditRepository auditRepository;
 
     public DefaultToolExecutor(ToolRegistry registry, ToolContext context) {
+        this(registry, context, null, null);
+    }
+
+    public DefaultToolExecutor(ToolRegistry registry, ToolContext context,
+                               ObjectMapper objectMapper,
+                               ToolCallAuditRepository auditRepository) {
         if (registry == null) throw new IllegalArgumentException("registry required");
         if (context == null) throw new IllegalArgumentException("context required");
         this.registry = registry;
         this.context = context;
+        this.objectMapper = objectMapper;
+        this.auditRepository = auditRepository;
     }
 
     @Override
     public ToolResult execute(ToolCall call) {
+        long started = System.currentTimeMillis();
         String toolName = call.toolName();
+        ToolResult result;
+
         if (!registry.has(toolName)) {
-            return ToolResult.error(call.id(),
+            result = ToolResult.error(call.id(),
                 "unknown tool: '" + toolName + "' — available: " + registeredNames());
+        } else {
+            Tool tool = registry.get(toolName);
+            try {
+                String content = tool.execute(context, call.input());
+                result = ToolResult.ok(call.id(), content == null ? "" : content);
+            } catch (ToolInvocationException e) {
+                log.debug("Tool {} rejected input: {}", toolName, e.getMessage());
+                result = ToolResult.error(call.id(), e.getMessage());
+            } catch (Exception e) {
+                log.warn("Tool {} crashed: {}", toolName, e.getMessage(), e);
+                result = ToolResult.error(call.id(),
+                    "tool '" + toolName + "' failed: " + e.getClass().getSimpleName()
+                        + (e.getMessage() == null ? "" : ": " + e.getMessage()));
+            }
         }
-        Tool tool = registry.get(toolName);
+
+        persistAudit(call, result, (int) (System.currentTimeMillis() - started));
+        return result;
+    }
+
+    private void persistAudit(ToolCall call, ToolResult result, int durationMs) {
+        if (auditRepository == null) return;
         try {
-            String content = tool.execute(context, call.input());
-            return ToolResult.ok(call.id(), content == null ? "" : content);
-        } catch (ToolInvocationException e) {
-            log.debug("Tool {} rejected input: {}", toolName, e.getMessage());
-            return ToolResult.error(call.id(), e.getMessage());
+            ToolCallAudit row = new ToolCallAudit();
+            row.setTimestamp(Instant.now());
+            row.setToolName(call.toolName());
+            row.setToolUseId(call.id());
+            row.setOutputText(truncate(result.content(), 32_000));
+            row.setError(result.isError());
+            row.setDurationMs(durationMs);
+            if (objectMapper != null && call.input() != null) {
+                row.setInputJson(truncate(objectMapper.writeValueAsString(call.input()), 32_000));
+            }
+            LlmCallContext.current().ifPresent(ctx -> {
+                row.setRunId(ctx.runId());
+                row.setBlockId(ctx.blockId());
+            });
+            ToolCallIteration.current().ifPresent(row::setIteration);
+            row.setProjectSlug(com.workflow.project.ProjectContext.get());
+            auditRepository.save(row);
         } catch (Exception e) {
-            log.warn("Tool {} crashed: {}", toolName, e.getMessage(), e);
-            return ToolResult.error(call.id(),
-                "tool '" + toolName + "' failed: " + e.getClass().getSimpleName()
-                    + (e.getMessage() == null ? "" : ": " + e.getMessage()));
+            log.debug("ToolCallAudit persist failed: {}", e.getMessage());
         }
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return null;
+        return s.length() <= max ? s : s.substring(0, max) + "\n... [truncated]";
     }
 
     private String registeredNames() {

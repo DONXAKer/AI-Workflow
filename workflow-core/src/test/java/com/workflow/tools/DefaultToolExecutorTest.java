@@ -10,9 +10,12 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
 
 class DefaultToolExecutorTest {
 
@@ -83,6 +86,63 @@ class DefaultToolExecutorTest {
         assertTrue(r.content().contains("RuntimeException"));
         assertFalse(r.content().contains("at com.workflow"),
             "stack trace must not leak into tool_result");
+    }
+
+    @Test
+    void auditRowWrittenOnSuccess(@TempDir Path wd) throws Exception {
+        Files.writeString(wd.resolve("a.txt"), "data");
+        List<ToolCallAudit> saved = new ArrayList<>();
+        ToolCallAuditRepository repo = mock(ToolCallAuditRepository.class);
+        when(repo.save(any(ToolCallAudit.class))).thenAnswer(inv -> {
+            saved.add(inv.getArgument(0));
+            return inv.getArgument(0);
+        });
+
+        DefaultToolExecutor exec = new DefaultToolExecutor(
+            registryOf(new ReadTool()), ToolContext.of(wd), om, repo);
+        ToolCallIteration.set(3);
+        try {
+            exec.execute(call("Read", om.createObjectNode().put("file_path", "a.txt")));
+        } finally {
+            ToolCallIteration.clear();
+        }
+
+        assertEquals(1, saved.size());
+        ToolCallAudit row = saved.get(0);
+        assertEquals("Read", row.getToolName());
+        assertEquals("call-1", row.getToolUseId());
+        assertFalse(row.isError());
+        assertEquals(Integer.valueOf(3), row.getIteration());
+        assertTrue(row.getInputJson().contains("a.txt"));
+        assertTrue(row.getOutputText().contains("data"));
+    }
+
+    @Test
+    void auditRowWrittenOnError(@TempDir Path wd) {
+        List<ToolCallAudit> saved = new ArrayList<>();
+        ToolCallAuditRepository repo = mock(ToolCallAuditRepository.class);
+        when(repo.save(any(ToolCallAudit.class))).thenAnswer(inv -> {
+            saved.add(inv.getArgument(0));
+            return inv.getArgument(0);
+        });
+
+        DefaultToolExecutor exec = new DefaultToolExecutor(
+            registryOf(new ReadTool()), ToolContext.of(wd), om, repo);
+        exec.execute(call("Read", om.createObjectNode().put("file_path", "missing.txt")));
+
+        assertEquals(1, saved.size());
+        assertTrue(saved.get(0).isError());
+        assertTrue(saved.get(0).getOutputText().contains("not found"));
+    }
+
+    @Test
+    void noAuditWhenRepoNotProvided(@TempDir Path wd) throws Exception {
+        Files.writeString(wd.resolve("b.txt"), "x");
+        DefaultToolExecutor exec = new DefaultToolExecutor(
+            registryOf(new ReadTool()), ToolContext.of(wd));
+        ToolResult r = exec.execute(call("Read", om.createObjectNode().put("file_path", "b.txt")));
+        assertFalse(r.isError());
+        // no exception, no repo interaction
     }
 
     @Test

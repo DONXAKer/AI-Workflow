@@ -12,6 +12,7 @@ import com.workflow.llm.tooluse.ToolExecutor;
 import com.workflow.llm.tooluse.ToolResult;
 import com.workflow.llm.tooluse.ToolUseRequest;
 import com.workflow.llm.tooluse.ToolUseResponse;
+import com.workflow.tools.ToolCallIteration;
 import com.workflow.model.IntegrationConfig;
 import com.workflow.model.IntegrationConfigRepository;
 import com.workflow.model.IntegrationType;
@@ -320,6 +321,7 @@ public class LlmClient {
                 ToolCall call = new ToolCall(callId, toolName, input);
 
                 ToolResult result;
+                ToolCallIteration.set(iterations);
                 try {
                     result = executor.execute(call);
                     if (result == null) {
@@ -328,6 +330,8 @@ public class LlmClient {
                 } catch (Exception e) {
                     log.warn("Tool executor threw for {}: {}", toolName, e.getMessage());
                     result = ToolResult.error(callId, "executor_failure: " + e.getMessage());
+                } finally {
+                    ToolCallIteration.clear();
                 }
                 history.add(new ToolUseResponse.ToolCallTrace(iterations, call, result));
 
