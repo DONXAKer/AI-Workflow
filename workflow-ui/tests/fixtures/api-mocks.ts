@@ -32,6 +32,7 @@ export interface MockUser {
 
 export interface MockSetup {
   run?: MockRun
+  runs?: MockRun[]          // list of runs for GET /api/runs (active-runs page, dashboard)
   pipelines?: MockPipeline[]
   user?: MockUser | null
   onReturnSubmit?: (body: Record<string, unknown>) => void
@@ -194,6 +195,23 @@ export async function setupApiMocks(page: Page, setup: MockSetup = {}) {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ success: true }),
+    })
+  })
+
+  // Runs list: GET /api/runs?status=...&page=...&size=...
+  // Matches list calls (no UUID segment). Individual run detail is matched by the regex below.
+  await page.route(/\/api\/runs(\?|$)/, async (route: Route) => {
+    const runsList = setup.runs ?? []
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        content: runsList,
+        totalElements: runsList.length,
+        totalPages: 1,
+        page: 0,
+        size: 100,
+      }),
     })
   })
 

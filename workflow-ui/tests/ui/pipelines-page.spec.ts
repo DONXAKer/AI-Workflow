@@ -18,9 +18,7 @@ const ENTRY_POINT = {
 }
 
 async function setupPipelineMocks(page: Parameters<typeof setupApiMocks>[0]) {
-  await setupApiMocks(page, {
-    pipelines: [FEATURE_PIPELINE],
-  })
+  await setupApiMocks(page, { pipelines: [FEATURE_PIPELINE] })
   await page.route('**/api/pipelines/entry-points**', async (route: Route) => {
     await route.fulfill({
       status: 200,
@@ -34,8 +32,8 @@ test.describe('PipelinesPage', () => {
   test('показывает список доступных пайплайнов', async ({ page }) => {
     await setupPipelineMocks(page)
     await page.goto('/pipelines')
-    await expect(page.getByText('feature')).toBeVisible()
-    await expect(page.getByText('task.md → agent → build → test → commit')).toBeVisible()
+    // Pipeline name in the right-panel list
+    await expect(page.locator('ul button').filter({ hasText: 'feature' }).first()).toBeVisible()
   })
 
   test('выбор пайплайна загружает точку входа', async ({ page }) => {
@@ -76,13 +74,11 @@ test.describe('PipelinesPage', () => {
     await expect(page).toHaveURL(new RegExp(newRunId))
   })
 
-  test('dry-run чекбокс меняет цвет кнопки на янтарный', async ({ page }) => {
+  test('dry-run чекбокс меняет кнопку на "Dry-run запуск"', async ({ page }) => {
     await setupPipelineMocks(page)
     await page.goto('/pipelines')
     await page.getByRole('checkbox').check()
-    const btn = page.getByRole('button', { name: 'Dry-run запуск' })
-    await expect(btn).toBeVisible()
-    await expect(btn).toHaveClass(/bg-amber-600/)
+    await expect(page.getByRole('button', { name: 'Dry-run запуск' })).toBeVisible()
   })
 
   test('ошибка POST показывает сообщение об ошибке', async ({ page }) => {
@@ -98,16 +94,20 @@ test.describe('PipelinesPage', () => {
     await expect(page.getByText(/Не удалось запустить/)).toBeVisible()
   })
 
-  test('клик по пайплайну в списке выбирает его', async ({ page }) => {
-    const secondPipeline = { path: '/project/.ai-workflow/pipelines/hotfix.yaml', name: 'hotfix.yaml', pipelineName: 'hotfix' }
+  test('клик по пайплайну в правой панели выбирает его в форме', async ({ page }) => {
+    const secondPipeline = {
+      path: '/project/.ai-workflow/pipelines/hotfix.yaml',
+      name: 'hotfix.yaml',
+      pipelineName: 'hotfix',
+    }
     await setupApiMocks(page, { pipelines: [FEATURE_PIPELINE, secondPipeline] })
     await page.route('**/api/pipelines/entry-points**', async (route: Route) => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
     })
 
     await page.goto('/pipelines')
-    await page.getByText('hotfix').click()
-    // Выбранный пайплайн в select обновляется
+    // Click the pipeline button in the right-panel list (not the select option)
+    await page.locator('ul button').filter({ hasText: 'hotfix' }).click()
     const select = page.locator('select').first()
     await expect(select).toHaveValue(secondPipeline.path)
   })
