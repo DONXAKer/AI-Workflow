@@ -87,6 +87,10 @@ public class PipelineRun {
     @Column(nullable = false)
     private boolean dryRun = false;
 
+    /** Arbitrary named inputs provided at run start (e.g. task_file, build_command). JSON object. */
+    @Column(name = "run_inputs_json", columnDefinition = "TEXT")
+    private String runInputsJson;
+
     /** Project scope — runs created under a given {@code X-Project-Slug}. Defaults to {@code default}. */
     @Column(nullable = false)
     private String projectSlug = "default";
@@ -147,6 +151,9 @@ public class PipelineRun {
     public void setAutoApprove(Set<String> autoApprove) { this.autoApprove = autoApprove; }
     public List<BlockOutput> getOutputs() { return outputs; }
     public void setOutputs(List<BlockOutput> outputs) { this.outputs = outputs; }
+
+    public String getRunInputsJson() { return runInputsJson; }
+    public void setRunInputsJson(String runInputsJson) { this.runInputsJson = runInputsJson; }
 
     public Instant getPausedAt() { return pausedAt; }
     public void setPausedAt(Instant pausedAt) { this.pausedAt = pausedAt; }

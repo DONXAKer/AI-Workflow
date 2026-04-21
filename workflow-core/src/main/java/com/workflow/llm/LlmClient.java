@@ -156,6 +156,9 @@ public class LlmClient {
             .defaultHeader("Content-Type", "application/json")
             .defaultHeader("HTTP-Referer", "https://workflow.app")
             .defaultHeader("X-Title", "Workflow Pipeline")
+            .clientConnector(new org.springframework.http.client.reactive.ReactorClientHttpConnector(
+                reactor.netty.http.client.HttpClient.create()
+                    .responseTimeout(java.time.Duration.ofSeconds(120))))
             .build();
     }
 

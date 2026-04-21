@@ -94,6 +94,10 @@ public class RunController {
         boolean dryRun = Boolean.TRUE.equals(request.get("dryRun"));
         UUID runId = runIdStr != null ? UUID.fromString(runIdStr) : UUID.randomUUID();
 
+        // Capture named run inputs (e.g. task_file, build_command) for ${input.key} interpolation.
+        @SuppressWarnings("unchecked")
+        Map<String, Object> namedInputs = (Map<String, Object>) request.getOrDefault("inputs", new HashMap<>());
+
         try {
             PipelineConfig config = pipelineConfigLoader.load(Paths.get(configPath));
 
@@ -121,14 +125,14 @@ public class RunController {
                 resolved.putAll(explicitInjections);
 
                 log.info("Entry point '{}' resolved: fromBlock={}, injections={}", entryPointId, fromBlock, resolved.keySet());
-                pipelineRunner.runFrom(config, requirement, fromBlock, resolved, runId);
+                pipelineRunner.runFrom(config, requirement, fromBlock, resolved, runId, namedInputs);
             } else if (fromBlock != null && !fromBlock.isBlank()) {
                 @SuppressWarnings("unchecked")
                 Map<String, Map<String, Object>> injectedOutputs =
                     (Map<String, Map<String, Object>>) request.get("injectedOutputs");
-                pipelineRunner.runFrom(config, requirement, fromBlock, injectedOutputs, runId);
+                pipelineRunner.runFrom(config, requirement, fromBlock, injectedOutputs, runId, namedInputs);
             } else {
-                pipelineRunner.run(config, requirement, runId, dryRun);
+                pipelineRunner.run(config, requirement, runId, dryRun, namedInputs);
             }
 
             Map<String, Object> response = new HashMap<>();

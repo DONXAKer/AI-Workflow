@@ -36,7 +36,9 @@ public class ModelPresetResolver {
         "fast", "anthropic/claude-haiku-4-5",
         "smart", "anthropic/claude-sonnet-4-6",
         "reasoning", "anthropic/claude-opus-4-7",
-        "cheap", "openai/gpt-4o-mini"
+        "cheap", "openai/gpt-4o-mini",
+        "glm", "z-ai/glm-5.1",
+        "deepseek", "deepseek/deepseek-chat-v3-0324"
     );
 
     @Value("#{${workflow.model-presets:{:}}}")

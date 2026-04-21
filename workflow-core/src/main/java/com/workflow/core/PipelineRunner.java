@@ -78,10 +78,15 @@ public class PipelineRunner {
     }
 
     public CompletableFuture<Void> run(PipelineConfig config, String requirement, UUID runId) {
-        return run(config, requirement, runId, false);
+        return run(config, requirement, runId, false, null);
     }
 
     public CompletableFuture<Void> run(PipelineConfig config, String requirement, UUID runId, boolean dryRun) {
+        return run(config, requirement, runId, dryRun, null);
+    }
+
+    public CompletableFuture<Void> run(PipelineConfig config, String requirement, UUID runId,
+                                        boolean dryRun, Map<String, Object> runInputs) {
         PipelineRun pipelineRun = PipelineRun.builder()
             .id(runId)
             .pipelineName(config.getName())
@@ -93,6 +98,10 @@ public class PipelineRunner {
             .build();
         pipelineRun.setDryRun(dryRun);
         pipelineRun.setProjectSlug(com.workflow.project.ProjectContext.get());
+        if (runInputs != null && !runInputs.isEmpty()) {
+            try { pipelineRun.setRunInputsJson(objectMapper.writeValueAsString(runInputs)); }
+            catch (Exception e) { log.warn("Failed to serialize runInputs: {}", e.getMessage()); }
+        }
         captureConfigSnapshot(pipelineRun, config);
         runRepository.save(pipelineRun);
 
@@ -118,6 +127,12 @@ public class PipelineRunner {
     public CompletableFuture<Void> runFrom(PipelineConfig config, String requirement,
                                             String fromBlockId, Map<String, Map<String, Object>> injectedOutputs,
                                             UUID runId) {
+        return runFrom(config, requirement, fromBlockId, injectedOutputs, runId, null);
+    }
+
+    public CompletableFuture<Void> runFrom(PipelineConfig config, String requirement,
+                                            String fromBlockId, Map<String, Map<String, Object>> injectedOutputs,
+                                            UUID runId, Map<String, Object> runInputs) {
         PipelineRun pipelineRun = PipelineRun.builder()
             .id(runId)
             .pipelineName(config.getName())
@@ -128,6 +143,10 @@ public class PipelineRunner {
             .outputs(new ArrayList<>())
             .build();
         pipelineRun.setProjectSlug(com.workflow.project.ProjectContext.get());
+        if (runInputs != null && !runInputs.isEmpty()) {
+            try { pipelineRun.setRunInputsJson(objectMapper.writeValueAsString(runInputs)); }
+            catch (Exception e) { log.warn("Failed to serialize runInputs: {}", e.getMessage()); }
+        }
 
         List<BlockConfig> sorted = topologicalSort(config.getPipeline());
         for (BlockConfig blockConfig : sorted) {
@@ -279,6 +298,18 @@ public class PipelineRunner {
     private Map<String, Object> gatherInputs(BlockConfig blockConfig, PipelineRun run, String requirement) {
         Map<String, Object> inputs = new HashMap<>();
         inputs.put("requirement", requirement);
+
+        // Merge named run inputs (e.g. task_file, build_command) so ${input.key} templates resolve.
+        if (run.getRunInputsJson() != null && !run.getRunInputsJson().isBlank()) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> runInputs = objectMapper.readValue(
+                    run.getRunInputsJson(), new TypeReference<Map<String, Object>>() {});
+                inputs.putAll(runInputs);
+            } catch (Exception e) {
+                log.warn("Failed to deserialize runInputsJson: {}", e.getMessage());
+            }
+        }
 
         if (blockConfig.getDependsOn() != null) {
             for (String depId : blockConfig.getDependsOn()) {

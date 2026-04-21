@@ -23,7 +23,7 @@ public class AgentProfileResolver {
 
     private static final Logger log = LoggerFactory.getLogger(AgentProfileResolver.class);
 
-    private static final String DEFAULT_MODEL = "claude-sonnet-4-6";
+    private static final String DEFAULT_MODEL = "deepseek/deepseek-chat-v3-0324";
     private static final int DEFAULT_MAX_TOKENS = 8192;
     private static final double DEFAULT_TEMPERATURE = 1.0;
 
