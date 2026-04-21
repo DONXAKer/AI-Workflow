@@ -67,9 +67,9 @@ Dual approval gate modes: `WebSocketApprovalGate` (real-time via `/ws`) or `CliA
 - `mr_input` — reads an existing MR/PR
 - plus `analysis`, `business_intake`, `task_input`, `ai_review`, `run_tests`, `test_generation`, `build`, `deploy`, `rollback`, `vcs_merge`, `verify_prod`, `release_notes`
 
-Phase 1 additions (see `docs/warcard-pipeline-phase1-plan.md`):
+Phase 1 additions (see `docs/phase1-plan.md`):
 - `agent_with_tools` — LLM tool-use loop with native tools (M2.6)
-- `task_md_input` — parses WarCard-style task.md into structured sections + heuristic flags (M3.3)
+- `task_md_input` — parses task.md into structured sections + heuristic flags (M3.3)
 - `shell_exec` — runs a shell command as a pipeline step, no LLM (M3.4)
 - `claude_code_shell` — shells out to local `claude -p` (Layer 3 / MCP / Max-subscription flows) (M3.5)
 - `http_get` — HTTP GET with optional JSON parse (M5)
@@ -201,7 +201,8 @@ Run state is persisted in a Docker volume (`workflow-state`).
 
 ## Phase 1 (branch `feat/warcard-pipeline-phase1`)
 
-Design doc: `docs/warcard-pipeline-phase1-plan.md` (locked grill session 2026-04-20).
+Design doc: `docs/phase1-plan.md` (locked grill session 2026-04-20).
 Operator runbook for the bundled `config/feature.yaml`: `docs/running-feature-pipeline.md`.
+GUI quickstart: `docs/gui-quickstart.md`.
 
 Milestones M1 (tool-use core) → M5 (http_get self-feature) all merged on the branch. Acceptance tests (real-repo run producing a git commit) are user-driven — the pipeline is ready but the operator picks the target repo and task. Tasks live in `tasks/active/` + `tasks/done/` at repo root, `<FEAT-ID>_<slug>.md` convention.

@@ -30,8 +30,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * (Layer 2, OpenRouter) because billing, model access, and MCP plumbing are routed
  * through the user's Max subscription here instead of OpenRouter credits.
  *
- * <p>Universal — not WarCard-specific. Same block can drive Unreal Blueprint generation
- * via MCP, or any other Claude-Code-native flow.
+ * <p>Universal block — can drive MCP flows, Blueprint generation,
+ * or any other Claude-Code-native flow.
  *
  * <p>YAML:
  * <pre>

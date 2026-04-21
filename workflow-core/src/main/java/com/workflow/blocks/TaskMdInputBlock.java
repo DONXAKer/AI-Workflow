@@ -20,8 +20,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Reads a task.md file and extracts structured sections commonly used in
- * WarCard-style feature tickets:
+ * Reads a task.md file and extracts structured sections. Expected filename
+ * convention is {@code <FEAT_ID>_<slug>.md}. Sections parsed:
  *
  * <ul>
  *   <li>{@code feat_id}, {@code slug} — parsed from the filename
@@ -76,7 +76,7 @@ public class TaskMdInputBlock implements Block {
     @Override public String getName() { return "task_md_input"; }
 
     @Override public String getDescription() {
-        return "Parses a task.md file (WarCard convention) into structured sections, "
+        return "Parses a task.md file into structured sections, "
             + "extracts feat_id/slug/title, and sets heuristic classification flags.";
     }
 
