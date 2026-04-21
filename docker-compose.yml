@@ -3,7 +3,7 @@ services:
     build:
       context: ./workflow-core
     ports:
-      - "8080:8080"
+      - "8020:8020"
     volumes:
       - workflow-state:/app/.workflow
     environment:
