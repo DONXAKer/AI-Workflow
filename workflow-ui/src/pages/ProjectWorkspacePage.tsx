@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Play, Activity, History, Settings, Plug, Loader2, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Play, Activity, History, Settings, Plug, Sparkles, Loader2, AlertCircle } from 'lucide-react'
 import { api } from '../services/api'
 import { ProjectInfo } from '../types'
 import { setCurrentProjectSlug } from '../services/projectContext'
@@ -8,11 +8,12 @@ import { useRunsContext } from '../context/RunsContext'
 import clsx from 'clsx'
 
 const TABS = [
-  { to: 'launch', label: 'Запуск', icon: Play },
-  { to: 'active', label: 'Активные', icon: Activity },
-  { to: 'history', label: 'История', icon: History },
+  { to: 'launch',       label: 'Запуск',     icon: Play },
+  { to: 'smart-start',  label: 'Smart Start', icon: Sparkles },
+  { to: 'active',       label: 'Активные',   icon: Activity },
+  { to: 'history',      label: 'История',    icon: History },
   { to: 'integrations', label: 'Интеграции', icon: Plug },
-  { to: 'settings', label: 'Настройки', icon: Settings },
+  { to: 'settings',     label: 'Настройки',  icon: Settings },
 ]
 
 export default function ProjectWorkspacePage() {

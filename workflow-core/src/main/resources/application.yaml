@@ -18,6 +18,9 @@ workflow:
   mode: cli  # cli | gui
   config-dir: ./config
   state-dir: ./.workflow/state
+  smart-detect:
+    model: google/gemini-flash-1.5
+    confidence-threshold: 0.7
   encryption:
     # 32 bytes (AES-256), Base64-encoded. Override via WORKFLOW_ENCRYPTION_KEY in prod.
     # When absent, a development key is used with a loud warning at startup.

@@ -10,6 +10,7 @@ import Sidebar from './components/layout/Sidebar'
 import ProjectsListPage from './pages/ProjectsListPage'
 import ProjectWorkspacePage from './pages/ProjectWorkspacePage'
 import LaunchTab from './pages/project/LaunchTab'
+import SmartStartTab from './pages/project/SmartStartTab'
 import ActiveTab from './pages/project/ActiveTab'
 import HistoryTab from './pages/project/HistoryTab'
 import IntegrationsTab from './pages/project/IntegrationsTab'
@@ -106,6 +107,7 @@ function AppLayout() {
             <Route path="/projects/:slug" element={<ProjectWorkspacePage />}>
               <Route index element={<Navigate to="launch" replace />} />
               <Route path="launch" element={<LaunchTab />} />
+              <Route path="smart-start" element={<SmartStartTab />} />
               <Route path="active" element={<ActiveTab />} />
               <Route path="history" element={<HistoryTab />} />
               <Route path="integrations" element={<IntegrationsTab />} />

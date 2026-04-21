@@ -4,6 +4,7 @@ import com.workflow.config.PipelineConfig;
 import com.workflow.config.PipelineConfigLoader;
 import com.workflow.core.*;
 import com.workflow.core.EntryPointResolver.DetectionResult;
+import com.workflow.project.ProjectContext;
 import jakarta.persistence.criteria.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,6 +46,9 @@ public class RunController {
 
     @Autowired
     private EntryPointResolver entryPointResolver;
+
+    @Autowired
+    private SmartDetectService smartDetectService;
 
     @Value("${workflow.config-dir:./config}")
     private String configDir;
@@ -357,6 +361,33 @@ public class RunController {
             return ResponseEntity.badRequest().body(Map.of("error", "Failed to load config: " + e.getMessage()));
         } catch (Exception e) {
             log.error("Detection failed: {}", e.getMessage(), e);
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Smart entry-point detection: accepts any freeform input (tracker URL, issue ID,
+     * stack trace, free text) and returns a suggested entry point with confidence score.
+     *
+     * <p>Request: {@code {"rawInput": "...", "configPath": "..." (optional)}}
+     * <p>Response: {@code {"suggested": {...}, "explanation": "...", "detectedInputs": {...},
+     *              "clarificationQuestion": "..." (optional)}}
+     */
+    @PostMapping("/runs/smart-detect")
+    public ResponseEntity<Map<String, Object>> smartDetect(@RequestBody Map<String, Object> request) {
+        String rawInput    = (String) request.get("rawInput");
+        String configPath  = (String) request.get("configPath");
+        String projectSlug = ProjectContext.get();
+
+        if (rawInput == null || rawInput.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "rawInput is required"));
+        }
+
+        try {
+            Map<String, Object> result = smartDetectService.detect(rawInput, configPath, projectSlug);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("smart-detect failed: {}", e.getMessage(), e);
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }
     }

@@ -84,6 +84,16 @@ export const api = {
   getEntryPoints: (configPath: string): Promise<EntryPoint[]> =>
     request<EntryPoint[]>(`${BASE}/pipelines/entry-points?configPath=${encodeURIComponent(configPath)}`),
 
+  smartDetect: (body: { rawInput: string; configPath?: string }): Promise<{
+    suggested: { entryPointId: string; confidence: number; intentLabel: string }
+    explanation: string
+    detectedInputs: Record<string, unknown>
+    clarificationQuestion?: string
+  }> =>
+    request(`${BASE}/runs/smart-detect`, {
+      method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body)
+    }),
+
   getRun: (runId: string): Promise<PipelineRun> =>
     request<PipelineRun>(`${BASE}/runs/${runId}`),
 
