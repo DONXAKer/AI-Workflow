@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(openssl rand *)"
+      "Bash(openssl rand *)",
+      "Bash(xargs basename *)",
+      "Bash(grep -E \"Page\\\\.tsx$\")",
+      "Bash(docker-compose up *)"
     ]
   }
 }
