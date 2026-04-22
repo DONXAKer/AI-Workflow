@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Plus, FolderOpen, AlertCircle, Loader2, X, Save, ChevronRight } from 'lucide-react'
 import { api } from '../services/api'
 import { ProjectInfo } from '../types'
+import PathInput from '../components/PathInput'
 
 function slugify(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
@@ -115,12 +116,11 @@ export default function ProjectsListPage() {
                 <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">
                   Путь к проекту
                 </label>
-                <input
-                  type="text"
+                <PathInput
                   value={path}
-                  onChange={e => setPath(e.target.value)}
+                  onChange={setPath}
                   placeholder="/home/user/my-project"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={saving}
                 />
               </div>
             </div>

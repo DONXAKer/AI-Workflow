@@ -233,6 +233,9 @@ export const api = {
       { method: 'DELETE' }
     ),
 
+  browseFs: (path?: string): Promise<{ path: string; parent: string; directories: string[]; root: string }> =>
+    request(`${BASE}/fs/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+
   // Users (ADMIN)
   listUsers: (): Promise<UserInfo[]> =>
     request<UserInfo[]>(`${BASE}/users`),

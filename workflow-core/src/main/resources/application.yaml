@@ -1,6 +1,6 @@
 spring:
   datasource:
-    url: jdbc:h2:file:./workflow-db;AUTO_SERVER=TRUE
+    url: jdbc:h2:file:./.workflow/workflow-db;AUTO_SERVER=TRUE
     driver-class-name: org.h2.Driver
     username: sa
     password: ""
@@ -25,6 +25,9 @@ workflow:
     # 32 bytes (AES-256), Base64-encoded. Override via WORKFLOW_ENCRYPTION_KEY in prod.
     # When absent, a development key is used with a loud warning at startup.
     key: ${WORKFLOW_ENCRYPTION_KEY:}
+  # Root directory for the filesystem browser. Override via BROWSE_ROOT_PATH env var.
+  # In Docker: set to the mounted projects volume (e.g. /projects).
+  browse-root: ${BROWSE_ROOT_PATH:#{systemProperties['user.home']}}
 
 logging:
   level:

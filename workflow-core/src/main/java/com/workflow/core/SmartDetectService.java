@@ -283,14 +283,46 @@ public class SmartDetectService {
         }
     }
 
+    private static final List<String> BUG_KEYWORDS = List.of(
+        "баг", "bug", "ошибк", "error", "exception", "фикс", "fix", "упал", "сломал", "broken",
+        "краш", "crash", "NPE", "NullPointer", "не работает", "не работал", "проблем"
+    );
+    private static final List<String> REVIEW_KEYWORDS = List.of(
+        "ревью", "review", "pr", "mr", "merge request", "pull request", "код-ревью", "посмотри код"
+    );
+    private static final List<String> FEATURE_KEYWORDS = List.of(
+        "фич", "feature", "добав", "реализ", "implement", "сделать", "создать", "разработ",
+        "релизовать", "выпустить", "улучш", "enhance"
+    );
+
     private IntentResult heuristicFallback(ParsedInput parsed) {
         return switch (parsed.type()) {
             case STACKTRACE   -> new IntentResult(Intent.BUG_FIX,    0.6, null);
             case GITLAB_MR,
                  GITHUB_PR    -> new IntentResult(Intent.CODE_REVIEW, 0.6, null);
-            default           -> new IntentResult(Intent.FEATURE,     0.5,
-                "Не удалось классифицировать автоматически. Это баг, фича или код-ревью?");
+            default           -> keywordFallback(parsed.raw());
         };
+    }
+
+    private IntentResult keywordFallback(String raw) {
+        if (raw == null) return new IntentResult(Intent.FEATURE, 0.5,
+            "Не удалось классифицировать. Это баг, фича или код-ревью?");
+
+        String lower = raw.toLowerCase();
+
+        long bugScore    = BUG_KEYWORDS   .stream().filter(k -> lower.contains(k.toLowerCase())).count();
+        long reviewScore = REVIEW_KEYWORDS.stream().filter(k -> lower.contains(k.toLowerCase())).count();
+        long featureScore= FEATURE_KEYWORDS.stream().filter(k -> lower.contains(k.toLowerCase())).count();
+
+        long maxScore = Math.max(bugScore, Math.max(reviewScore, featureScore));
+        if (maxScore > 0) {
+            if (bugScore == maxScore)    return new IntentResult(Intent.BUG_FIX,    0.75, null);
+            if (reviewScore == maxScore) return new IntentResult(Intent.CODE_REVIEW, 0.75, null);
+            return new IntentResult(Intent.FEATURE, 0.75, null);
+        }
+
+        return new IntentResult(Intent.FEATURE, 0.5,
+            "Не удалось классифицировать. Это баг, фича или код-ревью?");
     }
 
     // -------------------------------------------------------------------------

@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Save, Loader2, AlertCircle, Trash2 } from 'lucide-react'
 import { api } from '../../services/api'
 import { ProjectInfo } from '../../types'
+import PathInput from '../../components/PathInput'
 
 export default function SettingsTab() {
   const { slug } = useParams<{ slug: string }>()
@@ -109,12 +110,11 @@ export default function SettingsTab() {
           <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">
             Путь к проекту
           </label>
-          <input
-            type="text"
+          <PathInput
             value={configDir}
-            onChange={e => setConfigDir(e.target.value)}
+            onChange={setConfigDir}
             placeholder="./config"
-            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+            disabled={saving}
           />
         </div>
 

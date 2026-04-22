@@ -4,7 +4,18 @@
       "Bash(openssl rand *)",
       "Bash(xargs basename *)",
       "Bash(grep -E \"Page\\\\.tsx$\")",
-      "Bash(docker-compose up *)"
+      "Bash(docker-compose up *)",
+      "Bash(gradle compileJava)",
+      "Bash(gradle bootRun)",
+      "Bash(echo \"Backend PID: $!\")",
+      "Bash(npm run *)",
+      "Bash(echo \"Frontend PID: $!\")",
+      "Bash(kill 54584 54606)",
+      "Bash(docker-compose down *)",
+      "Bash(docker-compose build *)",
+      "Bash(npx tsc *)",
+      "Bash(npx playwright *)",
+      "Bash(docker compose *)"
     ]
   }
 }

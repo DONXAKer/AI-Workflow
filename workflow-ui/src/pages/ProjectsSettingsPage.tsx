@@ -4,6 +4,7 @@ import { api } from '../services/api'
 import { ProjectInfo } from '../types'
 import PageHeader from '../components/layout/PageHeader'
 import clsx from 'clsx'
+import PathInput from '../components/PathInput'
 
 interface FormState {
   slug: string
@@ -177,17 +178,14 @@ export default function ProjectsSettingsPage() {
               />
             </div>
             <div className="sm:col-span-2">
-              <label htmlFor="configDir" className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">
+              <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">
                 Путь к pipeline-конфигам
               </label>
-              <input
-                id="configDir"
-                type="text"
+              <PathInput
                 value={form.configDir}
-                onChange={e => setForm(f => ({ ...f, configDir: e.target.value }))}
-                disabled={saving}
+                onChange={v => setForm(f => ({ ...f, configDir: v }))}
                 placeholder="./config"
-                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                disabled={saving}
               />
             </div>
           </div>

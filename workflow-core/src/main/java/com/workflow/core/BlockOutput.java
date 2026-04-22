@@ -1,5 +1,6 @@
 package com.workflow.core;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 
 @Entity
@@ -40,6 +41,7 @@ public class BlockOutput {
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
+    @JsonIgnore
     public PipelineRun getRun() { return run; }
     public void setRun(PipelineRun run) { this.run = run; }
     public String getBlockId() { return blockId; }
