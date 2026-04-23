@@ -32,13 +32,19 @@ public class ModelPresetResolver {
 
     private static final Logger log = LoggerFactory.getLogger(ModelPresetResolver.class);
 
-    private static final Map<String, String> DEFAULTS = Map.of(
-        "fast", "anthropic/claude-haiku-4-5",
-        "smart", "anthropic/claude-sonnet-4-6",
-        "reasoning", "anthropic/claude-opus-4-7",
-        "cheap", "openai/gpt-4o-mini",
-        "glm", "z-ai/glm-5.1",
-        "deepseek", "deepseek/deepseek-chat-v3-0324"
+    private static final Map<String, String> DEFAULTS = Map.ofEntries(
+        Map.entry("fast",         "anthropic/claude-haiku-4-5"),
+        Map.entry("smart",        "anthropic/claude-sonnet-4-6"),
+        Map.entry("reasoning",    "anthropic/claude-opus-4-7"),
+        Map.entry("cheap",        "openai/gpt-4o-mini"),
+        Map.entry("deepseek",     "deepseek/deepseek-chat-v3-0324"),
+        Map.entry("glm",          "z-ai/glm-5.1"),
+        // Extended presets
+        Map.entry("gemini-pro",   "google/gemini-2.5-pro"),
+        Map.entry("gemini-flash", "google/gemini-2.0-flash-001"),
+        Map.entry("gpt4o",        "openai/gpt-4o"),
+        Map.entry("mistral",      "mistralai/mistral-large-2411"),
+        Map.entry("qwen",         "qwen/qwen-2.5-72b-instruct")
     );
 
     @Value("#{${workflow.model-presets:{:}}}")

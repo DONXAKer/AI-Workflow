@@ -4,6 +4,7 @@ import { Save, Loader2, AlertCircle, Trash2, Plug, FileCode, FolderOpen } from '
 import { api } from '../../services/api'
 import { ProjectInfo, IntegrationConfig } from '../../types'
 import PathInput from '../../components/PathInput'
+import PipelineConfigTab from '../../components/PipelineConfigTab'
 
 const INTEGRATION_TYPE_LABELS: Record<string, string> = {
   OPENROUTER: 'OpenRouter',
@@ -27,6 +28,7 @@ export default function SettingsTab() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+  const [activeTab, setActiveTab] = useState<'project' | 'pipeline'>('project')
 
   const load = useCallback(async () => {
     if (!slug) return
@@ -106,7 +108,29 @@ export default function SettingsTab() {
 
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 py-8 space-y-6">
-      <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wide">Настройки проекта</h2>
+      {/* Tab bar */}
+      <div className="flex gap-1 border-b border-slate-800 pb-0">
+        {([['project', 'Проект'], ['pipeline', 'Пайплайн']] as const).map(([tab, label]) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors -mb-px border-b-2 ${
+              activeTab === tab
+                ? 'text-slate-100 border-blue-500'
+                : 'text-slate-500 border-transparent hover:text-slate-300'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'pipeline' && (
+        <PipelineConfigTab />
+      )}
+
+      {activeTab === 'project' && <>
+      <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wide sr-only">Настройки проекта</h2>
 
       {/* Main project fields */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
@@ -264,6 +288,7 @@ export default function SettingsTab() {
           </button>
         </div>
       )}
+      </>}
     </div>
   )
 }

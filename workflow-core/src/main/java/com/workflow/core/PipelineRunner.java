@@ -695,7 +695,7 @@ public class PipelineRunner {
             BlockConfig effectiveBlockConfig = blockConfig.withMergedConfig(integrationConfigs);
 
             // Resolve agent profile into effective agent config and skills
-            effectiveBlockConfig.setAgent(agentProfileResolver.resolveAgent(effectiveBlockConfig));
+            effectiveBlockConfig.setAgent(agentProfileResolver.resolveAgent(effectiveBlockConfig, config.getDefaults()));
             effectiveBlockConfig.setSkills(agentProfileResolver.resolveSkills(effectiveBlockConfig));
 
             Block block = blockRegistry.get(blockConfig.getBlock());

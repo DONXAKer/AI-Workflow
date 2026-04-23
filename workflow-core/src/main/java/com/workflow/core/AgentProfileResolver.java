@@ -2,6 +2,7 @@ package com.workflow.core;
 
 import com.workflow.config.AgentConfig;
 import com.workflow.config.BlockConfig;
+import com.workflow.config.DefaultsConfig;
 import com.workflow.model.AgentProfile;
 import com.workflow.model.AgentProfileRepository;
 import org.slf4j.Logger;
@@ -32,13 +33,30 @@ public class AgentProfileResolver {
 
     /**
      * Resolves the effective AgentConfig for a block.
-     * Priority: block-level agent fields > profile fields > defaults.
+     * Priority: block-level agent fields > profile fields > pipeline defaults > hardcoded defaults.
      */
-    public AgentConfig resolveAgent(BlockConfig blockConfig) {
+    public AgentConfig resolveAgent(BlockConfig blockConfig, DefaultsConfig pipelineDefaults) {
         AgentConfig result = new AgentConfig();
         result.setModel(DEFAULT_MODEL);
         result.setMaxTokens(DEFAULT_MAX_TOKENS);
         result.setTemperature(DEFAULT_TEMPERATURE);
+
+        // Layer 0.5: pipeline-level defaults (operator-configurable via UI)
+        if (pipelineDefaults != null && pipelineDefaults.getAgent() != null) {
+            AgentConfig defAgent = pipelineDefaults.getAgent();
+            if (defAgent.getModel() != null && !defAgent.getModel().isBlank()) {
+                result.setModel(defAgent.getModel());
+            }
+            if (defAgent.getMaxTokens() != null) {
+                result.setMaxTokens(defAgent.getMaxTokens());
+            }
+            if (defAgent.getTemperature() != null) {
+                result.setTemperature(defAgent.getTemperature());
+            }
+            if (defAgent.getSystemPrompt() != null && !defAgent.getSystemPrompt().isBlank()) {
+                result.setSystemPrompt(defAgent.getSystemPrompt());
+            }
+        }
 
         AgentProfile profile = loadProfile(blockConfig.getProfile());
 
@@ -84,6 +102,11 @@ public class AgentProfileResolver {
         }
 
         return result;
+    }
+
+    /** Backward-compat overload — no pipeline-level defaults. */
+    public AgentConfig resolveAgent(BlockConfig blockConfig) {
+        return resolveAgent(blockConfig, null);
     }
 
     /**

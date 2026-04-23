@@ -31,6 +31,12 @@ public class PipelineConfigLoader {
         this.yamlMapper.findAndRegisterModules();
     }
 
+    /** Loads without env-var expansion — preserves {@code ${VAR}} tokens for write-back. */
+    public PipelineConfig loadRaw(Path yamlPath) throws IOException {
+        String content = Files.readString(yamlPath);
+        return yamlMapper.readValue(content, PipelineConfig.class);
+    }
+
     public PipelineConfig load(Path yamlPath) throws IOException {
         String content = Files.readString(yamlPath);
         content = expandEnvVars(content);

@@ -1,13 +1,19 @@
 package com.workflow.config;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class AgentConfig {
 
     private String model;
+
+    @JsonProperty("system_prompt")
     private String systemPrompt;
+
+    @JsonProperty("max_tokens")
     private Integer maxTokens;
+
     private Double temperature;
 
     public AgentConfig() {}

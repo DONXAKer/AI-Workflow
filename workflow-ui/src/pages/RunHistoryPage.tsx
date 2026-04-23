@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { ChevronLeft, ChevronRight, AlertCircle } from 'lucide-react'
 import { api } from '../services/api'
 import { PipelineRunSummary, RunStatus } from '../types'
@@ -23,31 +23,37 @@ export default function RunHistoryPage() {
   const [searchInput, setSearchInput] = useState(filters.search)
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const fetchRuns = useCallback(async () => {
+  // Stable primitive keys to avoid re-fetching on object identity changes.
+  const statusKey = filters.status.join(',')
+  const { pipelineName, search, from, to, page } = filters
+
+  useEffect(() => {
+    let cancelled = false
     setLoading(true)
     setFetchError(null)
-    try {
-      const data = await api.listRuns({
-        status: filters.status.length ? filters.status : undefined,
-        pipelineName: filters.pipelineName || undefined,
-        search: filters.search || undefined,
-        from: filters.from || undefined,
-        to: filters.to || undefined,
-        page: filters.page,
-        size: PAGE_SIZE,
-      })
+    api.listRuns({
+      status: statusKey ? (statusKey.split(',') as typeof filters.status) : undefined,
+      pipelineName: pipelineName || undefined,
+      search: search || undefined,
+      from: from || undefined,
+      to: to || undefined,
+      page,
+      size: PAGE_SIZE,
+    }).then(data => {
+      if (cancelled) return
       setRuns(data.content)
       setTotalElements(data.totalElements)
       setTotalPages(data.totalPages)
-    } catch (e) {
+    }).catch(e => {
+      if (cancelled) return
       setFetchError(e instanceof Error ? e.message : 'Failed to load runs')
       setRuns([])
-    } finally {
+    }).finally(() => {
+      if (cancelled) return
       setLoading(false)
-    }
-  }, [filters])
-
-  useEffect(() => { fetchRuns() }, [fetchRuns])
+    })
+    return () => { cancelled = true }
+  }, [statusKey, pipelineName, search, from, to, page])
 
   useEffect(() => {
     api.listPipelines()

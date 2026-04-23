@@ -18,6 +18,8 @@ import SettingsTab from './pages/project/SettingsTab'
 
 import RunPage from './pages/RunPage'
 import LoginPage from './pages/LoginPage'
+import ActiveRunsPage from './pages/ActiveRunsPage'
+import PipelinesPage from './pages/PipelinesPage'
 
 import IntegrationsSettings from './components/IntegrationsSettings'
 import AgentProfilesSettings from './components/AgentProfilesSettings'
@@ -129,10 +131,12 @@ function AppLayout() {
               <Route path="cost" element={<CostDashboardPage />} />
             </Route>
 
+            {/* Legacy pages — kept at original URLs for backward-compat */}
+            <Route path="/runs/active" element={<ActiveRunsPage />} />
+            <Route path="/pipelines" element={<PipelinesPage />} />
+
             {/* Legacy redirects */}
             <Route path="/settings/*" element={<Navigate to="/system/users" replace />} />
-            <Route path="/pipelines" element={<Navigate to="/" replace />} />
-            <Route path="/runs/active" element={<Navigate to="/" replace />} />
             <Route path="/runs/history" element={<Navigate to="/" replace />} />
             <Route path="/cost" element={<Navigate to="/system/cost" replace />} />
 

@@ -1,7 +1,10 @@
 package com.workflow.api;
 
+import com.workflow.config.BlockConfig;
 import com.workflow.config.PipelineConfig;
 import com.workflow.config.PipelineConfigLoader;
+import com.workflow.config.PipelineConfigSettingsRequest;
+import com.workflow.config.PipelineConfigWriter;
 import com.workflow.core.*;
 import com.workflow.core.EntryPointResolver.DetectionResult;
 import com.workflow.project.ProjectContext;
@@ -46,6 +49,9 @@ public class RunController {
 
     @Autowired
     private PipelineConfigLoader pipelineConfigLoader;
+
+    @Autowired
+    private PipelineConfigWriter pipelineConfigWriter;
 
     @Autowired
     private EntryPointResolver entryPointResolver;
@@ -606,6 +612,53 @@ public class RunController {
             .collect(Collectors.toList());
 
         return ResponseEntity.ok(result);
+    }
+
+    @GetMapping("/pipelines/config")
+    public ResponseEntity<?> getPipelineConfig(@RequestParam String configPath) {
+        try {
+            PipelineConfig config = pipelineConfigLoader.loadRaw(Paths.get(configPath));
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("defaults", config.getDefaults());
+            result.put("blocks", config.getPipeline().stream()
+                .map(b -> {
+                    Map<String, Object> dto = new LinkedHashMap<>();
+                    dto.put("id", b.getId());
+                    dto.put("block", b.getBlock());
+                    dto.put("enabled", b.isEnabled());
+                    dto.put("approval", b.isApproval());
+                    dto.put("profile", b.getProfile());
+                    dto.put("skills", b.getSkills());
+                    dto.put("agent", agentToMap(b));
+                    return dto;
+                })
+                .collect(Collectors.toList()));
+            return ResponseEntity.ok(result);
+        } catch (IOException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Failed to load config: " + e.getMessage()));
+        }
+    }
+
+    @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
+    @PutMapping("/pipelines/config")
+    public ResponseEntity<?> savePipelineConfig(@RequestParam String configPath,
+                                                 @RequestBody PipelineConfigSettingsRequest request) {
+        try {
+            pipelineConfigWriter.applyAndWrite(Paths.get(configPath), request.getDefaults(), request.getBlocks());
+            return ResponseEntity.ok(Map.of("saved", true));
+        } catch (IOException e) {
+            log.error("Failed to save pipeline config {}: {}", configPath, e.getMessage(), e);
+            return ResponseEntity.badRequest().body(Map.of("error", "Failed to save: " + e.getMessage()));
+        }
+    }
+
+    private Map<String, Object> agentToMap(BlockConfig b) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("model", b.getAgent() != null ? b.getAgent().getModel() : null);
+        m.put("temperature", b.getAgent() != null ? b.getAgent().getTemperature() : null);
+        m.put("maxTokens", b.getAgent() != null ? b.getAgent().getMaxTokens() : null);
+        m.put("systemPrompt", b.getAgent() != null ? b.getAgent().getSystemPrompt() : null);
+        return m;
     }
 
     @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")

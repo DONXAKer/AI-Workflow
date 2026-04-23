@@ -228,6 +228,32 @@ export interface CostSummary {
   byModel: CostByModel[]
 }
 
+export interface PipelineAgentOverride {
+  model?: string | null
+  temperature?: number | null
+  maxTokens?: number | null
+  systemPrompt?: string | null
+}
+
+export interface PipelineBlockSetting {
+  id: string
+  block: string
+  enabled: boolean
+  approval: boolean
+  profile?: string | null
+  skills: string[]
+  agent: PipelineAgentOverride
+}
+
+export interface PipelineDefaultsSetting {
+  agent?: PipelineAgentOverride | null
+}
+
+export interface PipelineConfigSettings {
+  defaults: PipelineDefaultsSetting | null
+  blocks: PipelineBlockSetting[]
+}
+
 export interface ProjectInfo {
   id: number
   slug: string

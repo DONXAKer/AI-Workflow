@@ -22,11 +22,11 @@ test.describe('Block badges — approval_mode / enabled / condition', () => {
     })
     await page.goto('/runs/11111111-2222-3333-4444-555555555555')
     const analysisRow = page.locator('tr', { hasText: 'analysis' }).first()
-    await expect(analysisRow.getByText('manual', { exact: true })).toBeVisible()
+    await expect(analysisRow.getByText('Одобрение', { exact: true })).toBeVisible()
     const codegenRow = page.locator('tr', { hasText: 'codegen' }).first()
-    await expect(codegenRow.getByText('auto+notify')).toBeVisible()
+    await expect(codegenRow.getByText('Авто + уведомление')).toBeVisible()
     const verifyRow = page.locator('tr', { hasText: 'verify_code' }).first()
-    await expect(verifyRow.getByText('auto', { exact: true })).toBeVisible()
+    await expect(verifyRow.getByText('Авто', { exact: true })).toBeVisible()
   })
 
   test('disabled-бейдж виден для enabled=false', async ({ page }) => {
@@ -38,7 +38,7 @@ test.describe('Block badges — approval_mode / enabled / condition', () => {
     })
     await page.goto('/runs/11111111-2222-3333-4444-555555555555')
     const aiReviewRow = page.locator('tr', { hasText: 'ai_review' }).first()
-    await expect(aiReviewRow.getByText('disabled')).toBeVisible()
+    await expect(aiReviewRow.getByText('выкл')).toBeVisible()
   })
 
   test('cond-бейдж виден если указан condition', async ({ page }) => {
@@ -50,7 +50,7 @@ test.describe('Block badges — approval_mode / enabled / condition', () => {
     })
     await page.goto('/runs/11111111-2222-3333-4444-555555555555')
     const row = page.locator('tr', { hasText: 'optional_docs' }).first()
-    await expect(row.getByText('cond')).toBeVisible()
+    await expect(row.getByText('условие')).toBeVisible()
   })
 
   test('битый configSnapshotJson не ломает таблицу', async ({ page }) => {

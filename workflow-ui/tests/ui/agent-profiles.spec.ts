@@ -31,7 +31,7 @@ test.describe('AgentProfilesSettings — новые поля', () => {
     await page.route('**/api/agent-profiles/skills', async route => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
     })
-    await page.goto('/settings/agent-profiles')
+    await page.goto('/system/agent-profiles')
     await expect(page.locator('tr', { hasText: 'analyst' }).getByText('built-in')).toBeVisible()
     await expect(page.locator('tr', { hasText: 'analyst' }).getByText('few-shot')).toBeVisible()
     // У custom-coder нет built-in/few-shot бейджей
@@ -47,7 +47,7 @@ test.describe('AgentProfilesSettings — новые поля', () => {
     await page.route('**/api/agent-profiles/skills', async route => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
     })
-    await page.goto('/settings/agent-profiles')
+    await page.goto('/system/agent-profiles')
     await page.locator('tr', { hasText: 'custom-coder' }).getByRole('button', { name: 'Изменить' }).click()
     await expect(page.getByLabel('Источники знаний')).toHaveValue('mobile_architecture, ios_style_guide')
     await expect(page.getByLabel('Рекомендованный пресет')).toHaveValue('smart')
@@ -62,7 +62,7 @@ test.describe('AgentProfilesSettings — новые поля', () => {
     await page.route('**/api/agent-profiles/skills', async route => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
     })
-    await page.goto('/settings/agent-profiles')
+    await page.goto('/system/agent-profiles')
     await page.locator('tr', { hasText: 'analyst' }).getByRole('button', { name: 'Изменить' }).click()
     await expect(page.getByText(/встроенный профиль/i)).toBeVisible()
   })

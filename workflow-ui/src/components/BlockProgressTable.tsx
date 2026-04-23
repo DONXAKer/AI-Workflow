@@ -1,13 +1,14 @@
 import { Loader2, CheckCircle, XCircle, SkipForward, Clock, AlertCircle, Copy, Check, Bell, ChevronDown, ChevronRight, Hand, Zap, BellRing } from 'lucide-react'
 import { BlockStatus, BlockSnapshot, ApprovalMode } from '../types'
 import { effectiveApprovalMode } from '../utils/configSnapshot'
+import { blockTypeLabel } from '../utils/blockLabels'
 import clsx from 'clsx'
 import { useState, useCallback, useEffect } from 'react'
 
 const APPROVAL_BADGE: Record<ApprovalMode, { label: string; Icon: React.ComponentType<{ className?: string }>; cls: string }> = {
-  manual: { label: 'manual', Icon: Hand, cls: 'bg-amber-900/40 border-amber-800/60 text-amber-300' },
-  auto: { label: 'auto', Icon: Zap, cls: 'bg-slate-800 border-slate-700 text-slate-400' },
-  auto_notify: { label: 'auto+notify', Icon: BellRing, cls: 'bg-blue-950/40 border-blue-800/60 text-blue-300' },
+  manual: { label: 'Одобрение', Icon: Hand, cls: 'bg-amber-900/40 border-amber-800/60 text-amber-300' },
+  auto: { label: 'Авто', Icon: Zap, cls: 'bg-slate-800 border-slate-700 text-slate-400' },
+  auto_notify: { label: 'Авто + уведомление', Icon: BellRing, cls: 'bg-blue-950/40 border-blue-800/60 text-blue-300' },
 }
 
 function ApprovalBadge({ mode }: { mode: ApprovalMode }) {
@@ -141,7 +142,7 @@ function OutputCell({ output }: { output?: Record<string, unknown> }) {
           className="flex items-center gap-1 text-xs text-slate-400 hover:text-blue-400 transition-colors group/toggle"
         >
           <ChevronIcon className="w-3.5 h-3.5 flex-shrink-0 text-slate-500 group-hover/toggle:text-blue-400 transition-colors" />
-          <span className="font-mono">{expanded ? 'Collapse' : `{${preview}${keys.length > 2 ? ', ...' : '}'}}`}</span>
+          <span className="font-mono">{expanded ? 'Свернуть' : `{${preview}${keys.length > 2 ? ', ...' : '}'}}`}</span>
         </button>
         {/* Copy button always visible alongside the toggle */}
         <CopyButton text={jsonStr} />
@@ -220,31 +221,44 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, sn
                 >
                   <td className="px-5 py-3.5 text-slate-600 text-xs">{index + 1}</td>
                   <td className="px-5 py-3.5">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono text-slate-200 text-sm">{block.blockId}</span>
+                    <div className="flex items-start gap-2 flex-wrap">
+                      <div>
+                        {(() => {
+                          const snapshot = snapshots?.get(block.blockId)
+                          const label = blockTypeLabel(snapshot?.block)
+                          return (
+                            <>
+                              {label && (
+                                <div className="text-sm text-slate-100 font-medium leading-tight">{label}</div>
+                              )}
+                              <div className="font-mono text-slate-500 text-xs mt-0.5">{block.blockId}</div>
+                            </>
+                          )
+                        })()}
+                      </div>
                       {(() => {
                         const snapshot = snapshots?.get(block.blockId)
                         const mode = effectiveApprovalMode(snapshot)
                         return (
-                          <>
+                          <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                             {mode && <ApprovalBadge mode={mode} />}
                             {snapshot?.enabled === false && (
                               <span
-                                className="text-[10px] font-mono uppercase tracking-wide bg-slate-800 border border-slate-700 text-slate-500 px-1.5 py-0.5 rounded"
+                                className="text-[10px] uppercase tracking-wide bg-slate-800 border border-slate-700 text-slate-500 px-1.5 py-0.5 rounded"
                                 title="Блок отключён в конфигурации"
                               >
-                                disabled
+                                выкл
                               </span>
                             )}
                             {snapshot?.condition && (
                               <span
-                                className="text-[10px] font-mono uppercase tracking-wide bg-slate-800/80 border border-slate-700 text-slate-400 px-1.5 py-0.5 rounded"
-                                title={`condition: ${snapshot.condition}`}
+                                className="text-[10px] uppercase tracking-wide bg-slate-800/80 border border-slate-700 text-slate-400 px-1.5 py-0.5 rounded"
+                                title={`Условие: ${snapshot.condition}`}
                               >
-                                cond
+                                условие
                               </span>
                             )}
-                          </>
+                          </div>
                         )
                       })()}
                     </div>

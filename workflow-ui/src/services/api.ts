@@ -1,4 +1,4 @@
-import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry } from '../types'
+import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry, PipelineConfigSettings } from '../types'
 import { currentProjectSlug } from './projectContext'
 
 const BASE = '/api'
@@ -132,6 +132,15 @@ export const api = {
 
   listPipelines: (): Promise<{ path: string; name: string; pipelineName?: string; description?: string; error?: string }[]> =>
     request(`${BASE}/pipelines`),
+
+  getPipelineConfig: (configPath: string): Promise<PipelineConfigSettings> =>
+    request<PipelineConfigSettings>(`${BASE}/pipelines/config?configPath=${encodeURIComponent(configPath)}`),
+
+  savePipelineConfig: (configPath: string, settings: PipelineConfigSettings): Promise<{ saved: boolean }> =>
+    request<{ saved: boolean }>(
+      `${BASE}/pipelines/config?configPath=${encodeURIComponent(configPath)}`,
+      { method: 'PUT', headers: JSON_HEADERS, body: JSON.stringify(settings) }
+    ),
 
   // Integrations
   listIntegrations: (): Promise<IntegrationConfig[]> =>

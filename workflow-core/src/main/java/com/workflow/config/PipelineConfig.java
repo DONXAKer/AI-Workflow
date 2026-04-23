@@ -11,6 +11,7 @@ public class PipelineConfig {
 
     private String name;
     private String description;
+    private DefaultsConfig defaults;
     private IntegrationsConfig integrations;
     private KnowledgeBaseConfig knowledgeBase;
     private List<BlockConfig> pipeline = new ArrayList<>();
@@ -36,6 +37,14 @@ public class PipelineConfig {
 
     public void setDescription(String description) {
         this.description = description;
+    }
+
+    public DefaultsConfig getDefaults() {
+        return defaults;
+    }
+
+    public void setDefaults(DefaultsConfig defaults) {
+        this.defaults = defaults;
     }
 
     public IntegrationsConfig getIntegrations() {

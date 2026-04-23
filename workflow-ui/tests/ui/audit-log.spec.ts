@@ -19,8 +19,8 @@ const sampleEntries = [
 test.describe('AuditLogPage', () => {
   test('ADMIN видит ссылку на журнал в сайдбаре', async ({ page }) => {
     await setupApiMocks(page)
-    await page.goto('/runs/11111111-2222-3333-4444-555555555555')
-    await expect(page.getByRole('link', { name: 'Журнал действий' })).toBeVisible()
+    await page.goto('/system/users')
+    await expect(page.getByRole('link', { name: 'Журнал' })).toBeVisible()
   })
 
   test('OPERATOR не видит ссылку на журнал', async ({ page }) => {
@@ -28,7 +28,7 @@ test.describe('AuditLogPage', () => {
       user: { id: 2, username: 'op', displayName: 'Op', email: null, role: 'OPERATOR' },
     })
     await page.goto('/runs/11111111-2222-3333-4444-555555555555')
-    await expect(page.getByRole('link', { name: 'Журнал действий' })).toHaveCount(0)
+    await expect(page.getByRole('link', { name: 'Журнал' })).toHaveCount(0)
   })
 
   test('рендерит записи из API', async ({ page }) => {
@@ -39,7 +39,7 @@ test.describe('AuditLogPage', () => {
         body: JSON.stringify({ content: sampleEntries, totalElements: 3, totalPages: 1, page: 0, size: 50 }),
       })
     })
-    await page.goto('/settings/audit')
+    await page.goto('/system/audit')
     await expect(page.getByRole('heading', { name: 'Журнал действий' })).toBeVisible()
     await expect(page.locator('body')).toContainText('admin')
     await expect(page.locator('body')).toContainText('RUN_START')
@@ -58,7 +58,7 @@ test.describe('AuditLogPage', () => {
         body: JSON.stringify({ content: [], totalElements: 0, totalPages: 0, page: 0, size: 50 }),
       })
     })
-    await page.goto('/settings/audit')
+    await page.goto('/system/audit')
     await page.getByLabel('Фильтр: актор').fill('alice')
     await expect.poll(() => actorParams.length).toBeGreaterThan(0)
     expect(actorParams).toContain('alice')
@@ -66,7 +66,7 @@ test.describe('AuditLogPage', () => {
 
   test('пустой список показывает placeholder', async ({ page }) => {
     await setupApiMocks(page)
-    await page.goto('/settings/audit')
+    await page.goto('/system/audit')
     await expect(page.getByText('Нет записей, соответствующих фильтрам')).toBeVisible()
   })
 })

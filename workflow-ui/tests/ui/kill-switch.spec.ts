@@ -4,14 +4,14 @@ import { setupApiMocks } from '../fixtures/api-mocks'
 test.describe('KillSwitchPage', () => {
   test('показывает "не активен" при inactive state', async ({ page }) => {
     await setupApiMocks(page)
-    await page.goto('/settings/kill-switch')
+    await page.goto('/system/kill-switch')
     await expect(page.getByText('Kill switch не активен')).toBeVisible()
     await expect(page.getByRole('button', { name: /Активировать/ })).toBeVisible()
   })
 
   test('кнопка активации disabled без причины', async ({ page }) => {
     await setupApiMocks(page)
-    await page.goto('/settings/kill-switch')
+    await page.goto('/system/kill-switch')
     await expect(page.getByRole('button', { name: /Активировать/ })).toBeDisabled()
     await page.getByPlaceholder(/инцидент в проде/i).fill('test reason')
     await expect(page.getByRole('button', { name: /Активировать/ })).toBeEnabled()
@@ -35,7 +35,7 @@ test.describe('KillSwitchPage', () => {
         })
       }
     })
-    await page.goto('/settings/kill-switch')
+    await page.goto('/system/kill-switch')
     await page.getByPlaceholder(/инцидент в проде/i).fill('Prod incident #42')
     await page.getByRole('button', { name: /Активировать kill switch/ }).click()
     await expect.poll(() => captured).not.toBeNull()
@@ -56,7 +56,7 @@ test.describe('KillSwitchPage', () => {
         }),
       })
     })
-    await page.goto('/settings/kill-switch')
+    await page.goto('/system/kill-switch')
     await expect(page.getByText('Kill switch АКТИВЕН')).toBeVisible()
     await expect(page.getByText('Migration in progress')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Деактивировать' })).toBeVisible()

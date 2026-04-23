@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react'
 
-const formatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
+const formatter = new Intl.RelativeTimeFormat('ru', { numeric: 'auto' })
 
 function getRelativeTime(dateStr: string): string {
   const now = Date.now()
   const then = new Date(dateStr).getTime()
   const diff = now - then
 
-  if (diff < 60_000) return 'just now'
+  if (diff < 60_000) return 'только что'
   if (diff < 3_600_000) return formatter.format(-Math.floor(diff / 60_000), 'minutes')
   if (diff < 86_400_000) return formatter.format(-Math.floor(diff / 3_600_000), 'hours')
   return formatter.format(-Math.floor(diff / 86_400_000), 'days')

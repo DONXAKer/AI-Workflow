@@ -18,7 +18,7 @@ const sampleCost = {
 test.describe('CostDashboardPage', () => {
   test('ссылка "Стоимость" видна в сайдбаре', async ({ page }) => {
     await setupApiMocks(page)
-    await page.goto('/runs/11111111-2222-3333-4444-555555555555')
+    await page.goto('/system/users')
     await expect(page.getByRole('link', { name: 'Стоимость' })).toBeVisible()
   })
 
@@ -30,7 +30,7 @@ test.describe('CostDashboardPage', () => {
         body: JSON.stringify(sampleCost),
       })
     })
-    await page.goto('/cost')
+    await page.goto('/system/cost')
     await expect(page.getByRole('heading', { name: 'Стоимость LLM' })).toBeVisible()
     await expect(page.getByText('$12.3456')).toBeVisible()
     await expect(page.locator('body')).toContainText('anthropic/claude-opus-4-7')
@@ -40,7 +40,7 @@ test.describe('CostDashboardPage', () => {
 
   test('пустой результат показывает placeholder', async ({ page }) => {
     await setupApiMocks(page)
-    await page.goto('/cost')
+    await page.goto('/system/cost')
     await expect(page.getByText('Нет вызовов за выбранный период')).toBeVisible()
   })
 
@@ -54,7 +54,7 @@ test.describe('CostDashboardPage', () => {
         body: JSON.stringify(sampleCost),
       })
     })
-    await page.goto('/cost')
+    await page.goto('/system/cost')
     await page.getByLabel('От даты').fill('2026-01-01')
     await expect.poll(() => params.some(u => u.includes('from=2026-01-01'))).toBe(true)
   })

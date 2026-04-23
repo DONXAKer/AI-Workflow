@@ -1,0 +1,11 @@
+# Copy to docker-compose.override.yml (already in .gitignore) and adjust paths.
+# docker-compose merges this file automatically — no flags needed.
+# Each project gets its own mount point inside the workflow-core container.
+#
+# In AI-Workflow projects, set workingDir to the container path (e.g. /warcard).
+
+services:
+  workflow-core:
+    volumes:
+      # - ${MY_PROJECT_PATH:-/path/to/project}:/mnt/myproject
+      - ${WARCARD_PATH:-D:/WarCard}:/warcard

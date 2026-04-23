@@ -13,6 +13,7 @@ export interface MockRun {
   autoApprove: string[]
   outputs?: { blockId: string; outputJson: string }[]
   loopHistoryJson?: string | null
+  configSnapshotJson?: string | null
 }
 
 export interface MockPipeline {
