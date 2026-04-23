@@ -53,8 +53,15 @@ public class TaskMdInputBlock implements Block {
 
     private static final Logger log = LoggerFactory.getLogger(TaskMdInputBlock.class);
 
-    private static final Pattern FILENAME = Pattern.compile("^(?<featId>[A-Z0-9][A-Z0-9\\-]*)_(?<slug>[^.]+)\\.md$");
+    // Matches FEAT-ID-001-slug-words.md — feat_id ends at the last numeric segment
+    private static final Pattern FILENAME = Pattern.compile(
+        "^(?<featId>[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\\d+)-(?<slug>[^.]+)\\.md$");
+    // Legacy underscore separator: FEAT_ID_slug.md
+    private static final Pattern FILENAME_UNDERSCORE = Pattern.compile(
+        "^(?<featId>[A-Z0-9][A-Z0-9\\-]*)_(?<slug>[^.]+)\\.md$");
     private static final Pattern H1 = Pattern.compile("^#\\s+(.+)$", Pattern.MULTILINE);
+    private static final Pattern FRONTMATTER_TITLE = Pattern.compile(
+        "^---\\s*\\R(?:.*\\R)*?title:\\s*(.+?)\\s*\\R", Pattern.MULTILINE);
 
     /** Canonical section headings — exact match on the {@code ## Heading} line. */
     private static final Map<String, String> SECTION_KEYS = Map.of(
@@ -101,18 +108,25 @@ public class TaskMdInputBlock implements Block {
 
         Map<String, Object> out = new LinkedHashMap<>();
         Matcher fm = FILENAME.matcher(filename);
+        if (!fm.matches()) fm = FILENAME_UNDERSCORE.matcher(filename);
         if (fm.matches()) {
             out.put("feat_id", fm.group("featId"));
             out.put("slug", fm.group("slug"));
         } else {
-            log.warn("task_md_input: filename '{}' does not match <FEAT_ID>_<slug>.md — feat_id/slug left empty",
+            log.warn("task_md_input: filename '{}' does not match expected pattern — feat_id/slug left empty",
                 filename);
             out.put("feat_id", "");
             out.put("slug", filename.replaceFirst("\\.md$", ""));
         }
 
-        Matcher hm = H1.matcher(body);
-        out.put("title", hm.find() ? hm.group(1).trim() : "");
+        // Prefer YAML frontmatter title, fall back to first H1 heading
+        Matcher ftm = FRONTMATTER_TITLE.matcher(body);
+        if (ftm.find()) {
+            out.put("title", ftm.group(1).trim());
+        } else {
+            Matcher hm = H1.matcher(body);
+            out.put("title", hm.find() ? hm.group(1).trim() : "");
+        }
         out.put("body", body);
 
         Map<String, String> sections = extractSections(body);

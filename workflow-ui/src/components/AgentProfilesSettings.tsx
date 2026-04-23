@@ -250,7 +250,7 @@ export default function AgentProfilesSettings() {
     setLoadError(null)
     Promise.all([api.listAgentProfiles(), api.listAvailableSkills()])
       .then(([p, s]) => { setProfiles(p); setAvailableSkills(s) })
-      .catch(() => setLoadError('��е удалось загрузить профили агентов'))
+      .catch(() => setLoadError('Не удалось загрузить профили агентов'))
       .finally(() => setLoading(false))
   }, [])
 
@@ -320,7 +320,7 @@ export default function AgentProfilesSettings() {
           <Bot className="w-12 h-12 text-slate-700" />
           <div className="text-center">
             <p className="text-slate-400 text-sm font-medium">Профили агентов не настроены</p>
-            <p className="text-slate-600 text-xs mt-1">Создайте профили для определения ро��ей, экспертизы и навыков агентов.</p>
+            <p className="text-slate-600 text-xs mt-1">Создайте профили для определения ролей, экспертизы и навыков агентов.</p>
           </div>
           <button
             type="button"

@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
-import { AlertCircle, Loader2, RotateCcw, Undo2 } from 'lucide-react'
+import { AlertCircle, Loader2, RotateCcw, Undo2, FileEdit, FilePlus, Sparkles } from 'lucide-react'
 import { useToast } from '../context/ToastContext'
 import { api } from '../services/api'
 import { connectToRun } from '../services/websocket'
-import { PipelineRun, BlockStatus, WsMessage, ApprovalDecision } from '../types'
+import { PipelineRun, BlockStatus, WsMessage, ApprovalDecision, ToolCallEntry } from '../types'
 import BlockProgressTable from '../components/BlockProgressTable'
 import ApprovalDialog from '../components/ApprovalDialog'
 import ReturnDialog from '../components/ReturnDialog'
@@ -33,7 +33,8 @@ export default function RunPage() {
   const [showApprovalDialog, setShowApprovalDialog] = useState(false)
   const [logs, setLogs] = useState<string[]>([])
   const [wsConnected, setWsConnected] = useState(false)
-  const [activeTab, setActiveTab] = useState<'blocks' | 'timeline' | 'logs'>('blocks')
+  const [activeTab, setActiveTab] = useState<'blocks' | 'timeline' | 'logs' | 'summary'>('blocks')
+  const [toolCalls, setToolCalls] = useState<ToolCallEntry[]>([])
   const [showReturnDialog, setShowReturnDialog] = useState(false)
   const { show: showToast } = useToast()
 
@@ -261,6 +262,33 @@ export default function RunPage() {
     [run?.configSnapshotJson]
   )
 
+  const runSummary = useMemo(() => {
+    if (!run?.outputs?.length) return null
+    const outputMap = new Map<string, Record<string, unknown>>()
+    for (const stored of run.outputs) {
+      try { outputMap.set(stored.blockId, JSON.parse(stored.outputJson)) } catch { /* skip */ }
+    }
+    const taskMd = outputMap.get('task_md') as Record<string, unknown> | undefined
+    const impl = outputMap.get('impl') as Record<string, unknown> | undefined
+    const commit = outputMap.get('commit') as Record<string, unknown> | undefined
+
+    const writtenFiles = new Set<string>()
+    const editedFiles = new Set<string>()
+    for (const tc of toolCalls) {
+      if (tc.isError) continue
+      try {
+        const inp = JSON.parse(tc.inputJson) as Record<string, unknown>
+        const fp = inp['file_path'] as string | undefined
+        if (fp) {
+          if (tc.toolName === 'Write') writtenFiles.add(fp)
+          else if (tc.toolName === 'Edit') editedFiles.add(fp)
+        }
+      } catch { /* skip */ }
+    }
+
+    return { taskMd, impl, commit, writtenFiles: [...writtenFiles], editedFiles: [...editedFiles] }
+  }, [run?.outputs, toolCalls])
+
   const handleReturn = useCallback(async (targetBlock: string, comment: string) => {
     if (!runId || !run) return
     const pipelines = await api.listPipelines()
@@ -271,6 +299,13 @@ export default function RunPage() {
     addLog(`Return submitted: back to ${targetBlock}`)
     loadRun(true)
   }, [runId, run, addLog, loadRun])
+
+  // Load tool calls for completed/failed runs to show summary
+  useEffect(() => {
+    if (isHistorical && runId) {
+      api.getRunToolCalls(runId).then(setToolCalls).catch(() => {/* ignore */})
+    }
+  }, [isHistorical, runId])
 
   // When run is historical, event log is unavailable — switch to blocks tab if logs was active
   useEffect(() => {
@@ -431,6 +466,23 @@ export default function RunPage() {
 
       {/* Tabs — Event Log hidden for historical runs (backend does not persist events) */}
       <div className="flex items-center gap-1 border-b border-slate-800">
+        {isHistorical && runSummary && (
+          <button
+            type="button"
+            onClick={() => setActiveTab('summary')}
+            aria-selected={activeTab === 'summary'}
+            role="tab"
+            className={clsx(
+              'px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-slate-950',
+              activeTab === 'summary'
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-slate-500 hover:text-slate-300'
+            )}
+          >
+            Саммари
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setActiveTab('blocks')}
@@ -493,6 +545,91 @@ export default function RunPage() {
       </div>
       {isHistorical && (
         <p className="text-xs text-slate-500 mt-1">Журнал событий доступен только для активных запусков</p>
+      )}
+
+      {/* Summary tab */}
+      {isHistorical && runSummary && (
+        <div className={activeTab === 'summary' ? 'space-y-4' : 'hidden'}>
+          {/* Task info */}
+          {runSummary.taskMd && (
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Задача</h3>
+              <div className="space-y-1">
+                {!!runSummary.taskMd['feat_id'] && (
+                  <p className="text-sm font-mono text-blue-400">{String(runSummary.taskMd['feat_id'])}</p>
+                )}
+                {!!runSummary.taskMd['title'] && (
+                  <p className="text-sm text-slate-200">{String(runSummary.taskMd['title'])}</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Agent summary */}
+          {runSummary.impl && (
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide flex items-center gap-2">
+                  <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                  Агент
+                </h3>
+                <div className="flex gap-3 text-xs text-slate-500">
+                  {runSummary.impl['iterations_used'] != null && (
+                    <span>{String(runSummary.impl['iterations_used'])} итераций</span>
+                  )}
+                  {runSummary.impl['tool_calls_made'] != null && (
+                    <span>{String(runSummary.impl['tool_calls_made'])} вызовов</span>
+                  )}
+                  {runSummary.impl['total_cost_usd'] != null && (
+                    <span>${Number(runSummary.impl['total_cost_usd']).toFixed(4)}</span>
+                  )}
+                </div>
+              </div>
+              {!!runSummary.impl['final_text'] && (
+                <p className="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">
+                  {String(runSummary.impl['final_text'])}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Files changed */}
+          {(runSummary.writtenFiles.length > 0 || runSummary.editedFiles.length > 0) && (
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">
+                Изменённые файлы ({runSummary.writtenFiles.length + runSummary.editedFiles.length})
+              </h3>
+              <div className="space-y-1">
+                {runSummary.editedFiles.map(f => (
+                  <div key={f} className="flex items-center gap-2 text-sm">
+                    <FileEdit className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span className="font-mono text-slate-300 truncate">{f}</span>
+                  </div>
+                ))}
+                {runSummary.writtenFiles.map(f => (
+                  <div key={f} className="flex items-center gap-2 text-sm">
+                    <FilePlus className="w-3.5 h-3.5 text-green-400 shrink-0" />
+                    <span className="font-mono text-slate-300 truncate">{f}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Completed blocks */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">
+              Блоки ({run?.completedBlocks?.length ?? 0})
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {run?.completedBlocks?.map(b => (
+                <span key={b} className="px-2 py-0.5 text-xs font-mono rounded bg-slate-800 text-slate-300 border border-slate-700">
+                  {b}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
 
       {/*

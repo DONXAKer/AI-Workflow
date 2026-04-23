@@ -45,6 +45,7 @@ public class ProjectController {
             if (body.getDisplayName() != null) existing.setDisplayName(body.getDisplayName());
             if (body.getDescription() != null) existing.setDescription(body.getDescription());
             if (body.getConfigDir() != null) existing.setConfigDir(body.getConfigDir());
+            if (body.getWorkingDir() != null) existing.setWorkingDir(body.getWorkingDir());
             return ResponseEntity.ok(repository.save(existing));
         }).orElse(ResponseEntity.notFound().build());
     }

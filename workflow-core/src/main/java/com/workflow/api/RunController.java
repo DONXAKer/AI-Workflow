@@ -5,6 +5,8 @@ import com.workflow.config.PipelineConfigLoader;
 import com.workflow.core.*;
 import com.workflow.core.EntryPointResolver.DetectionResult;
 import com.workflow.project.ProjectContext;
+import com.workflow.tools.ToolCallAudit;
+import com.workflow.tools.ToolCallAuditRepository;
 import jakarta.persistence.criteria.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,6 +66,9 @@ public class RunController {
 
     @Autowired
     private com.workflow.core.KillSwitchService killSwitchService;
+
+    @Autowired(required = false)
+    private ToolCallAuditRepository toolCallAuditRepository;
 
     @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
     @PostMapping("/runs")
@@ -587,6 +592,26 @@ public class RunController {
             })
             .collect(Collectors.toList());
 
+        return ResponseEntity.ok(result);
+    }
+
+    @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
+    @GetMapping("/runs/{runId}/tool-calls")
+    public ResponseEntity<?> getToolCalls(@PathVariable UUID runId) {
+        if (toolCallAuditRepository == null) {
+            return ResponseEntity.ok(List.of());
+        }
+        List<ToolCallAudit> calls = toolCallAuditRepository.findByRunIdOrderByTimestampAsc(runId);
+        List<Map<String, Object>> result = calls.stream().map(c -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("blockId", c.getBlockId());
+            m.put("iteration", c.getIteration());
+            m.put("toolName", c.getToolName());
+            m.put("inputJson", c.getInputJson());
+            m.put("isError", c.isError());
+            m.put("durationMs", c.getDurationMs());
+            return m;
+        }).toList();
         return ResponseEntity.ok(result);
     }
 }

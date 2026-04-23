@@ -9,7 +9,7 @@ const STATUS_CONFIG: Record<RunStatus, {
   spin?: boolean
   pulse?: boolean
 }> = {
-  PENDING: { label: 'Ожи��ание', icon: Clock, classes: 'bg-slate-700/60 text-slate-400' },
+  PENDING: { label: 'Ожидание', icon: Clock, classes: 'bg-slate-700/60 text-slate-400' },
   RUNNING: { label: 'Выполняется', icon: Loader2, classes: 'bg-blue-900/50 text-blue-300', spin: true },
   PAUSED_FOR_APPROVAL: { label: 'Ожидает одобрения', icon: AlertCircle, classes: 'bg-amber-900/50 text-amber-300', pulse: true },
   COMPLETED: { label: 'Завершён', icon: CheckCircle, classes: 'bg-green-900/50 text-green-300' },

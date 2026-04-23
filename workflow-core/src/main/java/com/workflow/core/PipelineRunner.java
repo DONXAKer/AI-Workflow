@@ -110,13 +110,16 @@ public class PipelineRunner {
         if (metrics != null) metrics.recordRunStarted();
 
         CompletableFuture<Void> future = new CompletableFuture<>();
+        String projectSlug = pipelineRun.getProjectSlug();
         Thread t = Thread.startVirtualThread(() -> {
+            com.workflow.project.ProjectContext.set(projectSlug);
             try {
                 executeBlocks(config, pipelineRun, requirement, false);
                 future.complete(null);
             } catch (Exception e) {
                 future.completeExceptionally(e);
             } finally {
+                com.workflow.project.ProjectContext.clear();
                 runningThreads.remove(runId);
             }
         });
@@ -171,13 +174,16 @@ public class PipelineRunner {
         if (wsHandler != null) wsHandler.sendRunStarted(runId);
 
         CompletableFuture<Void> future = new CompletableFuture<>();
+        String projectSlugFrom = pipelineRun.getProjectSlug();
         Thread t = Thread.startVirtualThread(() -> {
+            com.workflow.project.ProjectContext.set(projectSlugFrom);
             try {
                 executeBlocks(config, pipelineRun, requirement, true);
                 future.complete(null);
             } catch (Exception e) {
                 future.completeExceptionally(e);
             } finally {
+                com.workflow.project.ProjectContext.clear();
                 runningThreads.remove(runId);
             }
         });
@@ -198,12 +204,15 @@ public class PipelineRunner {
         run.setStatus(RunStatus.RUNNING);
         runRepository.save(run);
 
+        String projectSlugResume = run.getProjectSlug();
         Thread t = Thread.startVirtualThread(() -> {
+            com.workflow.project.ProjectContext.set(projectSlugResume);
             try {
                 executeBlocks(config, run, run.getRequirement(), true);
             } catch (Exception e) {
                 log.error("Error resuming run {}: {}", runId, e.getMessage(), e);
             } finally {
+                com.workflow.project.ProjectContext.clear();
                 runningThreads.remove(runId);
             }
         });

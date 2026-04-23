@@ -19,6 +19,15 @@ export interface EntryPoint {
 export type RunStatus = 'PENDING' | 'RUNNING' | 'PAUSED_FOR_APPROVAL' | 'COMPLETED' | 'FAILED'
 export type IntegrationType = 'YOUTRACK' | 'GITLAB' | 'GITHUB' | 'OPENROUTER'
 
+export interface ToolCallEntry {
+  blockId: string
+  iteration: number
+  toolName: string
+  inputJson: string
+  isError: boolean
+  durationMs: number
+}
+
 export interface StoredBlockOutput {
   blockId: string
   outputJson: string
@@ -225,6 +234,7 @@ export interface ProjectInfo {
   displayName: string
   description: string | null
   configDir: string | null
+  workingDir: string | null
   createdAt: string
   updatedAt: string
 }
