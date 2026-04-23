@@ -62,16 +62,26 @@ public class PipelineConfigLoader {
         if (!Files.isDirectory(configDir)) {
             return paths;
         }
-        try (Stream<Path> stream = Files.walk(configDir, 1)) {
+        // Primary: scan configDir itself (depth 1)
+        scanYaml(configDir, 1, paths);
+        // Convention: also scan <configDir>/.ai-workflow/pipelines/ if it exists
+        Path aiWorkflowPipelines = configDir.resolve(".ai-workflow/pipelines");
+        if (Files.isDirectory(aiWorkflowPipelines)) {
+            scanYaml(aiWorkflowPipelines, 1, paths);
+        }
+        paths.sort(null);
+        return paths;
+    }
+
+    private void scanYaml(Path dir, int depth, List<Path> out) {
+        try (Stream<Path> stream = Files.walk(dir, depth)) {
             stream
                 .filter(p -> !Files.isDirectory(p))
                 .filter(p -> p.toString().endsWith(".yaml") || p.toString().endsWith(".yml"))
-                .sorted()
-                .forEach(paths::add);
+                .forEach(out::add);
         } catch (IOException e) {
-            log.warn("Error listing config directory {}: {}", configDir, e.getMessage());
+            log.warn("Error listing config directory {}: {}", dir, e.getMessage());
         }
-        return paths;
     }
 
     private String expandEnvVars(String content) {

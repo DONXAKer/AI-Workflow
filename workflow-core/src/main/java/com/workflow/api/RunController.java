@@ -7,6 +7,7 @@ import com.workflow.core.EntryPointResolver.DetectionResult;
 import com.workflow.project.ProjectContext;
 import com.workflow.tools.ToolCallAudit;
 import com.workflow.tools.ToolCallAuditRepository;
+import com.workflow.project.ProjectRepository;
 import jakarta.persistence.criteria.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -69,6 +70,9 @@ public class RunController {
 
     @Autowired(required = false)
     private ToolCallAuditRepository toolCallAuditRepository;
+
+    @Autowired(required = false)
+    private ProjectRepository projectRepository;
 
     @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
     @PostMapping("/runs")
@@ -573,7 +577,16 @@ public class RunController {
 
     @GetMapping("/pipelines")
     public ResponseEntity<List<Map<String, Object>>> listPipelines() {
-        Path dir = Paths.get(configDir);
+        // Use current project's configDir if available, fall back to global default
+        String effectiveConfigDir = configDir;
+        String projectSlug = ProjectContext.get();
+        if (projectSlug != null && projectRepository != null) {
+            var project = projectRepository.findBySlug(projectSlug);
+            if (project.isPresent() && project.get().getConfigDir() != null) {
+                effectiveConfigDir = project.get().getConfigDir();
+            }
+        }
+        Path dir = Paths.get(effectiveConfigDir);
         List<Path> configs = pipelineConfigLoader.listConfigs(dir);
 
         List<Map<String, Object>> result = configs.stream()
