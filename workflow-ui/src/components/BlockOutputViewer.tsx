@@ -1,0 +1,206 @@
+import { useState, type ReactNode } from 'react'
+import { ChevronRight, ChevronDown, FileCode, FilePlus, Trash2, FileEdit } from 'lucide-react'
+import clsx from 'clsx'
+
+interface FileChange {
+  file_path?: string
+  path?: string
+  file?: string
+  action?: string
+  content?: string
+  description?: string
+}
+
+const ACTION_BADGE: Record<string, { label: string; cls: string; icon: ReactNode }> = {
+  create:  { label: 'создан',   cls: 'bg-green-900/60 text-green-300 border-green-800',  icon: <FilePlus  className="w-3 h-3" /> },
+  modify:  { label: 'изменён',  cls: 'bg-blue-900/60  text-blue-300  border-blue-800',   icon: <FileEdit  className="w-3 h-3" /> },
+  delete:  { label: 'удалён',   cls: 'bg-red-900/60   text-red-300   border-red-800',    icon: <Trash2    className="w-3 h-3" /> },
+}
+
+function actionBadge(action?: string) {
+  const a = (action ?? '').toLowerCase()
+  const cfg = ACTION_BADGE[a] ?? { label: a || '?', cls: 'bg-slate-800 text-slate-400 border-slate-700', icon: <FileCode className="w-3 h-3" /> }
+  return (
+    <span className={clsx('inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border', cfg.cls)}>
+      {cfg.icon}{cfg.label}
+    </span>
+  )
+}
+
+function FileRow({ file }: { file: FileChange }) {
+  const [open, setOpen] = useState(false)
+  const filePath = file.file_path ?? file.path ?? file.file ?? '(unknown)'
+  const hasContent = !!file.content
+
+  return (
+    <div className="border border-slate-700/60 rounded-lg overflow-hidden">
+      <button
+        type="button"
+        onClick={() => hasContent && setOpen(o => !o)}
+        className={clsx(
+          'w-full flex items-center gap-2 px-3 py-2 text-left text-sm',
+          hasContent ? 'hover:bg-slate-800/60 cursor-pointer' : 'cursor-default',
+          'bg-slate-900/80'
+        )}
+      >
+        {hasContent ? (
+          open ? <ChevronDown className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+        ) : (
+          <span className="w-3.5 h-3.5 flex-shrink-0" />
+        )}
+        <FileCode className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+        <span className="font-mono text-slate-200 text-xs truncate flex-1">{filePath}</span>
+        {actionBadge(file.action)}
+      </button>
+
+      {file.description && !open && (
+        <p className="px-9 pb-1.5 text-xs text-slate-500">{file.description}</p>
+      )}
+
+      {open && hasContent && (
+        <div className="border-t border-slate-700/60">
+          {file.description && (
+            <p className="px-3 py-1.5 text-xs text-slate-400 bg-slate-900/60 border-b border-slate-700/40">{file.description}</p>
+          )}
+          <pre className="px-3 py-2.5 text-[11px] font-mono text-slate-300 overflow-auto max-h-64 bg-slate-950 whitespace-pre-wrap">
+            {file.content}
+          </pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FileGroup({ label, files }: { label: string; files: FileChange[] }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors mb-1.5"
+      >
+        {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+        {label}
+        <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-slate-700 text-slate-300 text-[10px]">{files.length}</span>
+      </button>
+      {open && (
+        <div className="space-y-1.5 ml-1">
+          {files.map((f, i) => <FileRow key={i} file={f} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function StringField({ label, value }: { label: string; value: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const long = value.length > 300
+  const shown = long && !expanded ? value.slice(0, 300) + '…' : value
+  return (
+    <div>
+      <dt className="text-[10px] font-medium text-slate-500 uppercase tracking-wide mb-0.5">{label}</dt>
+      <dd className="text-sm text-slate-200 font-mono whitespace-pre-wrap break-all leading-relaxed">{shown}</dd>
+      {long && (
+        <button type="button" onClick={() => setExpanded(e => !e)} className="text-xs text-blue-400 hover:text-blue-300 mt-0.5">
+          {expanded ? 'Свернуть' : 'Показать полностью'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function ScalarField({ label, value }: { label: string; value: unknown }) {
+  return (
+    <div>
+      <dt className="text-[10px] font-medium text-slate-500 uppercase tracking-wide mb-0.5">{label}</dt>
+      <dd className="text-sm text-slate-200">{String(value)}</dd>
+    </div>
+  )
+}
+
+// Labels for well-known keys
+const FIELD_LABELS: Record<string, string> = {
+  branch_name:    'Ветка',
+  commit_message: 'Коммит',
+  summary:        'Сводка',
+  status:         'Статус',
+  message:        'Сообщение',
+  pr_url:         'URL PR',
+  mr_url:         'URL MR',
+  score:          'Оценка',
+  issues:         'Проблемы',
+  recommendation: 'Рекомендация',
+  complexity:     'Сложность',
+  technical_approach: 'Тех. подход',
+}
+
+const FILE_ARRAY_KEYS = new Set(['changes', 'test_changes', 'file_changes', 'files'])
+const FILE_ARRAY_LABELS: Record<string, string> = {
+  changes:      'Изменённые файлы',
+  test_changes: 'Тестовые файлы',
+  file_changes: 'Изменённые файлы',
+  files:        'Файлы',
+}
+
+function isFileChange(v: unknown): v is FileChange {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+interface Props {
+  output: Record<string, unknown>
+}
+
+export default function BlockOutputViewer({ output }: Props) {
+  const entries = Object.entries(output)
+  if (entries.length === 0) return <p className="text-sm text-slate-500">Выход пуст.</p>
+
+  const fileGroups: Array<{ key: string; files: FileChange[] }> = []
+  const stringFields: Array<{ key: string; value: string }> = []
+  const scalarFields: Array<{ key: string; value: unknown }> = []
+  const unknownArrays: Array<{ key: string; value: unknown[] }> = []
+
+  for (const [key, value] of entries) {
+    if (FILE_ARRAY_KEYS.has(key) && Array.isArray(value) && value.every(isFileChange)) {
+      fileGroups.push({ key, files: value as FileChange[] })
+    } else if (typeof value === 'string') {
+      stringFields.push({ key, value })
+    } else if (typeof value === 'number' || typeof value === 'boolean') {
+      scalarFields.push({ key, value })
+    } else if (Array.isArray(value)) {
+      unknownArrays.push({ key, value })
+    } else if (value !== null && value !== undefined) {
+      // nested object or unknown — render as compact JSON
+      stringFields.push({ key, value: JSON.stringify(value, null, 2) })
+    }
+  }
+
+  return (
+    <dl className="space-y-3">
+      {/* String/scalar fields first */}
+      {stringFields.map(({ key, value }) => (
+        <StringField key={key} label={FIELD_LABELS[key] ?? key} value={value} />
+      ))}
+      {scalarFields.map(({ key, value }) => (
+        <ScalarField key={key} label={FIELD_LABELS[key] ?? key} value={value} />
+      ))}
+
+      {/* File change groups */}
+      {fileGroups.map(({ key, files }) => (
+        <FileGroup key={key} label={FILE_ARRAY_LABELS[key] ?? key} files={files} />
+      ))}
+
+      {/* Unknown arrays as compact JSON */}
+      {unknownArrays.map(({ key, value }) => (
+        <div key={key}>
+          <dt className="text-[10px] font-medium text-slate-500 uppercase tracking-wide mb-0.5">{FIELD_LABELS[key] ?? key}</dt>
+          <dd>
+            <pre className="text-[11px] font-mono text-slate-300 bg-slate-950 border border-slate-700/60 rounded px-3 py-2 overflow-auto max-h-40 whitespace-pre-wrap">
+              {JSON.stringify(value, null, 2)}
+            </pre>
+          </dd>
+        </div>
+      ))}
+    </dl>
+  )
+}

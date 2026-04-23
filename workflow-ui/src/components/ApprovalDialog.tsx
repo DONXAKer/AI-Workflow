@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import { CheckCircle, Edit3, XCircle, SkipForward, ArrowRight, AlertCircle, X } from 'lucide-react'
 import { WsMessage, ApprovalDecision, ApprovalDecisionType } from '../types'
 import clsx from 'clsx'
+import BlockOutputViewer from './BlockOutputViewer'
 
 interface Props {
   approval: WsMessage
@@ -173,9 +174,9 @@ export default function ApprovalDialog({ approval, remainingBlocks = [], onDecis
                 )}
               </div>
             ) : (
-              <pre className="bg-slate-950 border border-slate-700/60 rounded-lg px-4 py-3 text-sm font-mono text-slate-300 overflow-auto max-h-64 whitespace-pre-wrap">
-                {initialJson}
-              </pre>
+              <div className="bg-slate-950 border border-slate-700/60 rounded-lg px-4 py-3 overflow-auto max-h-72">
+                <BlockOutputViewer output={approval.output ?? {}} />
+              </div>
             )}
           </div>
 
