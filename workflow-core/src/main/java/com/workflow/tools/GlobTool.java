@@ -3,6 +3,7 @@ package com.workflow.tools;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -23,6 +24,9 @@ import java.util.stream.Stream;
 public class GlobTool implements Tool {
 
     private static final int DEFAULT_LIMIT = 250;
+
+    @Autowired(required = false)
+    private FileSystemCache fileSystemCache;
 
     @Override
     public String name() { return "Glob"; }
@@ -61,6 +65,17 @@ public class GlobTool implements Tool {
             throw new ToolInvocationException("search path is not a directory: " + searchRoot);
         }
 
+        // Cache key is (workingDir, normalizedPattern) — generation handles invalidation
+        String cachePattern = searchRoot + "|" + pattern;
+        if (fileSystemCache != null) {
+            List<String> cached = fileSystemCache.getGlob(ctx.workingDir(), cachePattern);
+            if (cached != null) {
+                return cached.isEmpty()
+                    ? "No files match pattern '" + pattern + "' under " + ctx.workingDir().relativize(searchRoot)
+                    : String.join("\n", cached) + "\n";
+            }
+        }
+
         PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
 
         List<Path> matches = new ArrayList<>();
@@ -77,15 +92,19 @@ public class GlobTool implements Tool {
             matches = matches.subList(0, DEFAULT_LIMIT);
         }
 
-        if (matches.isEmpty()) {
+        List<String> relPaths = matches.stream()
+            .map(p -> ctx.workingDir().relativize(p).toString())
+            .toList();
+
+        if (fileSystemCache != null) {
+            fileSystemCache.putGlob(ctx.workingDir(), cachePattern, relPaths);
+        }
+
+        if (relPaths.isEmpty()) {
             return "No files match pattern '" + pattern + "' under " + ctx.workingDir().relativize(searchRoot);
         }
 
-        StringBuilder sb = new StringBuilder();
-        for (Path p : matches) {
-            sb.append(ctx.workingDir().relativize(p)).append('\n');
-        }
-        return sb.toString();
+        return String.join("\n", relPaths) + "\n";
     }
 
     private static long safeMtime(Path p) {

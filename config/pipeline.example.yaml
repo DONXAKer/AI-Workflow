@@ -359,6 +359,88 @@ pipeline:
 #       failed_statuses: [failure, failed, timeout]
 #
 # =============================================================================
+# ORCHESTRATOR PATTERN – Plan + Review с валидацией кода, тестов и документации
+# =============================================================================
+#
+# OrchestratorBlock (block: orchestrator) — супервизор-агент в двух режимах:
+#
+#   mode: plan   — изучает кодовую базу и создаёт структурированный план
+#                  с явным definition_of_done (включая тесты, API-документацию, README)
+#   mode: review — проверяет реализацию против плана:
+#                  - Тесты написаны и зелёные (через context_blocks: [build_test])
+#                  - OpenAPI/Swagger аннотации актуальны
+#                  - CLAUDE.md / README обновлены при изменении архитектуры
+#                  - Возвращает action: continue | retry | escalate
+#
+# При action=escalate — PipelineRunner немедленно останавливает run (не loopback).
+# При action=retry — loopback на codegen с inject_context (retry_instruction, issues,
+#                    carry_forward, build_output).
+#
+# Полный пример pipeline (task_md → analysis → plan → codegen → build_test → review):
+#
+#   - id: task_md
+#     block: task_md_input
+#     config:
+#       task_file: "${input.task_file}"
+#
+#   - id: plan
+#     block: orchestrator
+#     depends_on: [analysis, task_md]
+#     agent:
+#       model: claude-opus-4-7
+#       temperature: 0.1
+#     config:
+#       mode: plan
+#       context_blocks: [task_md, analysis]
+#       working_dir: /projects/myapp
+#       max_iterations: 12
+#       system_prompt_extra: "Java 21 Spring Boot. OpenAPI via Springdoc."
+#     approval: true
+#
+#   - id: codegen
+#     block: agent_with_tools
+#     depends_on: [plan]
+#     agent:
+#       model: claude-opus-4-7
+#       max_tokens: 16384
+#     config:
+#       working_dir: /projects/myapp
+#     approval: true
+#
+#   - id: build_test
+#     block: shell_exec
+#     depends_on: [codegen]
+#     config:
+#       working_dir: /projects/myapp
+#       command: "./gradlew test --no-daemon -q 2>&1 | tail -30"
+#       timeout_seconds: 300
+#
+#   - id: review
+#     block: orchestrator
+#     depends_on: [build_test]
+#     agent:
+#       model: claude-opus-4-7
+#     config:
+#       mode: review
+#       plan_block: plan
+#       context_blocks: [build_test]   # review читает результаты тестов/сборки
+#       working_dir: /projects/myapp
+#       max_iterations: 10
+#       system_prompt_extra: |
+#         MANDATORY doc checks: OpenAPI annotations on new endpoints, CLAUDE.md if
+#         architecture changed, README if external behavior changed.
+#     verify:
+#       on_fail:
+#         action: loopback
+#         target: codegen
+#         max_iterations: 2
+#         inject_context:
+#           retry_instruction: "$.review.retry_instruction"
+#           issues: "$.review.issues"
+#           carry_forward: "$.review.carry_forward"
+#           build_output: "$.build_test.output"
+#
+# =============================================================================
 # ALTERNATIVE: GitHub-based pipeline
 # =============================================================================
 # Replace the gitlab_mr + gitlab_ci blocks above with github_pr + github_actions

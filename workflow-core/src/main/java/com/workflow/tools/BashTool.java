@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -31,6 +32,9 @@ public class BashTool implements Tool {
 
     static final int DEFAULT_TIMEOUT_SEC = 120;
     static final int MAX_OUTPUT_BYTES = 64 * 1024;
+
+    @Autowired(required = false)
+    private FileSystemCache fileSystemCache;
 
     /**
      * Env vars stripped from the subprocess environment before the shell runs. Keeps the
@@ -118,6 +122,10 @@ public class BashTool implements Tool {
         reader.join(5_000);
         int exit = proc.exitValue();
         String output = outRef.get();
+
+        if (fileSystemCache != null && !fileSystemCache.isBashReadOnly(command)) {
+            fileSystemCache.invalidateDirectory(ctx.workingDir());
+        }
 
         StringBuilder sb = new StringBuilder();
         sb.append("$ ").append(command).append('\n');

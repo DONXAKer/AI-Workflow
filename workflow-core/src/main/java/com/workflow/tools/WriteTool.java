@@ -3,6 +3,7 @@ package com.workflow.tools;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -20,6 +21,9 @@ import java.nio.file.StandardOpenOption;
  */
 @Component
 public class WriteTool implements Tool {
+
+    @Autowired(required = false)
+    private FileSystemCache fileSystemCache;
 
     @Override
     public String name() { return "Write"; }
@@ -61,6 +65,11 @@ public class WriteTool implements Tool {
 
         Files.writeString(target, content, StandardCharsets.UTF_8,
             StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+        if (fileSystemCache != null) {
+            fileSystemCache.invalidateFile(target);
+            fileSystemCache.invalidateDirectory(ctx.workingDir());
+        }
 
         int bytes = content.getBytes(StandardCharsets.UTF_8).length;
         return "wrote " + bytes + " bytes to " + ctx.workingDir().relativize(target);

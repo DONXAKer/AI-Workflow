@@ -1,0 +1,262 @@
+name: skill-marketplace
+description: AI-pipeline для разработки skill_marketplace (Java 21 Spring Boot + Next.js 16)
+
+# =============================================================================
+# Entry Points
+# =============================================================================
+entry_points:
+  - id: from_task_file
+    name: "Задача из файла"
+    description: "Читает задачу из .md файла в проекте → план → код → тесты → review"
+    from_block: task_md
+    requires_input: task_file
+
+  - id: from_requirement
+    name: "Новая задача с нуля"
+    description: "Анализ → декомпозиция → план → код → тесты"
+    from_block: analysis
+    requires_input: requirement
+
+  - id: from_youtrack
+    name: "Задача из YouTrack"
+    description: "Загрузить задачу из YouTrack и сгенерировать код"
+    from_block: youtrack_input
+    requires_input: youtrack_issue
+
+  - id: code_only
+    name: "Только генерация кода"
+    description: "Сразу к кодогенерации (задача уже известна)"
+    from_block: codegen
+    requires_input: requirement
+    inject:
+      - block_id: analysis
+        source: empty
+      - block_id: plan
+        source: empty
+
+# =============================================================================
+# Integrations
+# =============================================================================
+integrations:
+  youtrack: youtrack-default
+  # github: github-skill-marketplace  # раскомментировать когда репозиторий создан
+
+# =============================================================================
+# Knowledge Base
+# =============================================================================
+knowledge_base:
+  sources:
+    - type: files
+      path: /projects/skill_marketplace/docs
+    - type: files
+      path: /projects/skill_marketplace/api/src/main/java
+    - type: files
+      path: /projects/skill_marketplace/web/app
+
+# =============================================================================
+# Pipeline
+# =============================================================================
+pipeline:
+
+  # ---------------------------------------------------------------------------
+  # 0a. Task file input (entry point: from_task_file)
+  # ---------------------------------------------------------------------------
+  - id: task_md
+    block: task_md_input
+    config:
+      task_file: "${input.task_file}"
+
+  # ---------------------------------------------------------------------------
+  # 0b. YouTrack Input (entry point: from_youtrack)
+  # ---------------------------------------------------------------------------
+  - id: youtrack_input
+    block: youtrack_input
+    config:
+      issue_id: ""
+      task_mode: decompose
+    approval: true
+
+  # ---------------------------------------------------------------------------
+  # 1. Analysis (fast first pass — determines complexity for clarification gate)
+  # ---------------------------------------------------------------------------
+  - id: analysis
+    block: analysis
+    depends_on:
+      - youtrack_input
+      - task_md
+    agent:
+      model: claude-opus-4-7
+      system_prompt: |
+        Ты senior software architect. Проект — маркетплейс AI-навыков (skills/plugins для LLM-ассистентов).
+
+        Стек:
+        - Backend: Java 21, Spring Boot 3.5, Gradle, PostgreSQL 16 (Flyway), Redis, MinIO/S3
+        - Frontend: Next.js 16, React 19, TypeScript, Tailwind CSS
+        - Auth: JWT (24ч access token), отдельный sub=download для download tokens
+        - Модерация: async pipeline (AntiVirus → ForbiddenContent → LlmScanner → DuplicateArtifact)
+        - API: REST, пакеты: auth, catalog, moderation, install, review, compatibility, creator, takedown, admin, storage
+        - DB схемы: JSONB для манифестов навыков, PostgreSQL arrays для тегов
+
+        Рабочая директория: /projects/skill_marketplace
+        Миграции: api/src/main/resources/db/migration/
+
+        Анализируй глубоко. Учитывай 289-ФЗ, 152-ФЗ при изменениях хранения данных.
+        Обязательно укажи: affected_components, technical_approach, complexity, risks.
+      max_tokens: 8192
+    approval: true
+
+  # ---------------------------------------------------------------------------
+  # 2. Clarification (пропускается для низкой сложности)
+  # ---------------------------------------------------------------------------
+  - id: clarification
+    block: clarification
+    depends_on:
+      - analysis
+    condition: "$.analysis.estimated_complexity != 'low'"
+    agent:
+      model: claude-sonnet-4-6
+      max_tokens: 4096
+    approval: true
+
+  # ---------------------------------------------------------------------------
+  # 3. Plan (orchestrator: explores codebase, produces implementation plan + DoD)
+  # ---------------------------------------------------------------------------
+  - id: plan
+    block: orchestrator
+    depends_on:
+      - clarification
+      - analysis
+      - task_md
+    agent:
+      model: claude-opus-4-7
+      temperature: 0.1
+      max_tokens: 8192
+    config:
+      mode: plan
+      context_blocks:
+        - task_md
+        - analysis
+        - clarification
+      working_dir: /projects/skill_marketplace
+      max_iterations: 12
+      system_prompt_extra: |
+        Java 21 Spring Boot 3.5 + Next.js 16 monorepo.
+        Backend: api/ (Gradle, Flyway migrations in api/src/main/resources/db/migration/)
+        Frontend: web/ (Next.js, TypeScript, Tailwind)
+        Tests: api/src/test/java (JUnit 5, Testcontainers for integration tests)
+        OpenAPI: Springdoc annotations (@Operation, @ApiResponse, @Schema) on all controllers.
+        CLAUDE.md in project root must be updated when architecture changes.
+    approval: true
+
+  # ---------------------------------------------------------------------------
+  # 4. Code Generation (agent_with_tools — работает с локальным кодом)
+  # ---------------------------------------------------------------------------
+  - id: codegen
+    block: agent_with_tools
+    depends_on:
+      - plan
+    agent:
+      model: claude-opus-4-7
+      system_prompt: |
+        Ты senior full-stack разработчик. Генерируй production-ready код для skill_marketplace.
+
+        Рабочая директория проекта: /projects/skill_marketplace
+
+        Правила:
+        - Java миграции: api/src/main/resources/db/migration/V<N>__description.sql
+        - Тесты: api/src/test/java/... (Testcontainers для интеграционных)
+        - Новые REST endpoints добавляй в соответствующий Controller, не создавай новые без необходимости
+        - Добавляй Springdoc аннотации (@Operation, @ApiResponse) на все новые endpoints
+        - Frontend компоненты: web/components/, страницы: web/app/
+        - Всегда добавляй Flyway миграцию при изменении схемы БД
+        - Соблюдай стиль существующего кода (читай соседние файлы перед написанием)
+      max_tokens: 16384
+      temperature: 0.2
+      max_iterations: 10
+    config:
+      working_dir: /projects/skill_marketplace
+      bash_allowlist:
+        - "Bash(./gradlew test*)"
+        - "Bash(./gradlew compileJava)"
+        - "Bash(./gradlew compileTestJava)"
+        - "Bash(npm run build)"
+        - "Bash(npm run type-check)"
+        - "Bash(find * -name '*.java')"
+        - "Bash(find * -name '*.ts')"
+        - "Bash(grep *)"
+    approval: true
+
+  # ---------------------------------------------------------------------------
+  # 5. Build & Test
+  # ---------------------------------------------------------------------------
+  - id: build_test
+    block: shell_exec
+    depends_on:
+      - codegen
+    config:
+      working_dir: /projects/skill_marketplace
+      command: |
+        echo "=== API build ===" &&
+        cd api && ./gradlew compileJava compileTestJava --no-daemon -q &&
+        echo "=== API tests (unit only) ===" &&
+        ./gradlew test --no-daemon -x integrationTest -q 2>&1 | tail -30 &&
+        echo "=== Frontend type check ===" &&
+        cd ../web && npm run build 2>&1 | tail -20 &&
+        echo "=== DONE ==="
+      timeout_seconds: 300
+    approval: false
+
+  # ---------------------------------------------------------------------------
+  # 6. Review (orchestrator: verifies code, tests, docs against plan's DoD)
+  # ---------------------------------------------------------------------------
+  - id: review
+    block: orchestrator
+    depends_on:
+      - build_test
+    agent:
+      model: claude-opus-4-7
+      max_tokens: 8192
+    config:
+      mode: review
+      plan_block: plan
+      context_blocks:
+        - build_test
+      working_dir: /projects/skill_marketplace
+      max_iterations: 10
+      system_prompt_extra: |
+        Java 21 Spring Boot 3.5 + Next.js 16 monorepo.
+        MANDATORY documentation checks:
+        - OpenAPI/Springdoc annotations (@Operation, @ApiResponse, @Schema) present on all new/changed REST endpoints
+        - CLAUDE.md updated if architecture or major component changed
+        - README.md updated if external API behavior changed
+        DO NOT require Javadoc — it is not used in this project.
+    verify:
+      on_fail:
+        action: loopback
+        target: codegen
+        max_iterations: 2
+        inject_context:
+          retry_instruction: "$.review.retry_instruction"
+          issues: "$.review.issues"
+          carry_forward: "$.review.carry_forward"
+          build_output: "$.build_test.output"
+    approval: false
+
+  # ---------------------------------------------------------------------------
+  # 7. GitHub PR (раскомментировать когда GitHub репозиторий настроен)
+  # ---------------------------------------------------------------------------
+  # - id: pr
+  #   block: github_pr
+  #   depends_on:
+  #     - review
+  #   config:
+  #     base_branch: main
+  #   approval: true
+  #
+  # - id: ci
+  #   block: github_actions
+  #   depends_on:
+  #     - pr
+  #   approval: false
+  #   config:
+  #     timeout: 1800

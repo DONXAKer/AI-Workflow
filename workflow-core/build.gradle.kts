@@ -42,6 +42,7 @@ dependencies {
     implementation("org.yaml:snakeyaml")
     // Lombok removed; using plain POJOs/records instead
     testImplementation("org.springframework.boot:spring-boot-starter-test")
+    implementation("com.github.ben-manes.caffeine:caffeine")
 }
 
 tasks.withType<Test> {

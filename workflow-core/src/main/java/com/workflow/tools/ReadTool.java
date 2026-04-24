@@ -3,6 +3,7 @@ package com.workflow.tools;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -22,6 +23,9 @@ public class ReadTool implements Tool {
 
     static final int DEFAULT_LIMIT = 2000;
     static final int MAX_BYTES = 512 * 1024;
+
+    @Autowired(required = false)
+    private FileSystemCache fileSystemCache;
 
     @Override
     public String name() { return "Read"; }
@@ -69,14 +73,24 @@ public class ReadTool implements Tool {
                     + "): " + filePath + " — use offset/limit to read a window");
         }
 
-        List<String> lines;
-        try {
-            lines = Files.readAllLines(target, StandardCharsets.UTF_8);
-        } catch (MalformedInputException e) {
-            throw new ToolInvocationException(
-                "file is not valid UTF-8 (likely binary): " + filePath);
-        } catch (IOException e) {
-            throw new ToolInvocationException("failed to read " + filePath + ": " + e.getMessage(), e);
+        // Use cache only for default full-file reads (no offset/limit override)
+        boolean isDefaultRead = input.path("offset").isMissingNode() && input.path("limit").isMissingNode();
+        List<String> lines = null;
+        if (isDefaultRead && fileSystemCache != null) {
+            lines = fileSystemCache.getRead(target);
+        }
+        if (lines == null) {
+            try {
+                lines = Files.readAllLines(target, StandardCharsets.UTF_8);
+            } catch (MalformedInputException e) {
+                throw new ToolInvocationException(
+                    "file is not valid UTF-8 (likely binary): " + filePath);
+            } catch (IOException e) {
+                throw new ToolInvocationException("failed to read " + filePath + ": " + e.getMessage(), e);
+            }
+            if (isDefaultRead && fileSystemCache != null) {
+                fileSystemCache.putRead(target, lines);
+            }
         }
 
         int from = Math.min(lines.size(), offset - 1);

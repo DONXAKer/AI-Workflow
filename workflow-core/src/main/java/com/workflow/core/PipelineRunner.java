@@ -809,6 +809,15 @@ public class PipelineRunner {
             if ("verify".equals(blockConfig.getBlock()) || "orchestrator".equals(blockConfig.getBlock())) {
                 Boolean passed = output.get("passed") instanceof Boolean b ? b : true;
                 if (!passed) {
+                    // Escalate = architectural/blocking problem; skip loopback, fail immediately
+                    String action = output.get("action") instanceof String s ? s : "";
+                    if ("escalate".equals(action)) {
+                        String issues = output.get("issues") instanceof String s ? s : "escalated";
+                        markFailed(run, "Orchestrator '" + blockId + "' escalated: " + issues);
+                        throw new RuntimeException(
+                            "Orchestrator '" + blockId + "' escalated (blocking issue, manual intervention required): " + issues);
+                    }
+
                     VerifyConfig verifyConfig = blockConfig.getVerify();
                     if (verifyConfig != null && verifyConfig.getOnFail() != null
                             && "loopback".equals(verifyConfig.getOnFail().getAction())) {

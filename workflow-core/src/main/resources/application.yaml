@@ -18,6 +18,8 @@ workflow:
   mode: cli  # cli | gui
   config-dir: ./config
   state-dir: ./.workflow/state
+  orchestrator:
+    default-model: anthropic/claude-sonnet-4-6
   smart-detect:
     model: google/gemini-flash-1.5
     confidence-threshold: 0.7

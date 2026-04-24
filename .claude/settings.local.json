@@ -135,7 +135,12 @@
       "Bash(ls \"D:\\\\\\\\WarCard\\\\\\\\tasks\\\\\\\\active\\\\\\\\\")",
       "Bash(grep -n \"languageVersion\\\\|javaVersion\\\\|sourceCompat\\\\|targetCompat\" \"D:\\\\\\\\WarCard\\\\\\\\server\\\\\\\\build.gradle\")",
       "Bash(grep -n \"languageVersion\\\\|javaVersion\\\\|sourceCompat\\\\|targetCompat\" \"D:\\\\\\\\WarCard\\\\\\\\server\\\\\\\\build.gradle.kts\")",
-      "Bash(ls \"D:\\\\\\\\WarCard\\\\\\\\server\\\\\\\\gradle.properties\")"
+      "Bash(ls \"D:\\\\\\\\WarCard\\\\\\\\server\\\\\\\\gradle.properties\")",
+      "Bash(make up *)",
+      "Bash(make full *)",
+      "Bash(./gradlew compileTestJava --no-daemon -q)",
+      "Bash(./gradlew test *)",
+      "Bash(xargs -I{} grep -o 'tests: [0-9]*, failures: [0-9]*, errors: [0-9]*' {})"
     ]
   }
 }

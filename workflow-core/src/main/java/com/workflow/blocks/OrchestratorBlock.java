@@ -23,6 +23,7 @@ import com.workflow.tools.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Path;
@@ -90,7 +91,9 @@ public class OrchestratorBlock implements Block {
     private static final int DEFAULT_MAX_ITER_PLAN   = 10;
     private static final int DEFAULT_MAX_ITER_REVIEW = 8;
     private static final double DEFAULT_BUDGET_USD   = 3.0;
-    private static final String DEFAULT_MODEL        = "anthropic/claude-sonnet-4-5";
+
+    @Value("${workflow.orchestrator.default-model:anthropic/claude-sonnet-4-6}")
+    private String defaultModel;
 
     private static final List<String> PLAN_TOOLS   = List.of("Read", "Grep", "Glob");
     private static final List<String> PLAN_BASH    = List.of("Bash(git log*)", "Bash(git status)", "Bash(git show*)");
@@ -173,6 +176,16 @@ public class OrchestratorBlock implements Block {
             if (dod  != null) userMsg.append("## Definition of Done\n").append(dod).append("\n\n");
         }
 
+        // Inject context blocks (e.g. build_test results, run_tests output)
+        for (String ctxId : asStringList(cfg, "context_blocks")) {
+            Object blockOut = input.get(ctxId);
+            if (blockOut instanceof Map<?, ?> bMap) {
+                userMsg.append("## Context from block: ").append(ctxId).append('\n');
+                bMap.forEach((k, v) -> userMsg.append(k).append(": ").append(v).append('\n'));
+                userMsg.append('\n');
+            }
+        }
+
         // Append loopback feedback from previous review attempt
         if (input.get("_loopback") instanceof Map<?, ?> lb && !lb.isEmpty()) {
             Object prevIssues = lb.get("issues");
@@ -203,7 +216,7 @@ public class OrchestratorBlock implements Block {
         ToolContext toolCtx = new ToolContext(workingDir, bashAllowlist);
 
         AgentConfig agent = blockConfig.getAgent() != null ? blockConfig.getAgent() : new AgentConfig();
-        String model = agent.getModel() != null ? agent.getModel() : resolveProjectModel();
+        String model = agent.getModel() != null ? agent.getModel() : resolveProjectModel(defaultModel);
 
         final String blockId = blockConfig.getId();
         final UUID   runId   = run.getId();
@@ -240,7 +253,14 @@ public class OrchestratorBlock implements Block {
         out.put("iterations_used", response.iterationsUsed());
         out.put("total_cost_usd", response.totalCostUsd());
 
-        // Ensure required fields exist so pipeline interpolation never throws
+        // Fail hard if JSON parsing failed completely — a broken/missing review is not a soft failure
+        if (out.containsKey("raw_text")) {
+            throw new IllegalStateException(
+                "orchestrator[" + blockConfig.getId() + "] mode=" + mode
+                + ": failed to extract valid JSON from LLM response after rescue attempt");
+        }
+
+        // Ensure optional fields exist so pipeline interpolation never throws
         if ("review".equals(mode)) {
             out.putIfAbsent("passed", Boolean.FALSE);
             out.putIfAbsent("issues", "");
@@ -278,6 +298,13 @@ When you have enough information, respond with a JSON object inside a ```json bl
   "tools_to_use": "comma-separated tool names the implementor should use"
 }
 ```
+
+REQUIRED: definition_of_done MUST always include ALL of the following categories:
+1. At least one test covering the new or changed logic exists and passes
+2. All public API contracts (OpenAPI/Swagger annotations, REST endpoints) are updated to match the implementation
+3. README or CLAUDE.md updated if the external behavior or architecture changed
+4. No compiler errors or build failures
+
 Respond with the JSON only. No text after the closing ```.
 """);
         return sb.toString();
@@ -295,6 +322,13 @@ Respond with the JSON only. No text after the closing ```.
         }
         sb.append("""
 
+MANDATORY CHECKS — verify ALL of the following regardless of what the definition_of_done says:
+1. TESTS: At least one test covers the new or changed logic. Check test files with Read/Grep.
+   If build/test context was provided above, verify the test run result is green (no failures).
+2. API DOCS: If any REST endpoints were added or changed, OpenAPI/Swagger annotations are present and accurate.
+3. DOCS: If external behavior or architecture changed, README or CLAUDE.md reflects the change.
+4. BUILD: No compile errors. If build context was provided above, verify the build succeeded.
+
 MANDATORY FINAL RESPONSE FORMAT — output ONLY this JSON block when done:
 ```json
 {
@@ -306,9 +340,10 @@ MANDATORY FINAL RESPONSE FORMAT — output ONLY this JSON block when done:
 }
 ```
 Rules:
-- "passed": true if all definition-of-done items are met; false otherwise
-- "action": "continue" (passed), "retry" (fixable issues), or "escalate" (blocking problem)
-- Set retry_instruction to a specific fix description when action=retry
+- "passed": true only if ALL mandatory checks AND all definition-of-done items are met
+- "action": "continue" (passed), "retry" (fixable code issues), or "escalate" (architectural/blocking problem)
+- Set retry_instruction to a specific, actionable fix description when action=retry
+- Use "escalate" when the problem cannot be fixed by the implementor alone (wrong architecture, missing requirements)
 - Your FINAL message must be ONLY the ```json block. No text before or after it.
 """);
         return sb.toString();
@@ -399,7 +434,7 @@ Rules:
             "orchestrator: working_dir not set in block config and project has no workingDir");
     }
 
-    private String resolveProjectModel() {
+    private String resolveProjectModel(String fallback) {
         if (projectRepository != null) {
             String slug = ProjectContext.get();
             if (slug != null && !slug.isBlank()) {
@@ -410,7 +445,7 @@ Rules:
                 }
             }
         }
-        return DEFAULT_MODEL;
+        return fallback;
     }
 
     private String resolveProjectExtra() {
