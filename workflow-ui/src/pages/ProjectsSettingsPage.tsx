@@ -3,7 +3,6 @@ import { FolderKanban, Plus, Pencil, Trash2, AlertCircle, Loader2, X, Save } fro
 import { api } from '../services/api'
 import { ProjectInfo } from '../types'
 import PageHeader from '../components/layout/PageHeader'
-import clsx from 'clsx'
 import PathInput from '../components/PathInput'
 
 interface FormState {
@@ -230,55 +229,41 @@ export default function ProjectsSettingsPage() {
           {projects.length === 0 && !loading && (
             <li className="text-center py-8 text-slate-500">Проектов ещё нет — создайте первый.</li>
           )}
-          {projects.map(p => {
-            const isDefault = p.slug === 'default'
-            return (
-              <li key={p.id} className="px-4 py-3 flex items-center gap-3">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-white truncate">{p.displayName}</span>
-                    <span className="text-xs text-slate-500 font-mono">{p.slug}</span>
-                    {isDefault && (
-                      <span className="text-xs bg-slate-800 border border-slate-700 text-slate-400 px-1.5 py-0.5 rounded">
-                        default
-                      </span>
-                    )}
-                  </div>
-                  {p.description && (
-                    <p className="text-xs text-slate-400 mt-0.5 truncate">{p.description}</p>
-                  )}
-                  {p.configDir && (
-                    <p className="text-xs text-slate-500 font-mono mt-0.5">📁 {p.configDir}</p>
-                  )}
+          {projects.map(p => (
+            <li key={p.id} className="px-4 py-3 flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-white truncate">{p.displayName}</span>
+                  <span className="text-xs text-slate-500 font-mono">{p.slug}</span>
                 </div>
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => startEdit(p)}
-                    aria-label={`Редактировать ${p.slug}`}
-                    className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800"
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => remove(p.slug)}
-                    disabled={isDefault}
-                    aria-label={`Удалить ${p.slug}`}
-                    title={isDefault ? 'Нельзя удалить default-проект' : 'Удалить'}
-                    className={clsx(
-                      'p-1.5 rounded-md',
-                      isDefault
-                        ? 'text-slate-700 cursor-not-allowed'
-                        : 'text-slate-400 hover:text-red-300 hover:bg-red-950/40'
-                    )}
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </li>
-            )
-          })}
+                {p.description && (
+                  <p className="text-xs text-slate-400 mt-0.5 truncate">{p.description}</p>
+                )}
+                {p.configDir && (
+                  <p className="text-xs text-slate-500 font-mono mt-0.5">📁 {p.configDir}</p>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => startEdit(p)}
+                  aria-label={`Редактировать ${p.slug}`}
+                  className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => remove(p.slug)}
+                  aria-label={`Удалить ${p.slug}`}
+                  title="Удалить"
+                  className="p-1.5 rounded-md text-slate-400 hover:text-red-300 hover:bg-red-950/40"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </li>
+          ))}
         </ul>
       </div>
     </div>

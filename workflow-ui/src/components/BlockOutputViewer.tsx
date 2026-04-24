@@ -93,6 +93,52 @@ function FileGroup({ label, files }: { label: string; files: FileChange[] }) {
   )
 }
 
+/** Renders shell stdout/stderr with diff coloring and section headers. */
+function ShellOutputField({ label, value }: { label: string; value: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const lines = value.split('\n')
+  const MAX_LINES = 100
+  const shown = expanded ? lines : lines.slice(0, MAX_LINES)
+  const truncated = !expanded && lines.length > MAX_LINES
+
+  return (
+    <div>
+      <dt className="text-[10px] font-medium text-slate-500 uppercase tracking-wide mb-1">{label}</dt>
+      <dd>
+        <pre className="bg-slate-950 border border-slate-700/60 rounded-lg px-3 py-2.5 text-[11px] font-mono overflow-auto max-h-80 leading-relaxed">
+          {shown.map((line, i) => {
+            const isDiffAdd   = /^\+[^+]/.test(line)
+            const isDiffDel   = /^-[^-]/.test(line)
+            const isDiffHunk  = /^@@/.test(line)
+            const isSection   = /^={3}.*={3}$/.test(line.trim())
+
+            const cls =
+              isDiffAdd  ? 'text-green-400 bg-green-950/30 block' :
+              isDiffDel  ? 'text-red-400   bg-red-950/30   block' :
+              isDiffHunk ? 'text-blue-400' :
+              isSection  ? 'text-slate-300 font-semibold' :
+              'text-slate-400'
+
+            return <span key={i} className={cls}>{line}{'\n'}</span>
+          })}
+          {truncated && (
+            <span className="text-slate-600">… ещё {lines.length - MAX_LINES} строк</span>
+          )}
+        </pre>
+        {lines.length > MAX_LINES && (
+          <button
+            type="button"
+            onClick={() => setExpanded(e => !e)}
+            className="text-xs text-blue-400 hover:text-blue-300 mt-1"
+          >
+            {expanded ? 'Свернуть' : `Показать все ${lines.length} строк`}
+          </button>
+        )}
+      </dd>
+    </div>
+  )
+}
+
 function StringField({ label, value }: { label: string; value: string }) {
   const [expanded, setExpanded] = useState(false)
   const long = value.length > 300
@@ -119,20 +165,23 @@ function ScalarField({ label, value }: { label: string; value: unknown }) {
   )
 }
 
-// Labels for well-known keys
 const FIELD_LABELS: Record<string, string> = {
-  branch_name:    'Ветка',
-  commit_message: 'Коммит',
-  summary:        'Сводка',
-  status:         'Статус',
-  message:        'Сообщение',
-  pr_url:         'URL PR',
-  mr_url:         'URL MR',
-  score:          'Оценка',
-  issues:         'Проблемы',
-  recommendation: 'Рекомендация',
-  complexity:     'Сложность',
+  branch_name:        'Ветка',
+  commit_message:     'Коммит',
+  summary:            'Сводка',
+  status:             'Статус',
+  message:            'Сообщение',
+  pr_url:             'URL PR',
+  mr_url:             'URL MR',
+  score:              'Оценка',
+  issues:             'Проблемы',
+  recommendation:     'Рекомендация',
+  complexity:         'Сложность',
   technical_approach: 'Тех. подход',
+  stdout:             'Вывод',
+  stderr:             'Ошибки',
+  exit_code:          'Код завершения',
+  success:            'Успешно',
 }
 
 const FILE_ARRAY_KEYS = new Set(['changes', 'test_changes', 'file_changes', 'files'])
@@ -147,6 +196,8 @@ function isFileChange(v: unknown): v is FileChange {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
+const SHELL_OUTPUT_KEYS = new Set(['stdout', 'stderr', 'output'])
+
 interface Props {
   output: Record<string, unknown>
 }
@@ -155,14 +206,23 @@ export default function BlockOutputViewer({ output }: Props) {
   const entries = Object.entries(output)
   if (entries.length === 0) return <p className="text-sm text-slate-500">Выход пуст.</p>
 
-  const fileGroups: Array<{ key: string; files: FileChange[] }> = []
-  const stringFields: Array<{ key: string; value: string }> = []
-  const scalarFields: Array<{ key: string; value: unknown }> = []
-  const unknownArrays: Array<{ key: string; value: unknown[] }> = []
+  const fileGroups:    Array<{ key: string; files: FileChange[] }> = []
+  const shellOutputs:  Array<{ key: string; value: string }>       = []
+  const stringFields:  Array<{ key: string; value: string }>       = []
+  const scalarFields:  Array<{ key: string; value: unknown }>      = []
+  const unknownArrays: Array<{ key: string; value: unknown[] }>    = []
 
   for (const [key, value] of entries) {
+    // Skip empty stderr
+    if (key === 'stderr' && typeof value === 'string' && value.trim() === '') continue
+    // Skip clean status fields (success=true, exit_code=0)
+    if (key === 'success'   && value === true)  continue
+    if (key === 'exit_code' && value === 0)     continue
+
     if (FILE_ARRAY_KEYS.has(key) && Array.isArray(value) && value.every(isFileChange)) {
       fileGroups.push({ key, files: value as FileChange[] })
+    } else if (SHELL_OUTPUT_KEYS.has(key) && typeof value === 'string') {
+      if (value.trim() !== '') shellOutputs.push({ key, value })
     } else if (typeof value === 'string') {
       stringFields.push({ key, value })
     } else if (typeof value === 'number' || typeof value === 'boolean') {
@@ -170,27 +230,24 @@ export default function BlockOutputViewer({ output }: Props) {
     } else if (Array.isArray(value)) {
       unknownArrays.push({ key, value })
     } else if (value !== null && value !== undefined) {
-      // nested object or unknown — render as compact JSON
       stringFields.push({ key, value: JSON.stringify(value, null, 2) })
     }
   }
 
   return (
     <dl className="space-y-3">
-      {/* String/scalar fields first */}
       {stringFields.map(({ key, value }) => (
         <StringField key={key} label={FIELD_LABELS[key] ?? key} value={value} />
       ))}
       {scalarFields.map(({ key, value }) => (
         <ScalarField key={key} label={FIELD_LABELS[key] ?? key} value={value} />
       ))}
-
-      {/* File change groups */}
       {fileGroups.map(({ key, files }) => (
         <FileGroup key={key} label={FILE_ARRAY_LABELS[key] ?? key} files={files} />
       ))}
-
-      {/* Unknown arrays as compact JSON */}
+      {shellOutputs.map(({ key, value }) => (
+        <ShellOutputField key={key} label={FIELD_LABELS[key] ?? key} value={value} />
+      ))}
       {unknownArrays.map(({ key, value }) => (
         <div key={key}>
           <dt className="text-[10px] font-medium text-slate-500 uppercase tracking-wide mb-0.5">{FIELD_LABELS[key] ?? key}</dt>

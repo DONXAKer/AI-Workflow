@@ -32,9 +32,17 @@ function parseJsonSafe(str: string): { ok: true; value: Record<string, unknown> 
   }
 }
 
+function extractBranchName(output: Record<string, unknown> | undefined): string | null {
+  const stdout = typeof output?.stdout === 'string' ? output.stdout : ''
+  const m = stdout.match(/(?:Создаём ветку|Создана ветка|переключаемся на)\s*:?\s*(feat\/\S+)/i)
+    ?? stdout.match(/(feat\/[^\s\n]+)/)
+  return m ? m[1].trim() : null
+}
+
 export default function ApprovalDialog({ approval, remainingBlocks = [], onDecision, onDismiss }: Props) {
   const blockId = approval.blockId ?? 'unknown'
   const initialJson = formatJson(approval.output ?? {})
+  const branchName = blockId === 'create_branch' ? extractBranchName(approval.output as Record<string, unknown> | undefined) : null
 
   const [editMode, setEditMode] = useState(false)
   const [editedOutput, setEditedOutput] = useState(initialJson)
@@ -113,11 +121,17 @@ export default function ApprovalDialog({ approval, remainingBlocks = [], onDecis
               <h2 className="text-base font-semibold text-white">Требуется одобрение</h2>
             </div>
             <p className="text-sm text-slate-400 font-mono">Блок: <span className="text-amber-300">{blockId}</span></p>
-            {approval.description ? (
+            {branchName && (
+              <div className="flex items-center gap-2 mt-2 px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 w-fit">
+                <span className="text-[10px] text-slate-500 uppercase tracking-wide">Ветка</span>
+                <span className="font-mono text-sm text-blue-300">{branchName}</span>
+              </div>
+            )}
+            {!branchName && (approval.description ? (
               <p className="text-sm text-slate-400 mt-1">{approval.description}</p>
             ) : (
               <p className="text-sm text-slate-500 mt-1">Проверьте выход блока и примите решение о продолжении пайплайна.</p>
-            )}
+            ))}
           </div>
           <button
             type="button"
@@ -130,25 +144,23 @@ export default function ApprovalDialog({ approval, remainingBlocks = [], onDecis
         </div>
 
         {/* Body: scrollable */}
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
           {/* Output display / edit */}
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-medium text-slate-400 uppercase tracking-wide">
-                Выход блока
-              </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-medium text-slate-500 uppercase tracking-wide">Вывод блока</label>
               <button
                 type="button"
                 onClick={toggleEdit}
                 className={clsx(
-                  'flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md border transition-colors',
+                  'flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border transition-colors',
                   editMode
                     ? 'bg-blue-900/50 border-blue-700 text-blue-300'
-                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white hover:border-slate-600'
+                    : 'bg-slate-800 border-slate-700 text-slate-500 hover:text-white hover:border-slate-600'
                 )}
               >
-                <Edit3 className="w-3.5 h-3.5" />
-                {editMode ? 'Отменить' : 'Редактировать'}
+                <Edit3 className="w-3 h-3" />
+                {editMode ? 'Отменить' : 'Изменить'}
               </button>
             </div>
 
@@ -157,7 +169,7 @@ export default function ApprovalDialog({ approval, remainingBlocks = [], onDecis
                 <textarea
                   value={editedOutput}
                   onChange={e => handleJsonChange(e.target.value)}
-                  rows={12}
+                  rows={10}
                   spellCheck={false}
                   className={clsx(
                     'w-full bg-slate-950 border rounded-lg px-4 py-3 text-sm font-mono text-slate-200 focus:outline-none focus:ring-2 resize-y max-h-96 overflow-y-auto',
@@ -174,65 +186,32 @@ export default function ApprovalDialog({ approval, remainingBlocks = [], onDecis
                 )}
               </div>
             ) : (
-              <div className="bg-slate-950 border border-slate-700/60 rounded-lg px-4 py-3 overflow-auto max-h-72">
+              <div className="bg-slate-950 border border-slate-700/60 rounded-lg px-4 py-3 overflow-auto max-h-80">
                 <BlockOutputViewer output={approval.output ?? {}} />
               </div>
             )}
           </div>
 
-          {/* Skip future toggle — uses button role="switch" for keyboard accessibility */}
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={skipFuture}
-              onClick={() => setSkipFuture(v => !v)}
-              className={clsx(
-                'relative w-9 h-5 rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-900 flex-shrink-0',
-                skipFuture ? 'bg-blue-600 border-blue-500' : 'bg-slate-700 border-slate-600'
-              )}
-            >
-              <span
-                className={clsx(
-                  'absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform',
-                  skipFuture ? 'translate-x-4' : 'translate-x-0.5'
-                )}
-              />
-            </button>
-            {/* Clicking the label text also toggles the switch */}
-            <span
-              className="text-sm text-slate-300 cursor-pointer select-none"
-              onClick={() => setSkipFuture(v => !v)}
-              title="When enabled, this block will be automatically approved in all future runs without prompting"
-            >
-              Авто-одобрение этого блока в будущих запусках
-            </span>
-          </div>
-
-          {/* Jump mode */}
+          {/* Jump panel */}
           {jumpMode && (
-            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
-              <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-2">
-                Перейти к блоку
-              </label>
+            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3">
+              <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-2">Перейти к блоку</label>
               {remainingBlocks.length === 0 ? (
                 <p className="text-sm text-slate-500">Нет доступных блоков.</p>
               ) : (
-                <div className="flex gap-3">
+                <div className="flex gap-2">
                   <select
                     value={jumpTarget}
                     onChange={e => setJumpTarget(e.target.value)}
                     className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    {remainingBlocks.map(b => (
-                      <option key={b} value={b}>{b}</option>
-                    ))}
+                    {remainingBlocks.map(b => <option key={b} value={b}>{b}</option>)}
                   </select>
                   <button
                     type="button"
                     onClick={() => handleDecision('JUMP')}
                     disabled={!jumpTarget}
-                    className="flex items-center gap-2 bg-purple-700 hover:bg-purple-600 disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+                    className="flex items-center gap-1.5 bg-purple-700 hover:bg-purple-600 disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-medium px-3 py-2 rounded-lg transition-colors"
                   >
                     <ArrowRight className="w-4 h-4" />
                     Перейти
@@ -243,24 +222,19 @@ export default function ApprovalDialog({ approval, remainingBlocks = [], onDecis
           )}
         </div>
 
-        {/* Footer actions */}
+        {/* Footer */}
         <div className="px-6 py-4 border-t border-slate-800 space-y-3">
-          {/* Primary actions row */}
-          <div className="flex flex-wrap items-start gap-2">
-            {/* Approve */}
-            <div className="flex flex-col items-start">
-              <button
-                type="button"
-                onClick={() => handleDecision('APPROVE')}
-                className="flex items-center gap-2 bg-green-700 hover:bg-green-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-              >
-                <CheckCircle className="w-4 h-4" />
-                Одобрить
-              </button>
-              <span className="text-xs text-green-600/70 block mt-0.5 pl-1">Продолжить с этим выходом</span>
-            </div>
+          {/* Primary actions */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => handleDecision('APPROVE')}
+              className="flex items-center gap-2 bg-green-700 hover:bg-green-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+            >
+              <CheckCircle className="w-4 h-4" />
+              Одобрить
+            </button>
 
-            {/* Edit & submit */}
             {editMode && (
               <button
                 type="button"
@@ -273,44 +247,40 @@ export default function ApprovalDialog({ approval, remainingBlocks = [], onDecis
               </button>
             )}
 
-            {/* Skip */}
-            <div className="flex flex-col items-start">
-              <button
-                type="button"
-                onClick={() => handleDecision('SKIP')}
-                className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-              >
-                <SkipForward className="w-4 h-4" />
-                Пропустить
-              </button>
-              <span className="text-xs text-slate-500 block mt-0.5 pl-1">Пропустить блок, пайплайн продолжит без его выхода</span>
-            </div>
+            <button
+              type="button"
+              onClick={() => handleDecision('SKIP')}
+              className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+              title="Пропустить блок, пайплайн продолжит без его выхода"
+            >
+              <SkipForward className="w-4 h-4" />
+              Пропустить
+            </button>
 
-            {/* Reject — two-step to prevent accidental run termination */}
             {confirmReject ? (
               <div className="ml-auto flex items-center gap-2">
-                <span className="text-xs text-red-400">Это остановит запуск. Подтвердить?</span>
+                <span className="text-xs text-red-400">Остановит запуск. Точно?</span>
                 <button
                   type="button"
                   onClick={() => handleDecision('REJECT')}
-                  className="flex items-center gap-2 bg-red-700 hover:bg-red-600 text-white text-sm font-medium px-3 py-2 rounded-lg transition-colors"
+                  className="flex items-center gap-1.5 bg-red-700 hover:bg-red-600 text-white text-sm font-medium px-3 py-2 rounded-lg transition-colors"
                 >
                   <XCircle className="w-4 h-4" />
-                  Подтвердить отказ
+                  Да, отклонить
                 </button>
                 <button
                   type="button"
                   onClick={() => setConfirmReject(false)}
-                  className="text-sm text-slate-400 hover:text-slate-200 px-3 py-2 rounded-lg transition-colors"
+                  className="text-sm text-slate-400 hover:text-slate-200 px-2 py-2 rounded-lg transition-colors"
                 >
-                  Отмена
+                  Нет
                 </button>
               </div>
             ) : (
               <button
                 type="button"
                 onClick={() => setConfirmReject(true)}
-                className="flex items-center gap-2 bg-red-900/50 hover:bg-red-800/60 border border-red-800 text-red-300 text-sm font-medium px-4 py-2 rounded-lg transition-colors ml-auto"
+                className="flex items-center gap-1.5 text-red-400 hover:text-red-300 text-sm font-medium px-3 py-2 rounded-lg border border-transparent hover:border-red-800/60 transition-colors ml-auto"
               >
                 <XCircle className="w-4 h-4" />
                 Отклонить
@@ -318,22 +288,36 @@ export default function ApprovalDialog({ approval, remainingBlocks = [], onDecis
             )}
           </div>
 
-          {/* Advanced section separator */}
-          <div className="border-t border-slate-800 pt-2">
-            <p className="text-xs text-slate-600 uppercase tracking-wide font-medium mb-2">Дополнительно</p>
-            {/* Jump toggle */}
+          {/* Advanced */}
+          <div className="border-t border-slate-800/60 pt-2 flex items-center gap-3 flex-wrap">
+            {/* Skip future toggle */}
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={skipFuture}
+                onClick={() => setSkipFuture(v => !v)}
+                className={clsx(
+                  'relative w-8 h-4 rounded-full border transition-colors focus:outline-none flex-shrink-0',
+                  skipFuture ? 'bg-blue-600 border-blue-500' : 'bg-slate-700 border-slate-600'
+                )}
+              >
+                <span className={clsx('absolute top-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform', skipFuture ? 'translate-x-4' : 'translate-x-0.5')} />
+              </button>
+              <span className="text-xs text-slate-500">Авто-одобрение в будущих запусках</span>
+            </label>
+
             <button
               type="button"
               onClick={toggleJump}
-              title="Skip ahead to a specific block in the pipeline, bypassing all intermediate blocks"
               className={clsx(
-                'flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg border transition-colors',
+                'flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors',
                 jumpMode
                   ? 'bg-purple-900/50 border-purple-700 text-purple-300'
-                  : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white hover:border-slate-600'
+                  : 'bg-slate-800 border-slate-700 text-slate-500 hover:text-white hover:border-slate-600'
               )}
             >
-              <ArrowRight className="w-4 h-4" />
+              <ArrowRight className="w-3.5 h-3.5" />
               Перейти к блоку
             </button>
           </div>

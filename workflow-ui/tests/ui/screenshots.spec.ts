@@ -141,14 +141,14 @@ test.describe('Documentation screenshots', () => {
         }),
       })
     })
-    await page.goto('/settings/audit')
+    await page.goto('/system/audit')
     await page.waitForLoadState('networkidle')
     await page.screenshot({ animations: 'disabled', path: `${SHOTS}/09-audit-log.png`, fullPage: true })
   })
 
   test('10-kill-switch-inactive', async ({ page }) => {
     await setupApiMocks(page)
-    await page.goto('/settings/kill-switch')
+    await page.goto('/system/kill-switch')
     await page.getByPlaceholder(/инцидент в проде/i).fill('Заморозка на время миграции БД')
     await page.screenshot({ animations: 'disabled', path: `${SHOTS}/10-kill-switch-inactive.png`, fullPage: true })
   })
@@ -167,7 +167,7 @@ test.describe('Documentation screenshots', () => {
         }),
       })
     })
-    await page.goto('/settings/kill-switch')
+    await page.goto('/system/kill-switch')
     await page.screenshot({ animations: 'disabled', path: `${SHOTS}/11-kill-switch-active.png`, fullPage: true })
   })
 
@@ -193,7 +193,7 @@ test.describe('Documentation screenshots', () => {
         }),
       })
     })
-    await page.goto('/cost')
+    await page.goto('/system/cost')
     await page.waitForLoadState('networkidle')
     await page.screenshot({ animations: 'disabled', path: `${SHOTS}/12-cost-dashboard.png`, fullPage: true })
   })
@@ -256,7 +256,7 @@ test.describe('Documentation screenshots', () => {
         ]),
       })
     })
-    await page.goto('/settings/projects')
+    await page.goto('/system/projects')
     await page.waitForLoadState('networkidle')
     await page.screenshot({ animations: 'disabled', path: `${SHOTS}/15-projects-settings.png`, fullPage: true })
   })
@@ -280,7 +280,7 @@ test.describe('Documentation screenshots', () => {
         ]),
       })
     })
-    await page.goto('/settings/users')
+    await page.goto('/system/users')
     await page.waitForLoadState('networkidle')
     await page.screenshot({ animations: 'disabled', path: `${SHOTS}/16-users-settings.png`, fullPage: true })
   })
@@ -301,8 +301,8 @@ test.describe('Documentation screenshots', () => {
         ]),
       })
     })
-    await page.goto('/runs/11111111-2222-3333-4444-555555555555')
-    await page.getByRole('button', { name: 'Выбрать проект' }).click()
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
     await page.screenshot({ animations: 'disabled', path: `${SHOTS}/13-project-switcher.png`, fullPage: true })
   })
 })

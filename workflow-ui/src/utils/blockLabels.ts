@@ -36,6 +36,7 @@ export const BLOCK_TYPE_LABELS: Record<string, string> = {
 
   // Phase 1 / agentic
   agent_with_tools:    'Агент с инструментами',
+  orchestrator:        'Оркестратор',
   task_md_input:       'Чтение задачи',
   shell_exec:          'Команда Shell',
   claude_code_shell:   'Claude Code',

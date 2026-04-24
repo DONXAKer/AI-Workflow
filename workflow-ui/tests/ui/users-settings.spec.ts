@@ -13,18 +13,18 @@ const sampleUsers = [
 ]
 
 test.describe('UsersSettingsPage', () => {
-  test('ADMIN видит ссылку "Пользователи" в сайдбаре', async ({ page }) => {
+  test('ADMIN видит ссылку "Пользователи" в системных настройках', async ({ page }) => {
     await setupApiMocks(page)
-    await page.goto('/runs/11111111-2222-3333-4444-555555555555')
+    await page.goto('/system/users')
     await expect(page.getByRole('link', { name: 'Пользователи' })).toBeVisible()
   })
 
-  test('OPERATOR не видит ссылку "Пользователи"', async ({ page }) => {
+  test('OPERATOR не видит ссылку системных настроек', async ({ page }) => {
     await setupApiMocks(page, {
       user: { id: 2, username: 'op', displayName: 'Op', email: null, role: 'OPERATOR' },
     })
     await page.goto('/runs/11111111-2222-3333-4444-555555555555')
-    await expect(page.getByRole('link', { name: 'Пользователи' })).toHaveCount(0)
+    await expect(page.getByRole('link', { name: 'Системные настройки' })).toHaveCount(0)
   })
 
   test('рендерит список пользователей с role-бейджами', async ({ page }) => {
@@ -32,7 +32,7 @@ test.describe('UsersSettingsPage', () => {
     await page.route('**/api/users', async route => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleUsers) })
     })
-    await page.goto('/settings/users')
+    await page.goto('/system/users')
     const list = page.getByRole('list').first()
     await expect(list.getByText('Alice Johnson')).toBeVisible()
     await expect(list.getByText('Bob Smith')).toBeVisible()
@@ -44,7 +44,7 @@ test.describe('UsersSettingsPage', () => {
 
   test('форма создания: submit disabled пока нет username и password ≥ 8', async ({ page }) => {
     await setupApiMocks(page)
-    await page.goto('/settings/users')
+    await page.goto('/system/users')
     await page.getByRole('button', { name: 'Новый пользователь' }).click()
     await expect(page.getByRole('button', { name: 'Сохранить' })).toBeDisabled()
     await page.getByLabel('Логин').fill('alice')
@@ -70,7 +70,7 @@ test.describe('UsersSettingsPage', () => {
         await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleUsers) })
       }
     })
-    await page.goto('/settings/users')
+    await page.goto('/system/users')
     await page.getByRole('button', { name: 'Новый пользователь' }).click()
     await page.getByLabel('Логин').fill('diana')
     await page.getByLabel('Имя').fill('Diana King')
@@ -91,7 +91,7 @@ test.describe('UsersSettingsPage', () => {
     await page.route('**/api/users', async route => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleUsers) })
     })
-    await page.goto('/settings/users')
+    await page.goto('/system/users')
     await page.getByRole('button', { name: 'Редактировать alice' }).click()
     await expect(page.getByRole('heading', { name: /Редактировать: alice/ })).toBeVisible()
     await expect(page.getByLabel('Логин')).toBeDisabled()

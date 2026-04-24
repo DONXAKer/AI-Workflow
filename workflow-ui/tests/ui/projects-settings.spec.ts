@@ -11,18 +11,18 @@ const threeProjects = [
 ]
 
 test.describe('ProjectsSettingsPage', () => {
-  test('ADMIN видит ссылку "Проекты" в сайдбаре', async ({ page }) => {
+  test('ADMIN видит ссылку "Проекты" в системных настройках', async ({ page }) => {
     await setupApiMocks(page)
-    await page.goto('/runs/11111111-2222-3333-4444-555555555555')
+    await page.goto('/system/users')
     await expect(page.getByRole('link', { name: 'Проекты' })).toBeVisible()
   })
 
-  test('OPERATOR не видит ссылку "Проекты"', async ({ page }) => {
+  test('OPERATOR не видит ссылку системных настроек', async ({ page }) => {
     await setupApiMocks(page, {
       user: { id: 2, username: 'op', displayName: 'Op', email: null, role: 'OPERATOR' },
     })
     await page.goto('/runs/11111111-2222-3333-4444-555555555555')
-    await expect(page.getByRole('link', { name: 'Проекты' })).toHaveCount(0)
+    await expect(page.getByRole('link', { name: 'Системные настройки' })).toHaveCount(0)
   })
 
   test('рендерит список проектов с default-бейджем', async ({ page }) => {
@@ -34,7 +34,7 @@ test.describe('ProjectsSettingsPage', () => {
         await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
       }
     })
-    await page.goto('/settings/projects')
+    await page.goto('/system/projects')
     // "Default Project" также появляется в кнопке проект-свитчера — ограничиваемся list.
     const list = page.getByRole('list').first()
     await expect(list.getByText('Default Project')).toBeVisible()
@@ -48,7 +48,7 @@ test.describe('ProjectsSettingsPage', () => {
     await page.route('**/api/projects', async route => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(threeProjects) })
     })
-    await page.goto('/settings/projects')
+    await page.goto('/system/projects')
     const deleteDefault = page.getByRole('button', { name: 'Удалить default' })
     await expect(deleteDefault).toBeDisabled()
     const deleteMobile = page.getByRole('button', { name: 'Удалить mobile-app' })
@@ -60,7 +60,7 @@ test.describe('ProjectsSettingsPage', () => {
     await page.route('**/api/projects', async route => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(threeProjects) })
     })
-    await page.goto('/settings/projects')
+    await page.goto('/system/projects')
     await page.getByRole('button', { name: 'Новый проект' }).click()
     await expect(page.getByRole('heading', { name: 'Создать проект' })).toBeVisible()
     await expect(page.getByLabel('Slug (URL-friendly)')).toBeEnabled()
@@ -82,7 +82,7 @@ test.describe('ProjectsSettingsPage', () => {
         })
       }
     })
-    await page.goto('/settings/projects')
+    await page.goto('/system/projects')
     await page.getByRole('button', { name: 'Новый проект' }).click()
     await page.getByLabel('Slug (URL-friendly)').fill('new-team')
     await page.getByLabel('Название').fill('New Team Project')
@@ -96,7 +96,7 @@ test.describe('ProjectsSettingsPage', () => {
     await page.route('**/api/projects', async route => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(threeProjects) })
     })
-    await page.goto('/settings/projects')
+    await page.goto('/system/projects')
     await page.getByRole('button', { name: 'Редактировать mobile-app' }).click()
     await expect(page.getByRole('heading', { name: /Редактировать: Mobile App/ })).toBeVisible()
     await expect(page.getByLabel('Slug (URL-friendly)')).toBeDisabled()

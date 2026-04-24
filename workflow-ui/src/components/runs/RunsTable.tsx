@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { ExternalLink, Copy, Check } from 'lucide-react'
+import { Link, useNavigate, useLocation } from 'react-router-dom'
+import { Copy, Check } from 'lucide-react'
 import clsx from 'clsx'
 import { PipelineRunSummary } from '../../types'
 import RunStatusBadge from './RunStatusBadge'
@@ -61,6 +61,7 @@ interface Props {
   liveStatuses?: boolean
   emptyMessage?: string
   emptySubMessage?: string
+  from?: string
 }
 
 export default function RunsTable({
@@ -71,8 +72,11 @@ export default function RunsTable({
   liveStatuses = false,
   emptyMessage = 'Запуски не найдены',
   emptySubMessage = 'Запуски появятся здесь после запуска пайплайна.',
+  from = 'history',
 }: Props) {
   const colCount = showPipeline ? 8 : 7
+  const navigate = useNavigate()
+  const location = useLocation()
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
@@ -121,8 +125,9 @@ export default function RunsTable({
               runs.map(run => (
                 <tr
                   key={run.id}
+                  onClick={() => navigate(`/runs/${run.id}`, { state: { from, backHref: location.pathname + location.search } })}
                   className={clsx(
-                    'transition-colors hover:bg-slate-800/30',
+                    'transition-colors hover:bg-slate-800/30 cursor-pointer',
                     run.status === 'PAUSED_FOR_APPROVAL' && 'border-l-2 border-amber-500'
                   )}
                 >
@@ -162,10 +167,11 @@ export default function RunsTable({
                   <td className="px-4 py-3.5">
                     <Link
                       to={`/runs/${run.id}`}
-                      className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors whitespace-nowrap"
+                      state={{ from }}
+                      onClick={e => e.stopPropagation()}
+                      className="text-xs text-blue-400 hover:text-blue-300 transition-colors whitespace-nowrap"
                     >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      Открыть
+                      →
                     </Link>
                   </td>
                 </tr>

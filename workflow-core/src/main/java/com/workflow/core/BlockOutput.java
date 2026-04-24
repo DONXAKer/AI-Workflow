@@ -21,6 +21,9 @@ public class BlockOutput {
     @Column(columnDefinition = "TEXT")
     private String outputJson;
 
+    @Column(columnDefinition = "TEXT")
+    private String inputJson;
+
     public BlockOutput() {}
 
     public BlockOutput(PipelineRun run, String blockId, String outputJson) {
@@ -36,6 +39,7 @@ public class BlockOutput {
         public Builder run(PipelineRun run) { bo.run = run; return this; }
         public Builder blockId(String blockId) { bo.blockId = blockId; return this; }
         public Builder outputJson(String outputJson) { bo.outputJson = outputJson; return this; }
+        public Builder inputJson(String inputJson) { bo.inputJson = inputJson; return this; }
         public BlockOutput build() { return bo; }
     }
 
@@ -48,4 +52,6 @@ public class BlockOutput {
     public void setBlockId(String blockId) { this.blockId = blockId; }
     public String getOutputJson() { return outputJson; }
     public void setOutputJson(String outputJson) { this.outputJson = outputJson; }
+    public String getInputJson() { return inputJson; }
+    public void setInputJson(String inputJson) { this.inputJson = inputJson; }
 }

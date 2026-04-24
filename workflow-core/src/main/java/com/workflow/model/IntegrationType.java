@@ -4,5 +4,6 @@ public enum IntegrationType {
     YOUTRACK,
     GITLAB,
     GITHUB,
-    OPENROUTER
+    OPENROUTER,
+    UNREAL
 }

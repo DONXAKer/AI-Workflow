@@ -22,7 +22,10 @@ export default function RunPage() {
   const { runId } = useParams<{ runId: string }>()
   const navigate = useNavigate()
   const location = useLocation()
-  const fromActive = (location.state as { from?: string } | null)?.from === 'active'
+  const navState = location.state as { from?: string; backHref?: string } | null
+  const fromState = navState?.from
+  const fromActive = fromState === 'active'
+  const backHref = navState?.backHref ?? (fromActive ? '/runs/active' : '/runs/history')
   const [run, setRun] = useState<PipelineRun | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -58,8 +61,9 @@ export default function RunPage() {
       const data = await api.getRun(runId)
       setRun(data)
 
-      // Build a blockId → parsed output map from persisted outputs (if available)
+      // Build blockId → parsed output/input maps from persisted outputs (if available)
       const outputMap = new Map<string, Record<string, unknown>>()
+      const inputMap = new Map<string, Record<string, unknown>>()
       if (data.outputs?.length) {
         for (const stored of data.outputs) {
           try {
@@ -68,16 +72,27 @@ export default function RunPage() {
               outputMap.set(stored.blockId, parsed as Record<string, unknown>)
             }
           } catch {
-            // ignore malformed JSON — block still shows as complete without output
+            // ignore malformed JSON
+          }
+          if (stored.inputJson) {
+            try {
+              const parsed = JSON.parse(stored.inputJson)
+              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                inputMap.set(stored.blockId, parsed as Record<string, unknown>)
+              }
+            } catch {
+              // ignore malformed JSON
+            }
           }
         }
       }
 
-      // Hydrate completed blocks — merge in persisted output when available
+      // Hydrate completed blocks — merge in persisted output/input when available
       const completedStatuses: BlockStatus[] = (data.completedBlocks ?? []).map(blockId => ({
         blockId,
         status: 'complete' as const,
         output: outputMap.get(blockId),
+        input: inputMap.get(blockId),
       }))
 
       // Add current block if not already in completedBlocks
@@ -137,6 +152,8 @@ export default function RunPage() {
             : b
         )
       )
+      // Refresh tool calls immediately so iteration expand buttons appear without waiting for polling
+      if (runId) api.getRunToolCalls(runId).then(setToolCalls).catch(() => {})
     } else if (msg.type === 'APPROVAL_REQUEST') {
       const blockId = msg.blockId ?? 'unknown'
       addLog(`Approval requested for block: ${blockId}`)
@@ -166,6 +183,15 @@ export default function RunPage() {
         title: `Блок «${blockId}» автоматически принят`,
         body: msg.description ?? 'auto_notify mode — pipeline продолжился без блокирующего подтверждения.',
       })
+    } else if (msg.type === 'BLOCK_PROGRESS') {
+      const blockId = msg.blockId ?? 'unknown'
+      setBlockStatuses(prev =>
+        prev.map(b =>
+          b.blockId === blockId
+            ? { ...b, progressDetail: msg.detail }
+            : b
+        )
+      )
     } else if (msg.type === 'BLOCK_SKIPPED') {
       const blockId = msg.blockId ?? 'unknown'
       addLog(`Block skipped: ${blockId}`)
@@ -300,17 +326,25 @@ export default function RunPage() {
     loadRun(true)
   }, [runId, run, addLog, loadRun])
 
-  // Load tool calls for completed/failed runs to show summary
+  // Load tool calls for all runs; refresh when a block completes
   useEffect(() => {
-    if (isHistorical && runId) {
+    if (!runId) return
+    api.getRunToolCalls(runId).then(setToolCalls).catch(() => {/* ignore */})
+  }, [runId])
+
+  // Poll tool calls every 5s while run is active so in-progress iterations are visible
+  useEffect(() => {
+    if (isHistorical || !runId) return
+    const id = setInterval(() => {
       api.getRunToolCalls(runId).then(setToolCalls).catch(() => {/* ignore */})
-    }
+    }, 5000)
+    return () => clearInterval(id)
   }, [isHistorical, runId])
 
   // When run is historical, event log is unavailable — switch to blocks tab if logs was active
   useEffect(() => {
     if (isHistorical && activeTab === 'logs') {
-      setActiveTab('blocks')
+      setActiveTab('summary')
     }
   }, [isHistorical, activeTab])
 
@@ -321,13 +355,11 @@ export default function RunPage() {
       <PageHeader
         title={run?.pipelineName ?? 'Запуск'}
         breadcrumbs={[
-          fromActive
-            ? { label: 'Активные', href: '/runs/active' }
-            : { label: 'История', href: '/runs/history' },
+          { label: fromActive ? 'Активные' : 'История', href: backHref },
           {
             label: run?.pipelineName ?? '…',
             href: run?.pipelineName
-              ? `/pipelines?pipeline=${encodeURIComponent(run.pipelineName)}`
+              ? `/runs/history?pipeline=${encodeURIComponent(run.pipelineName)}`
               : undefined,
           },
           { label: runId.slice(0, 8) },
@@ -578,7 +610,7 @@ export default function RunPage() {
                     <span>{String(runSummary.impl['iterations_used'])} итераций</span>
                   )}
                   {runSummary.impl['tool_calls_made'] != null && (
-                    <span>{String(runSummary.impl['tool_calls_made'])} вызовов</span>
+                    <span>{Array.isArray(runSummary.impl['tool_calls_made']) ? runSummary.impl['tool_calls_made'].length : String(runSummary.impl['tool_calls_made'])} вызовов</span>
                   )}
                   {runSummary.impl['total_cost_usd'] != null && (
                     <span>${Number(runSummary.impl['total_cost_usd']).toFixed(4)}</span>
@@ -641,6 +673,7 @@ export default function RunPage() {
         <BlockProgressTable
           blockStatuses={blockStatuses}
           snapshots={blockSnapshots}
+          toolCalls={toolCalls}
           // Only live runs with a pending approval expose the Review action
           onReviewApproval={!isHistorical && pendingApproval ? (blockId) => {
             if (pendingApproval.blockId === blockId) setShowApprovalDialog(true)

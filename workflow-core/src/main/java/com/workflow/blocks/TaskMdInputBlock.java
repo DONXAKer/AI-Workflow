@@ -1,8 +1,13 @@
 package com.workflow.blocks;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
 import com.workflow.core.expr.StringInterpolator;
+import com.workflow.model.IntegrationConfig;
+import com.workflow.model.IntegrationConfigRepository;
+import com.workflow.model.IntegrationType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -71,14 +77,14 @@ public class TaskMdInputBlock implements Block {
         "критерии приёмки", "acceptance"
     );
 
-    private static final Map<String, List<String>> HEURISTIC_KEYWORDS = Map.of(
-        "needs_contract_change", List.of("ustruct", "contract", "proto", "message schema", "payload"),
-        "needs_server",          List.of("server", "gameplay", "backend", "authoritative"),
-        "needs_client",          List.of("client", "ui", "widget", "hud"),
-        "needs_bp",              List.of("blueprint", "umg", " bp ", "bp_")
+    /** Standard heuristic flag names always present in output (default false). */
+    private static final List<String> HEURISTIC_FLAGS = List.of(
+        "needs_bp", "needs_server", "needs_client", "needs_contract_change"
     );
 
     @Autowired(required = false) private StringInterpolator stringInterpolator;
+    @Autowired(required = false) private IntegrationConfigRepository integrationConfigRepository;
+    @Autowired(required = false) private ObjectMapper objectMapper;
 
     @Override public String getName() { return "task_md_input"; }
 
@@ -174,17 +180,41 @@ public class TaskMdInputBlock implements Block {
 
     private void applyHeuristics(String body, Map<String, Object> out) {
         String lower = body.toLowerCase(Locale.ROOT);
-        for (Map.Entry<String, List<String>> e : HEURISTIC_KEYWORDS.entrySet()) {
+        // Always emit all standard flags so downstream conditions never hit PathNotFoundException.
+        HEURISTIC_FLAGS.forEach(flag -> out.put(flag, false));
+        Map<String, List<String>> keywords = loadHeuristicKeywords();
+        for (Map.Entry<String, List<String>> e : keywords.entrySet()) {
             boolean match = e.getValue().stream().anyMatch(lower::contains);
             out.put(e.getKey(), match);
         }
-        // Greenfield: none of the "needs_*" are set AND the body has no explicit
-        // file paths — a rough cut sufficient for routing.
-        boolean anyNeed = HEURISTIC_KEYWORDS.keySet().stream()
-            .anyMatch(k -> Boolean.TRUE.equals(out.get(k)));
+        boolean anyNeed = HEURISTIC_FLAGS.stream().anyMatch(k -> Boolean.TRUE.equals(out.get(k)));
         boolean hasFilePaths = lower.contains("/src/") || lower.contains("\\src\\")
             || lower.contains(".cpp") || lower.contains(".h") || lower.contains(".java");
         out.put("is_greenfield", !anyNeed && !hasFilePaths);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, List<String>> loadHeuristicKeywords() {
+        if (integrationConfigRepository == null) return Map.of();
+        try {
+            Optional<IntegrationConfig> cfg = integrationConfigRepository
+                .findByTypeAndIsDefaultTrue(IntegrationType.UNREAL);
+            if (cfg.isEmpty()) {
+                cfg = integrationConfigRepository.findByType(IntegrationType.UNREAL).stream().findFirst();
+            }
+            if (cfg.isEmpty() || cfg.get().getExtraConfigJson() == null) return Map.of();
+            ObjectMapper mapper = objectMapper != null ? objectMapper : new ObjectMapper();
+            Map<String, Object> extra = mapper.readValue(
+                cfg.get().getExtraConfigJson(), new TypeReference<>() {});
+            Object kws = extra.get("heuristicKeywords");
+            if (kws instanceof Map<?, ?> m) {
+                return (Map<String, List<String>>) m;
+            }
+        } catch (Exception e) {
+            // UNREAL integration not configured or schema constraint mismatch — use defaults
+            log.debug("task_md_input: UNREAL heuristic keywords unavailable: {}", e.getMessage());
+        }
+        return Map.of();
     }
 
     private List<String> sectionKeysFound(Map<String, String> sections) {

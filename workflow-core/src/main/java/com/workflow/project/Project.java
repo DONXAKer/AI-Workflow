@@ -43,6 +43,18 @@ public class Project {
      */
     private String workingDir;
 
+    /** Enable orchestrator blocks for this project (default true). */
+    @Column(name = "orchestrator_enabled")
+    private Boolean orchestratorEnabled;
+
+    /** Default model for orchestrator blocks; null means use block-level agent.model. */
+    @Column(name = "orchestrator_model")
+    private String orchestratorModel;
+
+    /** Project-specific context injected into every orchestrator system prompt. */
+    @Column(name = "orchestrator_system_prompt_extra", columnDefinition = "TEXT")
+    private String orchestratorSystemPromptExtra;
+
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -66,6 +78,12 @@ public class Project {
     public void setConfigDir(String configDir) { this.configDir = configDir; }
     public String getWorkingDir() { return workingDir; }
     public void setWorkingDir(String workingDir) { this.workingDir = workingDir; }
+    public boolean isOrchestratorEnabled() { return orchestratorEnabled == null || orchestratorEnabled; }
+    public void setOrchestratorEnabled(Boolean orchestratorEnabled) { this.orchestratorEnabled = orchestratorEnabled; }
+    public String getOrchestratorModel() { return orchestratorModel; }
+    public void setOrchestratorModel(String orchestratorModel) { this.orchestratorModel = orchestratorModel; }
+    public String getOrchestratorSystemPromptExtra() { return orchestratorSystemPromptExtra; }
+    public void setOrchestratorSystemPromptExtra(String orchestratorSystemPromptExtra) { this.orchestratorSystemPromptExtra = orchestratorSystemPromptExtra; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 }

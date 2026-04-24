@@ -113,6 +113,7 @@ public class PipelineRun {
         public Builder pipelineName(String name) { run.pipelineName = name; return this; }
         public Builder requirement(String req) { run.requirement = req; return this; }
         public Builder status(RunStatus status) { run.status = status; return this; }
+        public Builder startedAt(Instant startedAt) { run.startedAt = startedAt; return this; }
         public Builder completedBlocks(Set<String> blocks) { run.completedBlocks = blocks; return this; }
         public Builder autoApprove(Set<String> autoApprove) { run.autoApprove = autoApprove; return this; }
         public Builder outputs(List<BlockOutput> outputs) { run.outputs = outputs; return this; }

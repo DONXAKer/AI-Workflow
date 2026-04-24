@@ -1,9 +1,9 @@
 import { Loader2, CheckCircle, XCircle, SkipForward, Clock, AlertCircle, Copy, Check, Bell, ChevronDown, ChevronRight, Hand, Zap, BellRing } from 'lucide-react'
-import { BlockStatus, BlockSnapshot, ApprovalMode } from '../types'
+import { BlockStatus, BlockSnapshot, ApprovalMode, ToolCallEntry } from '../types'
 import { effectiveApprovalMode } from '../utils/configSnapshot'
 import { blockTypeLabel } from '../utils/blockLabels'
 import clsx from 'clsx'
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, Fragment } from 'react'
 
 const APPROVAL_BADGE: Record<ApprovalMode, { label: string; Icon: React.ComponentType<{ className?: string }>; cls: string }> = {
   manual: { label: 'Одобрение', Icon: Hand, cls: 'bg-amber-900/40 border-amber-800/60 text-amber-300' },
@@ -47,6 +47,102 @@ interface Props {
   onReviewApproval?: (blockId: string) => void
   /** Per-block config snapshots (approval_mode, enabled, condition) used for badges */
   snapshots?: Map<string, BlockSnapshot>
+  /** Tool call audit entries — when provided, enables per-block iteration expansion */
+  toolCalls?: ToolCallEntry[]
+}
+
+const TOOL_COLORS: Record<string, string> = {
+  Read:  'text-blue-300 bg-blue-950/50 border-blue-800/60',
+  Write: 'text-green-300 bg-green-950/50 border-green-800/60',
+  Edit:  'text-amber-300 bg-amber-950/50 border-amber-800/60',
+  Glob:  'text-purple-300 bg-purple-950/50 border-purple-800/60',
+  Grep:  'text-purple-300 bg-purple-950/50 border-purple-800/60',
+  Bash:  'text-orange-300 bg-orange-950/50 border-orange-800/60',
+}
+
+function summarizeInput(toolName: string, inputJson: string): string {
+  try {
+    const inp = JSON.parse(inputJson) as Record<string, unknown>
+    if (toolName === 'Bash') {
+      const cmd = String(inp['command'] ?? inp['cmd'] ?? '').trim()
+      const first = cmd.split('\n')[0]
+      return first.length > 70 ? first.slice(0, 70) + '…' : first
+    }
+    if (toolName === 'Grep') {
+      const pat = String(inp['pattern'] ?? '')
+      const inPath = inp['path'] ? ` @ ${String(inp['path'])}` : ''
+      return (pat + inPath).slice(0, 70)
+    }
+    if (toolName === 'Glob') return String(inp['pattern'] ?? '')
+    const fp = inp['file_path'] ?? inp['path'] ?? inp['file'] ?? ''
+    if (fp) return String(fp)
+    return JSON.stringify(inp).slice(0, 70)
+  } catch {
+    return inputJson.slice(0, 70)
+  }
+}
+
+function IterationRow({ iteration, calls }: { iteration: number; calls: ToolCallEntry[] }) {
+  const [open, setOpen] = useState(false)
+  const hasError = calls.some(c => c.isError)
+  const totalMs = calls.reduce((s, c) => s + c.durationMs, 0)
+
+  return (
+    <div className="border border-slate-800/60 rounded-lg overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-slate-800/40 transition-colors"
+      >
+        {open
+          ? <ChevronDown className="w-3 h-3 text-slate-500 flex-shrink-0" />
+          : <ChevronRight className="w-3 h-3 text-slate-500 flex-shrink-0" />}
+        <span className="text-xs text-slate-400 font-mono">Итерация {iteration}</span>
+        <span className="text-[10px] text-slate-600">
+          {calls.length} {calls.length === 1 ? 'вызов' : calls.length < 5 ? 'вызова' : 'вызовов'}
+        </span>
+        <span className="text-[10px] text-slate-700 ml-auto">{totalMs}ms</span>
+        {hasError && <span className="text-[10px] text-red-400">ошибка</span>}
+      </button>
+      {open && (
+        <div className="border-t border-slate-800/60 divide-y divide-slate-800/40">
+          {calls.map((c, i) => {
+            const colorCls = TOOL_COLORS[c.toolName] ?? 'text-slate-400 bg-slate-800/40 border-slate-700'
+            const summary = summarizeInput(c.toolName, c.inputJson)
+            return (
+              <div key={i} className="flex items-center gap-2 px-3 py-1.5 text-xs">
+                <span className={clsx('px-1.5 py-0.5 rounded border text-[10px] font-mono font-medium flex-shrink-0', colorCls)}>
+                  {c.toolName}
+                </span>
+                <span className="font-mono text-slate-400 truncate flex-1 min-w-0">{summary}</span>
+                {c.isError
+                  ? <XCircle className="w-3 h-3 text-red-400 flex-shrink-0" />
+                  : <CheckCircle className="w-3 h-3 text-green-600/70 flex-shrink-0" />}
+                <span className="text-slate-600 text-[10px] flex-shrink-0">{c.durationMs}ms</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function IterationsPanel({ calls }: { calls: ToolCallEntry[] }) {
+  const byIteration = new Map<number, ToolCallEntry[]>()
+  for (const c of calls) {
+    if (!byIteration.has(c.iteration)) byIteration.set(c.iteration, [])
+    byIteration.get(c.iteration)!.push(c)
+  }
+  const iterations = [...byIteration.entries()].sort((a, b) => a[0] - b[0])
+
+  return (
+    <div className="space-y-1.5 px-4 py-3 bg-slate-950/60 border-t border-slate-800/60">
+      {iterations.map(([iter, iterCalls]) => (
+        <IterationRow key={iter} iteration={iter} calls={iterCalls} />
+      ))}
+    </div>
+  )
 }
 
 type StatusConfig = {
@@ -162,7 +258,17 @@ function OutputCell({ output }: { output?: Record<string, unknown> }) {
   )
 }
 
-export default function BlockProgressTable({ blockStatuses, onReviewApproval, snapshots }: Props) {
+export default function BlockProgressTable({ blockStatuses, onReviewApproval, snapshots, toolCalls }: Props) {
+  const [expandedBlocks, setExpandedBlocks] = useState<Set<string>>(new Set())
+
+  const toggleBlock = useCallback((blockId: string) => {
+    setExpandedBlocks(prev => {
+      const next = new Set(prev)
+      if (next.has(blockId)) next.delete(blockId)
+      else next.add(blockId)
+      return next
+    })
+  }, [])
   if (blockStatuses.length === 0) {
     return (
       <div className="bg-slate-900 border border-slate-800 rounded-xl">
@@ -203,6 +309,7 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, sn
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Блок</th>
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Статус</th>
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Длительность</th>
+              <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Вход</th>
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Выход</th>
               {/* Actions column only rendered when there's an onReviewApproval handler */}
               {onReviewApproval && (
@@ -214,92 +321,121 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, sn
             {blockStatuses.map((block, index) => {
               const cfg = STATUS_CONFIG[block.status]
               const Icon = cfg.Icon
+              const blockCalls = toolCalls?.filter(tc => tc.blockId === block.blockId) ?? []
+              const iterCount = new Set(blockCalls.map(tc => tc.iteration)).size
+              const isExpanded = expandedBlocks.has(block.blockId)
+              const colSpan = onReviewApproval ? 7 : 6
+
               return (
-                <tr
-                  key={block.blockId}
-                  className={clsx('transition-colors', cfg.rowClass)}
-                >
-                  <td className="px-5 py-3.5 text-slate-600 text-xs">{index + 1}</td>
-                  <td className="px-5 py-3.5">
-                    <div className="flex items-start gap-2 flex-wrap">
-                      <div>
+                <Fragment key={block.blockId}>
+                  <tr className={clsx('transition-colors', cfg.rowClass)}>
+                    <td className="px-5 py-3.5 text-slate-600 text-xs">{index + 1}</td>
+                    <td className="px-5 py-3.5">
+                      <div className="flex items-start gap-2 flex-wrap">
+                        <div>
+                          {(() => {
+                            const snapshot = snapshots?.get(block.blockId)
+                            const label = blockTypeLabel(snapshot?.block)
+                            return (
+                              <>
+                                {label && (
+                                  <div className="text-sm text-slate-100 font-medium leading-tight">{label}</div>
+                                )}
+                                <div className="font-mono text-slate-500 text-xs mt-0.5">{block.blockId}</div>
+                              </>
+                            )
+                          })()}
+                        </div>
                         {(() => {
                           const snapshot = snapshots?.get(block.blockId)
-                          const label = blockTypeLabel(snapshot?.block)
+                          const mode = effectiveApprovalMode(snapshot)
                           return (
-                            <>
-                              {label && (
-                                <div className="text-sm text-slate-100 font-medium leading-tight">{label}</div>
+                            <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                              {mode && <ApprovalBadge mode={mode} />}
+                              {snapshot?.enabled === false && (
+                                <span
+                                  className="text-[10px] uppercase tracking-wide bg-slate-800 border border-slate-700 text-slate-500 px-1.5 py-0.5 rounded"
+                                  title="Блок отключён в конфигурации"
+                                >
+                                  выкл
+                                </span>
                               )}
-                              <div className="font-mono text-slate-500 text-xs mt-0.5">{block.blockId}</div>
-                            </>
+                              {snapshot?.condition && (
+                                <span
+                                  className="text-[10px] uppercase tracking-wide bg-slate-800/80 border border-slate-700 text-slate-400 px-1.5 py-0.5 rounded"
+                                  title={`Условие: ${snapshot.condition}`}
+                                >
+                                  условие
+                                </span>
+                              )}
+                            </div>
                           )
                         })()}
                       </div>
-                      {(() => {
-                        const snapshot = snapshots?.get(block.blockId)
-                        const mode = effectiveApprovalMode(snapshot)
-                        return (
-                          <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
-                            {mode && <ApprovalBadge mode={mode} />}
-                            {snapshot?.enabled === false && (
-                              <span
-                                className="text-[10px] uppercase tracking-wide bg-slate-800 border border-slate-700 text-slate-500 px-1.5 py-0.5 rounded"
-                                title="Блок отключён в конфигурации"
-                              >
-                                выкл
-                              </span>
-                            )}
-                            {snapshot?.condition && (
-                              <span
-                                className="text-[10px] uppercase tracking-wide bg-slate-800/80 border border-slate-700 text-slate-400 px-1.5 py-0.5 rounded"
-                                title={`Условие: ${snapshot.condition}`}
-                              >
-                                условие
-                              </span>
-                            )}
-                          </div>
-                        )
-                      })()}
-                    </div>
-                  </td>
-                  <td className="px-5 py-3.5">
-                    <span className={clsx('inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium', cfg.badgeClass)}>
-                      <Icon className={clsx('w-3.5 h-3.5', cfg.spin && 'animate-spin')} />
-                      {cfg.label}
-                      {cfg.pulse && (
-                        <span className="relative flex h-1.5 w-1.5 ml-0.5">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
-                          <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-400" />
-                        </span>
-                      )}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3.5 whitespace-nowrap">
-                    {block.status === 'running' && block.startedAt ? (
-                      <LiveDuration startedAt={block.startedAt} />
-                    ) : (
-                      <span className="text-xs text-slate-600">—</span>
-                    )}
-                  </td>
-                  <td className="px-5 py-3.5 max-w-xs">
-                    <OutputCell output={block.output} />
-                  </td>
-                  {onReviewApproval && (
+                    </td>
                     <td className="px-5 py-3.5">
-                      {block.status === 'awaiting_approval' && (
+                      <span className={clsx('inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium', cfg.badgeClass)}>
+                        <Icon className={clsx('w-3.5 h-3.5', cfg.spin && 'animate-spin')} />
+                        {cfg.label}
+                        {cfg.pulse && (
+                          <span className="relative flex h-1.5 w-1.5 ml-0.5">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-400" />
+                          </span>
+                        )}
+                      </span>
+                      {block.status === 'running' && block.progressDetail && (
+                        <div className="mt-1 text-[11px] text-blue-400/80 font-mono">{block.progressDetail}</div>
+                      )}
+                      {blockCalls.length > 0 && (
                         <button
                           type="button"
-                          onClick={() => onReviewApproval(block.blockId)}
-                          className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md bg-amber-900/40 border border-amber-700/50 text-amber-300 hover:bg-amber-900/60 transition-colors"
+                          onClick={() => toggleBlock(block.blockId)}
+                          className="mt-1.5 flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-300 transition-colors"
                         >
-                          <Bell className="w-3.5 h-3.5" />
-                          Рассмотреть
+                          {isExpanded
+                            ? <ChevronDown className="w-3 h-3" />
+                            : <ChevronRight className="w-3 h-3" />}
+                          {iterCount} итер. · {blockCalls.length} вызовов
                         </button>
                       )}
                     </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      {block.status === 'running' && block.startedAt ? (
+                        <LiveDuration startedAt={block.startedAt} />
+                      ) : (
+                        <span className="text-xs text-slate-600">—</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3.5 max-w-xs">
+                      <OutputCell output={block.input} />
+                    </td>
+                    <td className="px-5 py-3.5 max-w-xs">
+                      <OutputCell output={block.output} />
+                    </td>
+                    {onReviewApproval && (
+                      <td className="px-5 py-3.5">
+                        {block.status === 'awaiting_approval' && (
+                          <button
+                            type="button"
+                            onClick={() => onReviewApproval(block.blockId)}
+                            className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md bg-amber-900/40 border border-amber-700/50 text-amber-300 hover:bg-amber-900/60 transition-colors"
+                          >
+                            <Bell className="w-3.5 h-3.5" />
+                            Рассмотреть
+                          </button>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                  {isExpanded && blockCalls.length > 0 && (
+                    <tr>
+                      <td colSpan={colSpan} className="p-0">
+                        <IterationsPanel calls={blockCalls} />
+                      </td>
+                    </tr>
                   )}
-                </tr>
+                </Fragment>
               )
             })}
           </tbody>

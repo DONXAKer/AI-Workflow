@@ -9,14 +9,15 @@ import Sidebar from './components/layout/Sidebar'
 
 import ProjectsListPage from './pages/ProjectsListPage'
 import ProjectWorkspacePage from './pages/ProjectWorkspacePage'
-import LaunchTab from './pages/project/LaunchTab'
 import SmartStartTab from './pages/project/SmartStartTab'
 import ActiveTab from './pages/project/ActiveTab'
 import HistoryTab from './pages/project/HistoryTab'
 import IntegrationsTab from './pages/project/IntegrationsTab'
+import McpServersTab from './pages/project/McpServersTab'
 import SettingsTab from './pages/project/SettingsTab'
 
 import RunPage from './pages/RunPage'
+import RunHistoryPage from './pages/RunHistoryPage'
 import LoginPage from './pages/LoginPage'
 import ActiveRunsPage from './pages/ActiveRunsPage'
 import PipelinesPage from './pages/PipelinesPage'
@@ -27,6 +28,7 @@ import AuditLogPage from './pages/AuditLogPage'
 import KillSwitchPage from './pages/KillSwitchPage'
 import CostDashboardPage from './pages/CostDashboardPage'
 import UsersSettingsPage from './pages/UsersSettingsPage'
+import ProjectsSettingsPage from './pages/ProjectsSettingsPage'
 import SystemLayout from './pages/SystemLayout'
 
 function MobileTopBar({ onOpen }: { onOpen: () => void }) {
@@ -107,12 +109,12 @@ function AppLayout() {
 
             {/* Project workspace */}
             <Route path="/projects/:slug" element={<ProjectWorkspacePage />}>
-              <Route index element={<Navigate to="launch" replace />} />
-              <Route path="launch" element={<LaunchTab />} />
+              <Route index element={<Navigate to="smart-start" replace />} />
               <Route path="smart-start" element={<SmartStartTab />} />
               <Route path="active" element={<ActiveTab />} />
               <Route path="history" element={<HistoryTab />} />
               <Route path="integrations" element={<IntegrationsTab />} />
+              <Route path="mcp" element={<McpServersTab />} />
               <Route path="settings" element={<SettingsTab />} />
             </Route>
 
@@ -129,6 +131,7 @@ function AppLayout() {
               <Route path="audit" element={<AuditLogPage />} />
               <Route path="kill-switch" element={<KillSwitchPage />} />
               <Route path="cost" element={<CostDashboardPage />} />
+              <Route path="projects" element={<ProjectsSettingsPage />} />
             </Route>
 
             {/* Legacy pages — kept at original URLs for backward-compat */}
@@ -137,7 +140,7 @@ function AppLayout() {
 
             {/* Legacy redirects */}
             <Route path="/settings/*" element={<Navigate to="/system/users" replace />} />
-            <Route path="/runs/history" element={<Navigate to="/" replace />} />
+            <Route path="/runs/history" element={<RunHistoryPage />} />
             <Route path="/cost" element={<Navigate to="/system/cost" replace />} />
 
             <Route path="*" element={<Navigate to="/" replace />} />

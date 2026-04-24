@@ -1,6 +1,7 @@
 package com.workflow.blocks;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.workflow.api.RunWebSocketHandler;
 import com.workflow.config.AgentConfig;
 import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
@@ -72,6 +73,7 @@ public class AgentWithToolsBlock implements Block {
     @Autowired(required = false) private ToolCallAuditRepository auditRepository;
     @Autowired(required = false) private ProjectRepository projectRepository;
     @Autowired(required = false) private StringInterpolator stringInterpolator;
+    @Autowired(required = false) private RunWebSocketHandler wsHandler;
 
     @Override public String getName() { return "agent_with_tools"; }
 
@@ -120,6 +122,8 @@ public class AgentWithToolsBlock implements Block {
         int maxIterations = asInt(cfg, "max_iterations", DEFAULT_MAX_ITERATIONS);
         double budgetUsdCap = asDouble(cfg, "budget_usd_cap", DEFAULT_BUDGET_USD_CAP);
 
+        final String blockId = blockConfig.getId();
+        final java.util.UUID runId = run.getId();
         ToolUseRequest request = ToolUseRequest.builder()
             .model(model)
             .systemPrompt(systemPrompt)
@@ -129,6 +133,8 @@ public class AgentWithToolsBlock implements Block {
             .temperature(agent.getTemperatureOrDefault())
             .maxIterations(maxIterations)
             .budgetUsdCap(budgetUsdCap)
+            .progressCallback(wsHandler != null ? detail ->
+                wsHandler.sendBlockProgress(runId, blockId, detail) : null)
             .build();
 
         DefaultToolExecutor executor = new DefaultToolExecutor(

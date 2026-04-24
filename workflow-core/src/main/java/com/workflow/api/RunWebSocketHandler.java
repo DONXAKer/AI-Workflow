@@ -87,6 +87,15 @@ public class RunWebSocketHandler {
         send(runId, message);
     }
 
+    public void sendBlockProgress(UUID runId, String blockId, String detail) {
+        Map<String, Object> message = new HashMap<>();
+        message.put("type", "BLOCK_PROGRESS");
+        message.put("blockId", blockId);
+        message.put("detail", detail);
+        message.put("runId", runId.toString());
+        send(runId, message);
+    }
+
     public void sendRunComplete(UUID runId, String status) {
         Map<String, Object> message = new HashMap<>();
         message.put("type", "RUN_COMPLETE");

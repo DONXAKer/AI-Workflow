@@ -240,6 +240,13 @@ public class LlmClient {
         while (iterations < request.maxIterations()) {
             iterations++;
 
+            pruneContextIfNeeded(messages);
+
+            if (request.progressCallback() != null) {
+                request.progressCallback().accept(
+                    "Итерация " + iterations + " / " + request.maxIterations());
+            }
+
             ObjectNode body = objectMapper.createObjectNode();
             body.put("model", resolvedModel);
             body.put("max_tokens", request.maxTokens());
@@ -257,6 +264,15 @@ public class LlmClient {
                     .uri("/chat/completions")
                     .bodyValue(body)
                     .retrieve()
+                    .onStatus(
+                        status -> status.is4xxClientError() || status.is5xxServerError(),
+                        resp -> resp.bodyToMono(String.class).map(errBody -> {
+                            log.error("OpenRouter HTTP {} body: {}", resp.statusCode(), errBody);
+                            return new org.springframework.web.reactive.function.client.WebClientResponseException(
+                                resp.statusCode().value(), resp.statusCode().toString(), null,
+                                errBody.getBytes(java.nio.charset.StandardCharsets.UTF_8), java.nio.charset.StandardCharsets.UTF_8);
+                        })
+                    )
                     .bodyToMono(String.class)
                     .block();
                 if (responseBody == null) {
@@ -264,7 +280,7 @@ public class LlmClient {
                 }
                 responseJson = objectMapper.readTree(responseBody);
             } catch (Exception e) {
-                log.error("Tool-use iteration {} failed: {}", iterations, e.getMessage(), e);
+                log.error("Tool-use iteration {} failed: {}", iterations, e.getMessage());
                 throw new RuntimeException("completeWithTools iteration " + iterations + " failed: " + e.getMessage(), e);
             }
 
@@ -293,7 +309,13 @@ public class LlmClient {
                 (int) (System.currentTimeMillis() - startedAt),
                 tokensIn, tokensOut, cost, toolNames);
 
-            if (!content.isBlank()) {
+            // For reasoning models the content field includes <think>...</think> blocks;
+            // strip them so callers (e.g. OrchestratorBlock) see only the actual output.
+            String strippedContent = stripThinkingBlocks(content);
+
+            if (!strippedContent.isBlank()) {
+                finalText = strippedContent;
+            } else if (!content.isBlank()) {
                 finalText = content;
             }
 
@@ -309,7 +331,20 @@ public class LlmClient {
                     iterations, totalTokensIn, totalTokensOut, totalCostUsd);
             }
 
-            messages.add(messageNode.deepCopy());
+            // Strip reasoning_content/reasoning from assistant messages before adding to history.
+            // Reasoning models (qwen3, deepseek-r1) return these fields but OpenRouter
+            // returns 400 if they're sent back in subsequent requests.
+            ObjectNode historyMsg = messageNode.deepCopy();
+            historyMsg.remove("reasoning_content");
+            historyMsg.remove("reasoning");
+            // Also strip <think>...</think> from content field in history so it doesn't accumulate.
+            if (historyMsg.has("content") && !historyMsg.path("content").isNull()) {
+                String stripped = stripThinkingBlocks(historyMsg.path("content").asText(""));
+                if (!stripped.isBlank()) {
+                    historyMsg.put("content", stripped);
+                }
+            }
+            messages.add(historyMsg);
 
             for (JsonNode tc : toolCalls) {
                 String callId = tc.path("id").asText("");
@@ -359,6 +394,44 @@ public class LlmClient {
             iterations, totalTokensIn, totalTokensOut, totalCostUsd);
     }
 
+    /**
+     * Keeps context size manageable by dropping old assistant+tool pairs when
+     * messages array grows past threshold. Always preserves:
+     * 1. System message (role=system) if present at index 0
+     * 2. First user message (initial task)
+     * 3. The most recent KEEP_RECENT messages
+     */
+    private static final int MAX_CONTEXT_MSGS = 40;
+    private static final int KEEP_RECENT_MSGS = 28;
+
+    private void pruneContextIfNeeded(ArrayNode messages) {
+        if (messages.size() <= MAX_CONTEXT_MSGS) return;
+
+        List<com.fasterxml.jackson.databind.JsonNode> all = new ArrayList<>();
+        messages.forEach(all::add);
+
+        // Determine how many "anchor" messages to keep at the front
+        int anchor = 0;
+        if (!all.isEmpty() && "system".equals(all.get(0).path("role").asText())) anchor++;
+        if (anchor < all.size() && "user".equals(all.get(anchor).path("role").asText())) anchor++;
+
+        // Keep anchor messages + KEEP_RECENT_MSGS from the tail,
+        // but don't trim in the middle of an assistant+tool group
+        int tailStart = Math.max(anchor, all.size() - KEEP_RECENT_MSGS);
+        // Walk back until we find an assistant message (to avoid orphaned tool results)
+        while (tailStart > anchor && !"assistant".equals(all.get(tailStart).path("role").asText())) {
+            tailStart--;
+        }
+
+        int dropped = tailStart - anchor;
+        if (dropped <= 0) return;
+
+        log.info("Context pruning: dropping {} old messages (total was {})", dropped, all.size());
+        messages.removeAll();
+        for (int i = 0; i < anchor; i++) messages.add(all.get(i));
+        for (int i = tailStart; i < all.size(); i++) messages.add(all.get(i));
+    }
+
     private ArrayNode buildToolsJson(List<ToolDefinition> tools) {
         ArrayNode arr = objectMapper.createArrayNode();
         if (tools == null) return arr;
@@ -406,6 +479,17 @@ public class LlmClient {
         } catch (Exception e) {
             log.debug("LlmCall persist failed (tool-use iter {}): {}", iteration, e.getMessage());
         }
+    }
+
+    /**
+     * Strips {@code <think>...</think>} reasoning blocks from model output.
+     * Reasoning models (qwen3, deepseek-r1) embed thinking in the content field;
+     * callers typically only need the non-reasoning part.
+     */
+    public static String stripThinkingBlocks(String text) {
+        if (text == null || !text.contains("<think>")) return text;
+        // Remove all <think>...</think> blocks (greedy, handles multi-line)
+        return text.replaceAll("(?s)<think>.*?</think>", "").strip();
     }
 
     /**

@@ -46,6 +46,9 @@ public class ProjectController {
             if (body.getDescription() != null) existing.setDescription(body.getDescription());
             if (body.getConfigDir() != null) existing.setConfigDir(body.getConfigDir());
             if (body.getWorkingDir() != null) existing.setWorkingDir(body.getWorkingDir());
+            if (body.getOrchestratorModel() != null) existing.setOrchestratorModel(body.getOrchestratorModel());
+            if (body.getOrchestratorSystemPromptExtra() != null) existing.setOrchestratorSystemPromptExtra(body.getOrchestratorSystemPromptExtra());
+            existing.setOrchestratorEnabled(body.isOrchestratorEnabled());
             return ResponseEntity.ok(repository.save(existing));
         }).orElse(ResponseEntity.notFound().build());
     }
@@ -53,9 +56,6 @@ public class ProjectController {
     @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{slug}")
     public ResponseEntity<Map<String, Object>> delete(@PathVariable String slug) {
-        if (Project.DEFAULT_SLUG.equals(slug)) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Cannot delete the default project"));
-        }
         return repository.findBySlug(slug).map(p -> {
             repository.delete(p);
             Map<String, Object> ok = Map.of("success", true);

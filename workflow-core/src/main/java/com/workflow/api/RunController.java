@@ -177,24 +177,25 @@ public class RunController {
 
     @GetMapping("/runs/stats")
     public ResponseEntity<Map<String, Object>> getRunStats() {
-        long activeRuns = pipelineRunRepository.countByStatusIn(
-            List.of(RunStatus.RUNNING, RunStatus.PAUSED_FOR_APPROVAL));
-        long awaitingApproval = pipelineRunRepository.countByStatusIn(
-            List.of(RunStatus.PAUSED_FOR_APPROVAL));
+        String projectSlug = com.workflow.project.ProjectContext.get();
+        long activeRuns = pipelineRunRepository.countByProjectSlugAndStatusIn(
+            projectSlug, List.of(RunStatus.RUNNING, RunStatus.PAUSED_FOR_APPROVAL));
+        long awaitingApproval = pipelineRunRepository.countByProjectSlugAndStatusIn(
+            projectSlug, List.of(RunStatus.PAUSED_FOR_APPROVAL));
 
         Instant startOfDay = LocalDate.now(ZoneOffset.UTC).atStartOfDay(ZoneOffset.UTC).toInstant();
 
         // Primary count: runs that have completedAt populated (normal case).
-        long completedToday = pipelineRunRepository.countByStatusAndCompletedAtAfter(RunStatus.COMPLETED, startOfDay);
-        long failedToday    = pipelineRunRepository.countByStatusAndCompletedAtAfter(RunStatus.FAILED, startOfDay);
+        long completedToday = pipelineRunRepository.countByProjectSlugAndStatusAndCompletedAtAfter(projectSlug, RunStatus.COMPLETED, startOfDay);
+        long failedToday    = pipelineRunRepository.countByProjectSlugAndStatusAndCompletedAtAfter(projectSlug, RunStatus.FAILED, startOfDay);
 
         // Fallback for legacy rows created before completedAt was added: completedAt is NULL
         // but startedAt falls within today.  These runs definitely finished today because
         // a run that is still in progress would have status RUNNING/PAUSED_FOR_APPROVAL.
         completedToday += pipelineRunRepository
-            .countByStatusAndCompletedAtIsNullAndStartedAtAfter(RunStatus.COMPLETED, startOfDay);
+            .countByProjectSlugAndStatusAndCompletedAtIsNullAndStartedAtAfter(projectSlug, RunStatus.COMPLETED, startOfDay);
         failedToday += pipelineRunRepository
-            .countByStatusAndCompletedAtIsNullAndStartedAtAfter(RunStatus.FAILED, startOfDay);
+            .countByProjectSlugAndStatusAndCompletedAtIsNullAndStartedAtAfter(projectSlug, RunStatus.FAILED, startOfDay);
 
         Map<String, Object> stats = new HashMap<>();
         stats.put("activeRuns", activeRuns);
@@ -223,12 +224,12 @@ public class RunController {
             @RequestParam(required = false) String from,
             @RequestParam(required = false) String to,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "25") int size) {
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(defaultValue = "false") boolean allProjects) {
 
         size = Math.min(size, 100);
 
-        // Project scoping is now always mandatory, so the filtered Specification path is
-        // always taken — the native-SQL fast path doesn't have a WHERE projectSlug clause.
+        // Project scoping is always used unless allProjects=true (global history view).
         boolean hasFilters = true;
 
         List<Map<String, Object>> content;
@@ -270,7 +271,9 @@ public class RunController {
             String currentProject = com.workflow.project.ProjectContext.get();
             Specification<PipelineRun> spec = (root, query, cb) -> {
                 List<Predicate> predicates = new ArrayList<>();
-                predicates.add(cb.equal(root.get("projectSlug"), currentProject));
+                if (!allProjects) {
+                    predicates.add(cb.equal(root.get("projectSlug"), currentProject));
+                }
 
                 if (status != null && !status.isEmpty()) {
                     List<RunStatus> statuses = status.stream()

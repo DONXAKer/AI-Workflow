@@ -1,6 +1,7 @@
 package com.workflow.llm.tooluse;
 
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * Input to {@link com.workflow.llm.LlmClient#completeWithTools(ToolUseRequest,
@@ -26,7 +27,8 @@ public record ToolUseRequest(
     int maxTokens,
     double temperature,
     int maxIterations,
-    double budgetUsdCap
+    double budgetUsdCap,
+    Consumer<String> progressCallback
 ) {
 
     public static Builder builder() {
@@ -42,6 +44,7 @@ public record ToolUseRequest(
         private double temperature = 1.0;
         private int maxIterations = 40;
         private double budgetUsdCap = 5.0;
+        private Consumer<String> progressCallback;
 
         public Builder model(String v) { this.model = v; return this; }
         public Builder systemPrompt(String v) { this.systemPrompt = v; return this; }
@@ -51,12 +54,13 @@ public record ToolUseRequest(
         public Builder temperature(double v) { this.temperature = v; return this; }
         public Builder maxIterations(int v) { this.maxIterations = v; return this; }
         public Builder budgetUsdCap(double v) { this.budgetUsdCap = v; return this; }
+        public Builder progressCallback(Consumer<String> v) { this.progressCallback = v; return this; }
 
         public ToolUseRequest build() {
             if (model == null || model.isBlank()) throw new IllegalArgumentException("model required");
             if (userMessage == null) throw new IllegalArgumentException("userMessage required");
             return new ToolUseRequest(model, systemPrompt, userMessage, tools,
-                maxTokens, temperature, maxIterations, budgetUsdCap);
+                maxTokens, temperature, maxIterations, budgetUsdCap, progressCallback);
         }
     }
 }

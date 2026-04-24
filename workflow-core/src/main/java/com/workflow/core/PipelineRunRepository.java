@@ -21,7 +21,11 @@ public interface PipelineRunRepository extends JpaRepository<PipelineRun, UUID>,
 
     long countByStatusIn(List<RunStatus> statuses);
 
+    long countByProjectSlugAndStatusIn(String projectSlug, List<RunStatus> statuses);
+
     long countByStatusAndCompletedAtAfter(RunStatus status, Instant after);
+
+    long countByProjectSlugAndStatusAndCompletedAtAfter(String projectSlug, RunStatus status, Instant after);
 
     /**
      * Fallback count for runs that completed before the completedAt column was added.
@@ -29,6 +33,8 @@ public interface PipelineRunRepository extends JpaRepository<PipelineRun, UUID>,
      * Used alongside countByStatusAndCompletedAtAfter to avoid undercounting legacy rows.
      */
     long countByStatusAndCompletedAtIsNullAndStartedAtAfter(RunStatus status, Instant after);
+
+    long countByProjectSlugAndStatusAndCompletedAtIsNullAndStartedAtAfter(String projectSlug, RunStatus status, Instant after);
 
     /**
      * Unfiltered summary page — no collection joins, so a page of N rows costs 2 queries

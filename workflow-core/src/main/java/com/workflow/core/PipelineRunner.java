@@ -92,6 +92,7 @@ public class PipelineRunner {
             .pipelineName(config.getName())
             .requirement(requirement)
             .status(RunStatus.RUNNING)
+            .startedAt(java.time.Instant.now())
             .completedBlocks(new java.util.HashSet<>())
             .autoApprove(new java.util.HashSet<>())
             .outputs(new ArrayList<>())
@@ -141,6 +142,7 @@ public class PipelineRunner {
             .pipelineName(config.getName())
             .requirement(requirement)
             .status(RunStatus.RUNNING)
+            .startedAt(java.time.Instant.now())
             .completedBlocks(new java.util.HashSet<>())
             .autoApprove(new java.util.HashSet<>())
             .outputs(new ArrayList<>())
@@ -727,8 +729,11 @@ public class PipelineRunner {
                     handleCancellation(run);
                     return;
                 }
-                log.error("Block {} failed: {}", blockId, e.getMessage(), e);
-                markFailed(run, "Block " + blockId + " failed: " + e.getMessage());
+                Throwable rootCause = e;
+                while (rootCause.getCause() != null) rootCause = rootCause.getCause();
+                String causeMsg = rootCause == e ? "" : " | root cause: " + rootCause.getMessage();
+                log.error("Block {} failed: {}{}", blockId, e.getMessage(), causeMsg);
+                markFailed(run, "Block " + blockId + " failed: " + e.getMessage() + causeMsg);
                 throw new RuntimeException("Block execution failed: " + blockId, e);
             }
 
@@ -743,7 +748,7 @@ public class PipelineRunner {
                     .stream().map(BlockConfig::getId).collect(Collectors.toList());
 
                 // Persist block output before pausing so the API can serve it to late-joining clients
-                saveBlockOutput(run, blockId, output);
+                saveBlockOutput(run, blockId, output, inputs);
 
                 run.setStatus(RunStatus.PAUSED_FOR_APPROVAL);
                 run.setPausedAt(Instant.now());
@@ -790,7 +795,7 @@ public class PipelineRunner {
                 }
             }
 
-            saveBlockOutput(run, blockId, output);
+            saveBlockOutput(run, blockId, output, inputs);
             if (!run.getCompletedBlocks().contains(blockId)) run.getCompletedBlocks().add(blockId);
             if (output.containsKey("requirement") && output.get("requirement") instanceof String newReq) {
                 currentRequirement = newReq;
@@ -800,8 +805,8 @@ public class PipelineRunner {
                 wsHandler.sendAutoNotify(run.getId(), blockId, block.getDescription(), output);
             }
 
-            // --- Verify loopback check ---
-            if ("verify".equals(blockConfig.getBlock())) {
+            // --- Verify / orchestrator loopback check ---
+            if ("verify".equals(blockConfig.getBlock()) || "orchestrator".equals(blockConfig.getBlock())) {
                 Boolean passed = output.get("passed") instanceof Boolean b ? b : true;
                 if (!passed) {
                     VerifyConfig verifyConfig = blockConfig.getVerify();
@@ -954,16 +959,22 @@ public class PipelineRunner {
     }
 
     private void saveBlockOutput(PipelineRun run, String blockId, Map<String, Object> output) {
+        saveBlockOutput(run, blockId, output, null);
+    }
+
+    private void saveBlockOutput(PipelineRun run, String blockId, Map<String, Object> output, Map<String, Object> inputs) {
         try {
             String outputJson = objectMapper.writeValueAsString(output);
+            String inputJson = inputs != null ? objectMapper.writeValueAsString(inputs) : null;
             Optional<BlockOutput> existing = run.getOutputs().stream()
                 .filter(o -> o.getBlockId().equals(blockId)).findFirst();
             if (existing.isPresent()) {
                 existing.get().setOutputJson(outputJson);
+                if (inputJson != null) existing.get().setInputJson(inputJson);
                 blockOutputRepository.save(existing.get());
             } else {
                 BlockOutput blockOutput = BlockOutput.builder()
-                    .run(run).blockId(blockId).outputJson(outputJson).build();
+                    .run(run).blockId(blockId).outputJson(outputJson).inputJson(inputJson).build();
                 blockOutputRepository.save(blockOutput);
                 run.getOutputs().add(blockOutput);
             }

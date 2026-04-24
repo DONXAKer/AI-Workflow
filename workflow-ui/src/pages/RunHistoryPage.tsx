@@ -39,6 +39,7 @@ export default function RunHistoryPage() {
       to: to || undefined,
       page,
       size: PAGE_SIZE,
+      allProjects: true,
     }).then(data => {
       if (cancelled) return
       setRuns(data.content)

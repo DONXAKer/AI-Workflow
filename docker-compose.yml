@@ -6,7 +6,7 @@ services:
       - "8020:8020"
     volumes:
       - workflow-state:/app/.workflow
-      - /Users/home/Code:/projects:ro
+      - ${PROJECTS_ROOT}:/projects:rw
     environment:
       WORKFLOW_MODE: gui
       BROWSE_ROOT_PATH: /projects

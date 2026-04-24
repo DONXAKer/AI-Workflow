@@ -24,7 +24,7 @@ public class DefaultProjectInitializer {
 
     @PostConstruct
     public void ensureDefault() {
-        if (repository.findBySlug(Project.DEFAULT_SLUG).isPresent()) return;
+        if (repository.count() > 0) return;
         Project p = new Project();
         p.setSlug(Project.DEFAULT_SLUG);
         p.setDisplayName("Default Project");

@@ -108,6 +108,7 @@ export default function DashboardPage() {
           loading={loading}
           skeletonRows={3}
           liveStatuses
+          from="active"
           emptyMessage="Нет активных запусков"
         />
       </div>

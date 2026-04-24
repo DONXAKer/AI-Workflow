@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { Save, Loader2, AlertCircle, Trash2, Plug, FileCode, FolderOpen } from 'lucide-react'
+import { Save, Loader2, AlertCircle, Trash2, Plug, FileCode, FolderOpen, Brain } from 'lucide-react'
 import { api } from '../../services/api'
 import { ProjectInfo, IntegrationConfig } from '../../types'
 import PathInput from '../../components/PathInput'
@@ -25,6 +25,9 @@ export default function SettingsTab() {
   const [configDir, setConfigDir] = useState('')
   const [workingDir, setWorkingDir] = useState('')
   const [description, setDescription] = useState('')
+  const [orchEnabled, setOrchEnabled] = useState(true)
+  const [orchModel, setOrchModel] = useState('')
+  const [orchExtra, setOrchExtra] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
@@ -45,6 +48,9 @@ export default function SettingsTab() {
         setConfigDir(found.configDir ?? '')
         setWorkingDir(found.workingDir ?? '')
         setDescription(found.description ?? '')
+        setOrchEnabled(found.orchestratorEnabled ?? true)
+        setOrchModel(found.orchestratorModel ?? '')
+        setOrchExtra(found.orchestratorSystemPromptExtra ?? '')
       }
       setIntegrations(integs)
     } catch (e) {
@@ -67,6 +73,9 @@ export default function SettingsTab() {
         configDir: configDir.trim(),
         workingDir: workingDir.trim(),
         description: description.trim(),
+        orchestratorEnabled: orchEnabled,
+        orchestratorModel: orchModel.trim() || null,
+        orchestratorSystemPromptExtra: orchExtra.trim() || null,
       })
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
@@ -103,8 +112,6 @@ export default function SettingsTab() {
       </div>
     )
   }
-
-  const isDefault = slug === 'default'
 
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 py-8 space-y-6">
@@ -274,20 +281,80 @@ export default function SettingsTab() {
         )}
       </div>
 
-      {/* Danger zone */}
-      {!isDefault && (
-        <div className="bg-slate-900 border border-red-900/40 rounded-xl p-5">
-          <h3 className="text-sm font-medium text-red-400 mb-1">Опасная зона</h3>
-          <p className="text-xs text-slate-500 mb-3">Удаление проекта необратимо.</p>
+      {/* Orchestrator settings */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Brain className="w-4 h-4 text-purple-400" />
+            <span className="text-sm font-medium text-slate-300">Оркестратор</span>
+          </div>
           <button
             type="button"
-            onClick={remove}
-            className="flex items-center gap-2 bg-red-900/40 hover:bg-red-900/70 border border-red-800 text-red-300 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+            role="switch"
+            aria-checked={orchEnabled}
+            onClick={() => setOrchEnabled(v => !v)}
+            className={`relative w-9 h-5 rounded-full border transition-colors focus:outline-none flex-shrink-0 ${orchEnabled ? 'bg-purple-600 border-purple-500' : 'bg-slate-700 border-slate-600'}`}
           >
-            <Trash2 className="w-4 h-4" /> Удалить проект
+            <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${orchEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
           </button>
         </div>
-      )}
+        <p className="text-xs text-slate-500">
+          Блок <code className="font-mono bg-slate-800 px-1 rounded">orchestrator</code> — план перед и ревью после агентных блоков.
+        </p>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">
+            Модель по умолчанию
+          </label>
+          <input
+            type="text"
+            value={orchModel}
+            onChange={e => setOrchModel(e.target.value)}
+            placeholder="anthropic/claude-sonnet-4-5"
+            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:ring-2 focus:ring-purple-500"
+          />
+          <p className="text-xs text-slate-600 mt-1">Пусто — используется модель из YAML-блока.</p>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">
+            Контекст проекта для оркестратора
+          </label>
+          <textarea
+            value={orchExtra}
+            onChange={e => setOrchExtra(e.target.value)}
+            rows={4}
+            placeholder={"Язык: Java 21 + Spring Boot 3.\nПакеты: api/, core/, blocks/.\nСтиль: без комментариев, snake_case в JSON."}
+            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-purple-500 resize-y"
+          />
+          <p className="text-xs text-slate-600 mt-1">Добавляется в системный промпт каждого orchestrator-блока этого проекта.</p>
+        </div>
+
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="flex items-center gap-2 bg-purple-700 hover:bg-purple-600 disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            Сохранить
+          </button>
+        </div>
+      </div>
+
+      {/* Danger zone */}
+      <div className="bg-slate-900 border border-red-900/40 rounded-xl p-5">
+        <h3 className="text-sm font-medium text-red-400 mb-1">Опасная зона</h3>
+        <p className="text-xs text-slate-500 mb-3">Удаление проекта необратимо.</p>
+        <button
+          type="button"
+          onClick={remove}
+          className="flex items-center gap-2 bg-red-900/40 hover:bg-red-900/70 border border-red-800 text-red-300 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+        >
+          <Trash2 className="w-4 h-4" /> Удалить проект
+        </button>
+      </div>
       </>}
     </div>
   )

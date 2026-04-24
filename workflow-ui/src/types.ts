@@ -17,7 +17,7 @@ export interface EntryPoint {
 }
 
 export type RunStatus = 'PENDING' | 'RUNNING' | 'PAUSED_FOR_APPROVAL' | 'COMPLETED' | 'FAILED'
-export type IntegrationType = 'YOUTRACK' | 'GITLAB' | 'GITHUB' | 'OPENROUTER'
+export type IntegrationType = 'YOUTRACK' | 'GITLAB' | 'GITHUB' | 'OPENROUTER' | 'UNREAL'
 
 export interface ToolCallEntry {
   blockId: string
@@ -31,6 +31,7 @@ export interface ToolCallEntry {
 export interface StoredBlockOutput {
   blockId: string
   outputJson: string
+  inputJson?: string
 }
 
 export interface PipelineRun {
@@ -103,6 +104,7 @@ export interface RunFilters {
   to?: string
   page?: number
   size?: number
+  allProjects?: boolean
 }
 
 export interface RunStats {
@@ -127,12 +129,14 @@ export interface IntegrationConfig {
   project?: string
   owner?: string
   repo?: string
+  extraConfigJson?: string
   isDefault: boolean
 }
 
 export type WsMessageType =
   | 'BLOCK_STARTED'
   | 'BLOCK_COMPLETE'
+  | 'BLOCK_PROGRESS'
   | 'APPROVAL_REQUEST'
   | 'AUTO_NOTIFY'
   | 'BLOCK_SKIPPED'
@@ -144,6 +148,7 @@ export interface WsMessage {
   status?: string
   output?: Record<string, unknown>
   description?: string
+  detail?: string
   runId?: string
 }
 
@@ -261,6 +266,9 @@ export interface ProjectInfo {
   description: string | null
   configDir: string | null
   workingDir: string | null
+  orchestratorEnabled?: boolean
+  orchestratorModel?: string | null
+  orchestratorSystemPromptExtra?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -307,6 +315,20 @@ export interface BlockStatus {
   blockType?: string
   status: 'pending' | 'running' | 'awaiting_approval' | 'complete' | 'skipped' | 'failed'
   output?: Record<string, unknown>
+  input?: Record<string, unknown>
   /** ISO timestamp set when BLOCK_STARTED is received — used for per-step duration display */
   startedAt?: string
+  /** Latest progress detail from BLOCK_PROGRESS WS events */
+  progressDetail?: string
+}
+
+export interface McpServer {
+  id?: number
+  name: string
+  description?: string
+  url: string
+  headersJson?: string
+  enabled: boolean
+  createdAt?: string
+  updatedAt?: string
 }

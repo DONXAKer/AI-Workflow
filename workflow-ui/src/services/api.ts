@@ -1,4 +1,4 @@
-import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry, PipelineConfigSettings } from '../types'
+import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry, PipelineConfigSettings, McpServer } from '../types'
 import { currentProjectSlug } from './projectContext'
 
 const BASE = '/api'
@@ -109,6 +109,7 @@ export const api = {
     if (filters?.to) params.set('to', filters.to)
     if (filters?.page !== undefined) params.set('page', String(filters.page))
     if (filters?.size !== undefined) params.set('size', String(filters.size))
+    if (filters?.allProjects) params.set('allProjects', 'true')
     return request<PaginatedResponse<PipelineRunSummary>>(`${BASE}/runs?${params}`)
   },
 
@@ -166,6 +167,34 @@ export const api = {
       `${BASE}/integrations/${id}/test`,
       { method: 'POST' }
     ),
+
+  // MCP Servers
+  listMcpServers: (): Promise<McpServer[]> =>
+    request<McpServer[]>(`${BASE}/mcp-servers`),
+
+  createMcpServer: (body: Omit<McpServer, 'id' | 'createdAt' | 'updatedAt'>): Promise<McpServer> =>
+    request<McpServer>(
+      `${BASE}/mcp-servers`,
+      { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body) }
+    ),
+
+  updateMcpServer: (id: number, body: Partial<McpServer>): Promise<McpServer> =>
+    request<McpServer>(
+      `${BASE}/mcp-servers/${id}`,
+      { method: 'PUT', headers: JSON_HEADERS, body: JSON.stringify(body) }
+    ),
+
+  deleteMcpServer: (id: number): Promise<void> =>
+    request<void>(`${BASE}/mcp-servers/${id}`, { method: 'DELETE' }),
+
+  testMcpServer: (id: number): Promise<{ success: boolean; message: string }> =>
+    request<{ success: boolean; message: string }>(
+      `${BASE}/mcp-servers/${id}/test`,
+      { method: 'POST' }
+    ),
+
+  toggleMcpServer: (id: number): Promise<McpServer> =>
+    request<McpServer>(`${BASE}/mcp-servers/${id}/toggle`, { method: 'PATCH' }),
 
   // Agent Profiles
   listAgentProfiles: (): Promise<AgentProfile[]> =>

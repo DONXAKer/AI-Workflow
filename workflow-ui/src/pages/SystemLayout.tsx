@@ -1,9 +1,10 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { Users, Settings, Bot, FileSearch, Power, DollarSign } from 'lucide-react'
+import { Users, Settings, Bot, FileSearch, Power, DollarSign, FolderKanban } from 'lucide-react'
 import clsx from 'clsx'
 
 const TABS = [
   { to: '/system/users', label: 'Пользователи', icon: Users },
+  { to: '/system/projects', label: 'Проекты', icon: FolderKanban },
   { to: '/system/integrations', label: 'Интеграции', icon: Settings },
   { to: '/system/agent-profiles', label: 'Агенты', icon: Bot },
   { to: '/system/audit', label: 'Журнал', icon: FileSearch },

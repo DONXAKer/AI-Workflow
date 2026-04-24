@@ -17,7 +17,7 @@ test.describe('Project scoping — X-Project-Slug header', () => {
         body: JSON.stringify({ content: [], totalElements: 0, totalPages: 0, page: 0, size: 25 }),
       })
     })
-    await page.goto('/runs/history')
+    await page.goto('/runs/active')
     await expect.poll(() => capturedSlugs.length).toBeGreaterThan(0)
     expect(capturedSlugs[0]).toBe('default')
   })
@@ -64,7 +64,7 @@ test.describe('Project scoping — X-Project-Slug header', () => {
           configDir: './config', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }]),
       })
     })
-    await page.goto('/runs/history')
+    await page.goto('/runs/active')
     // /api/auth/me всегда шлётся, /api/projects — в ProjectSwitcher
     await expect.poll(() => authHeaders.length).toBeGreaterThan(0)
     expect(authHeaders[0]).toBeUndefined()
