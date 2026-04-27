@@ -207,7 +207,7 @@ export default function ApprovalDialog({ approval, remainingBlocks = [], onDecis
                     onChange={e => setJumpTarget(e.target.value)}
                     className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    {remainingBlocks.map(b => <option key={b} value={b}>{b}</option>)}
+                    {remainingBlocks.map(b => <option key={b} value={b}>{blockIdLabel(b)}</option>)}
                   </select>
                   <button
                     type="button"

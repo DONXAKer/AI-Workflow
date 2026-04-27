@@ -159,16 +159,20 @@ public class PipelineRunner {
         for (BlockConfig blockConfig : sorted) {
             if (blockConfig.getId().equals(fromBlockId)) break;
             pipelineRun.getCompletedBlocks().add(blockConfig.getId());
+            // Only persist a BlockOutput when the entry point actually injects real data.
+            // Empty pre-entry blocks must NOT appear in the UI as completed.
             Map<String, Object> injected = injectedOutputs != null
                 ? injectedOutputs.getOrDefault(blockConfig.getId(), new HashMap<>())
                 : new HashMap<>();
-            try {
-                String outputJson = objectMapper.writeValueAsString(injected);
-                BlockOutput blockOutput = BlockOutput.builder()
-                    .run(pipelineRun).blockId(blockConfig.getId()).outputJson(outputJson).build();
-                pipelineRun.getOutputs().add(blockOutput);
-            } catch (Exception e) {
-                log.warn("Failed to serialize injected output for block {}: {}", blockConfig.getId(), e.getMessage());
+            if (!injected.isEmpty()) {
+                try {
+                    String outputJson = objectMapper.writeValueAsString(injected);
+                    BlockOutput blockOutput = BlockOutput.builder()
+                        .run(pipelineRun).blockId(blockConfig.getId()).outputJson(outputJson).build();
+                    pipelineRun.getOutputs().add(blockOutput);
+                } catch (Exception e) {
+                    log.warn("Failed to serialize injected output for block {}: {}", blockConfig.getId(), e.getMessage());
+                }
             }
         }
 
@@ -210,6 +214,7 @@ public class PipelineRunner {
         // the virtual thread (which has no Hibernate session) can access them freely.
         run.getCompletedBlocks().size();
         run.getAutoApprove().size();
+        run.getLoopIterations().size(); // must be loaded so loopback limits survive restart
         run.getOutputs().forEach(o -> o.getBlockId()); // touch each element
 
         run.setStatus(RunStatus.RUNNING);

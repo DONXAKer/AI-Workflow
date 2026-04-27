@@ -1,6 +1,7 @@
 package com.workflow.blocks;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.workflow.core.expr.PathNotFoundException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
@@ -100,9 +101,21 @@ public class TaskMdInputBlock implements Block {
         if (rawPath == null || rawPath.toString().isBlank()) {
             throw new IllegalArgumentException("task_md_input: config.file_path is required");
         }
-        String filePath = stringInterpolator != null
-            ? stringInterpolator.interpolate(rawPath.toString(), run, input)
-            : rawPath.toString();
+        String filePath;
+        try {
+            filePath = stringInterpolator != null
+                ? stringInterpolator.interpolate(rawPath.toString(), run, input)
+                : rawPath.toString();
+        } catch (PathNotFoundException e) {
+            // Fallback for runs started before namedInputs support: use 'requirement' as the file path.
+            Object req = input.get("requirement");
+            if (req != null && !req.toString().isBlank()) {
+                log.warn("task_md_input: {} — falling back to 'requirement' as file path", e.getMessage());
+                filePath = req.toString();
+            } else {
+                throw e;
+            }
+        }
         Path path = Paths.get(filePath).toAbsolutePath();
         if (!Files.isRegularFile(path)) {
             throw new IllegalArgumentException("task_md_input: file not found: " + path);

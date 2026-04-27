@@ -642,6 +642,9 @@ public class RunController {
                        "placeholder", "PROJ-42", "required", true),
                 Map.of("name", "mrIid", "label", "MR / PR Number", "type", "number",
                        "placeholder", "87", "required", true));
+            case "task_file" -> List.of(
+                Map.of("name", "task_file", "label", "Путь к файлу задачи (.md)", "type", "text",
+                       "placeholder", "/projects/my-project/tasks/FEAT-001-my-task.md", "required", true));
             case "none" -> List.of();
             default -> List.of(
                 Map.of("name", "requirement", "label", "Requirement", "type", "textarea", "required", true));

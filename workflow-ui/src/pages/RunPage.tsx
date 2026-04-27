@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
-import { AlertCircle, Loader2, RotateCcw, Undo2, FileEdit, FilePlus, Sparkles } from 'lucide-react'
+import { AlertCircle, Loader2, RotateCcw, Undo2, FileEdit, FilePlus, Sparkles, Download } from 'lucide-react'
 import { useToast } from '../context/ToastContext'
 import { api } from '../services/api'
 import { connectToRun } from '../services/websocket'
@@ -130,13 +130,16 @@ export default function RunPage() {
         }
       }
 
-      // Hydrate completed blocks — merge in persisted output/input when available
-      const completedStatuses: BlockStatus[] = (data.completedBlocks ?? []).map(blockId => ({
-        blockId,
-        status: 'complete' as const,
-        output: outputMap.get(blockId),
-        input: inputMap.get(blockId),
-      }))
+      // Hydrate completed blocks — only blocks that have a persisted output are shown.
+      // Pre-entry blocks added by runFrom() with no real injection are excluded.
+      const completedStatuses: BlockStatus[] = (data.completedBlocks ?? [])
+        .filter(blockId => outputMap.has(blockId))
+        .map(blockId => ({
+          blockId,
+          status: 'complete' as const,
+          output: outputMap.get(blockId),
+          input: inputMap.get(blockId),
+        }))
 
       // Add current block if not already in completedBlocks
       if (data.currentBlock && !data.completedBlocks?.includes(data.currentBlock)) {
@@ -539,6 +542,25 @@ export default function RunPage() {
                 Перезапуск
               </button>
             )}
+
+            {/* Download report */}
+            {runId && (
+              <a
+                href={isHistorical ? `/api/runs/${runId}/report` : undefined}
+                download
+                onClick={!isHistorical ? e => e.preventDefault() : undefined}
+                className={clsx(
+                  'flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-colors',
+                  isHistorical
+                    ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white'
+                    : 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed'
+                )}
+                title={isHistorical ? 'Скачать HTML-отчёт о запуске' : 'Отчёт будет доступен после завершения'}
+              >
+                <Download className="w-3.5 h-3.5" />
+                Отчёт
+              </a>
+            )}
           </div>
         }
       />
@@ -697,7 +719,7 @@ export default function RunPage() {
             <div className="space-y-2 text-sm">
               <div>
                 <span className="text-slate-400">Старт с блока:</span>{' '}
-                <span className="font-mono text-blue-300">{relaunchBlock}</span>
+                <span className="text-blue-300">{blockIdLabel(relaunchBlock)}</span>
               </div>
               <div>
                 <span className="text-slate-400">Передаётся выходов:</span>{' '}
@@ -706,8 +728,8 @@ export default function RunPage() {
               {relaunchInjectedBlocks.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 pt-1">
                   {relaunchInjectedBlocks.map(b => (
-                    <span key={b} className="px-2 py-0.5 text-xs font-mono rounded bg-slate-800 text-slate-300 border border-slate-700">
-                      {b}
+                    <span key={b} className="px-2 py-0.5 text-xs rounded bg-slate-800 text-slate-300 border border-slate-700">
+                      {blockIdLabel(b)}
                     </span>
                   ))}
                 </div>
