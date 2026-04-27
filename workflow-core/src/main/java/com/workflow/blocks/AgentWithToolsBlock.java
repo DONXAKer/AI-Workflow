@@ -64,6 +64,36 @@ public class AgentWithToolsBlock implements Block {
 
     private static final Logger log = LoggerFactory.getLogger(AgentWithToolsBlock.class);
 
+    private static final String FALLBACK_PROMPT_HEADER = """
+        You are a Senior Software Engineer with deep expertise in reading, navigating, and modifying \
+        production codebases. You use tools methodically to understand before you change.
+
+        ## Core Task
+        Implement the given task by exploring the codebase, planning your changes, and executing them \
+        precisely. Verify your work before finishing.
+
+        ## Best Practices
+        1. Read before you write — always read a file before modifying it.
+        2. Explore the codebase structure with Glob/Grep before assuming where things live.
+        3. Make the smallest change that satisfies the task — do not refactor unrelated code.
+        4. Follow existing naming conventions, package structure, and patterns in the codebase.
+        5. Write tests alongside the implementation (check where existing tests live first).
+        6. Use Bash to verify the build/tests pass before declaring the task done.
+        7. If you encounter an unexpected state, investigate with tools — do not guess.""";
+
+    private static final String FALLBACK_PROMPT_FOOTER = """
+        ## Quality Bar
+        A complete implementation:
+        - Passes the build and existing tests
+        - Includes at least one test for the new logic
+        - Changes only files directly relevant to the task
+
+        NEVER:
+        - Write code for a file you have not read in this session
+        - Introduce a new dependency without checking if it already exists in the project
+        - Leave debug prints, TODOs, or commented-out code in the final output
+        - Declare the task done without running a build or test command""";
+
     private static final int DEFAULT_MAX_ITERATIONS = 40;
     private static final double DEFAULT_BUDGET_USD_CAP = 5.0;
 
@@ -78,8 +108,8 @@ public class AgentWithToolsBlock implements Block {
     @Override public String getName() { return "agent_with_tools"; }
 
     @Override public String getDescription() {
-        return "Runs an LLM tool-use loop with a configured set of native tools "
-            + "(Read/Write/Edit/Glob/Grep/Bash) scoped to the project's working_dir.";
+        return "Запускает агентный цикл LLM с набором нативных инструментов "
+            + "(Read/Write/Edit/Glob/Grep/Bash), ограниченных рабочей директорией проекта.";
     }
 
     @Override
@@ -113,11 +143,12 @@ public class AgentWithToolsBlock implements Block {
             .toList();
 
         List<String> bashAllowlist = asStringList(cfg, "bash_allowlist");
-        ToolContext toolCtx = new ToolContext(workingDir, bashAllowlist);
+        ToolContext toolCtx = new ToolContext(workingDir, bashAllowlist, run.getId(), blockConfig.getId());
 
         AgentConfig agent = blockConfig.getAgent() != null ? blockConfig.getAgent() : new AgentConfig();
         String model = agent.getModel() != null ? agent.getModel() : "fast";
-        String systemPrompt = agent.getSystemPrompt();
+        String systemPrompt = AgentConfig.buildSystemPrompt(
+            FALLBACK_PROMPT_HEADER, agent.getSystemPrompt(), FALLBACK_PROMPT_FOOTER);
 
         int maxIterations = asInt(cfg, "max_iterations", DEFAULT_MAX_ITERATIONS);
         double budgetUsdCap = asDouble(cfg, "budget_usd_cap", DEFAULT_BUDGET_USD_CAP);

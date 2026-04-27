@@ -6,6 +6,7 @@ import { PipelineRunSummary } from '../../types'
 import RunStatusBadge from './RunStatusBadge'
 import RunDuration from './RunDuration'
 import { useRelativeTime } from '../../hooks/useRelativeTime'
+import { runHref } from '../../utils/runHref'
 
 function CopyId({ id }: { id: string }) {
   const [copied, setCopied] = useState(false)
@@ -125,7 +126,7 @@ export default function RunsTable({
               runs.map(run => (
                 <tr
                   key={run.id}
-                  onClick={() => navigate(`/runs/${run.id}`, { state: { from, backHref: location.pathname + location.search } })}
+                  onClick={() => navigate(runHref(run.id, location.pathname), { state: { from, backHref: location.pathname + location.search } })}
                   className={clsx(
                     'transition-colors hover:bg-slate-800/30 cursor-pointer',
                     run.status === 'PAUSED_FOR_APPROVAL' && 'border-l-2 border-amber-500'
@@ -166,7 +167,7 @@ export default function RunsTable({
                   </td>
                   <td className="px-4 py-3.5">
                     <Link
-                      to={`/runs/${run.id}`}
+                      to={runHref(run.id, location.pathname)}
                       state={{ from }}
                       onClick={e => e.stopPropagation()}
                       className="text-xs text-blue-400 hover:text-blue-300 transition-colors whitespace-nowrap"

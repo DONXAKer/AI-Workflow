@@ -3,6 +3,7 @@ import { CheckCircle, Edit3, XCircle, SkipForward, ArrowRight, AlertCircle, X } 
 import { WsMessage, ApprovalDecision, ApprovalDecisionType } from '../types'
 import clsx from 'clsx'
 import BlockOutputViewer from './BlockOutputViewer'
+import { blockIdLabel } from '../utils/blockLabels'
 
 interface Props {
   approval: WsMessage
@@ -120,7 +121,8 @@ export default function ApprovalDialog({ approval, remainingBlocks = [], onDecis
               <AlertCircle className="w-5 h-5 text-amber-400" />
               <h2 className="text-base font-semibold text-white">Требуется одобрение</h2>
             </div>
-            <p className="text-sm text-slate-400 font-mono">Блок: <span className="text-amber-300">{blockId}</span></p>
+            <p className="text-sm text-amber-200 font-medium">{blockIdLabel(blockId)}</p>
+            <p className="text-xs text-slate-500 font-mono mt-0.5">{blockId}</p>
             {branchName && (
               <div className="flex items-center gap-2 mt-2 px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 w-fit">
                 <span className="text-[10px] text-slate-500 uppercase tracking-wide">Ветка</span>

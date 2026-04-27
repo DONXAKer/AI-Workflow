@@ -49,6 +49,41 @@ export function blockTypeLabel(blockType: string | undefined): string | undefine
   return BLOCK_TYPE_LABELS[blockType]
 }
 
+/**
+ * Well-known block IDs → Russian names.
+ * Covers IDs that differ from their block type (e.g. plan → Оркестратор was too generic).
+ */
+const BLOCK_ID_LABELS: Record<string, string> = {
+  // skill-marketplace pipeline
+  youtrack_input:   'Задача YouTrack',
+  task_md:          'Чтение задачи',
+  analysis:         'Анализ требований',
+  clarification:    'Уточнение требований',
+  plan:             'Планирование',
+  codegen:          'Генерация кода',
+  build_test:       'Сборка и тесты',
+  review:           'Ревью кода',
+  pr:               'Pull Request',
+  ci:               'CI/CD',
+
+  // generic aliases
+  code_generation:  'Генерация кода',
+  verify_code:      'Верификация кода',
+  verify_analysis:  'Верификация анализа',
+  deploy:           'Деплой',
+  rollback:         'Откат',
+  release:          'Релиз',
+}
+
+/**
+ * Returns Russian display label for a block ID.
+ * Tries ID-specific map first, then falls back to type-based map (many IDs match type names).
+ */
+export function blockIdLabel(blockId: string | undefined | null): string {
+  if (!blockId) return '—'
+  return BLOCK_ID_LABELS[blockId] ?? BLOCK_TYPE_LABELS[blockId] ?? blockId
+}
+
 // ---------------------------------------------------------------------------
 // Model recommendations per block category
 // ---------------------------------------------------------------------------

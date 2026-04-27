@@ -26,6 +26,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -78,7 +79,16 @@ public class RunController {
     private ToolCallAuditRepository toolCallAuditRepository;
 
     @Autowired(required = false)
+    private com.workflow.tools.BashApprovalGate bashApprovalGate;
+
+    @Autowired(required = false)
     private ProjectRepository projectRepository;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
+    private BlockOutputRepository blockOutputRepository;
 
     @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
     @PostMapping("/runs")
@@ -519,12 +529,66 @@ public class RunController {
                 default -> { return ResponseEntity.badRequest().body(Map.of("error", "Unknown decision: " + decision)); }
             }
 
-            webSocketApprovalGate.resolveApproval(blockId, result);
+            boolean resolved = webSocketApprovalGate.resolveApproval(blockId, result);
+            if (!resolved) {
+                // Pipeline thread died (e.g. server restart) but run is still PAUSED_FOR_APPROVAL.
+                // Directly mark the paused block as completed in DB so the resumed thread skips
+                // the LLM re-run (and avoids the spurious APPROVAL_REQUEST WebSocket message).
+                PipelineRun stuckRun = pipelineRunRepository.findById(UUID.fromString(runId)).orElse(null);
+                if (stuckRun != null && stuckRun.getStatus() == RunStatus.PAUSED_FOR_APPROVAL) {
+                    try {
+                        String pausedBlockId = stuckRun.getCurrentBlock() != null
+                            ? stuckRun.getCurrentBlock() : blockId;
+
+                        // If EDIT: update the persisted block output with the user's edits
+                        if ("EDIT".equalsIgnoreCase(decision) && !result.getOutput().isEmpty()) {
+                            try {
+                                String editedJson = objectMapper.writeValueAsString(result.getOutput());
+                                java.util.List<BlockOutput> existing = blockOutputRepository
+                                    .findByRunIdAndBlockId(stuckRun.getId(), pausedBlockId);
+                                if (!existing.isEmpty()) {
+                                    BlockOutput bo = existing.get(existing.size() - 1);
+                                    bo.setOutputJson(editedJson);
+                                    blockOutputRepository.save(bo);
+                                } else {
+                                    blockOutputRepository.save(BlockOutput.builder()
+                                        .run(stuckRun).blockId(pausedBlockId).outputJson(editedJson).build());
+                                }
+                            } catch (Exception editEx) {
+                                log.warn("Failed to update block output for EDIT decision: {}", editEx.getMessage());
+                            }
+                        }
+
+                        // Mark paused block as completed — resume() will skip it (skipCompleted=true)
+                        stuckRun.getCompletedBlocks().add(pausedBlockId);
+
+                        if (result.isSkipFuture()) {
+                            stuckRun.getAutoApprove().add("*");
+                        }
+
+                        stuckRun.setStatus(RunStatus.RUNNING);
+                        pipelineRunRepository.save(stuckRun);
+
+                        PipelineConfig config = resolveConfigForRun(stuckRun);
+                        if (config == null) {
+                            return ResponseEntity.internalServerError().body(
+                                Map.of("error", "Cannot resolve pipeline config for run " + runId));
+                        }
+                        pipelineRunner.resume(config, runId);
+                        log.info("Resumed stuck run {} after approval for block {} (direct DB completion)", runId, pausedBlockId);
+                    } catch (Exception resumeEx) {
+                        log.error("Failed to resume stuck run {}: {}", runId, resumeEx.getMessage(), resumeEx);
+                        return ResponseEntity.internalServerError().body(
+                            Map.of("error", "Run was stuck after restart; resume failed: " + resumeEx.getMessage()));
+                    }
+                }
+            }
             auditService.record("APPROVAL_RESOLVE", "run", runId, Map.of(
                 "blockId", blockId,
                 "decision", decision,
-                "skipFuture", skipFuture));
-            return ResponseEntity.ok(Map.of("success", true, "blockId", blockId, "decision", decision));
+                "skipFuture", skipFuture,
+                "resumed", !resolved));
+            return ResponseEntity.ok(Map.of("success", true, "blockId", blockId, "decision", decision, "resumed", !resolved));
 
         } catch (Exception e) {
             log.error("Failed to resolve approval for block {}: {}", blockId, e.getMessage(), e);
@@ -665,6 +729,32 @@ public class RunController {
     }
 
     @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
+    @PostMapping("/runs/{runId}/bash-approval")
+    public ResponseEntity<?> resolveBashApproval(@PathVariable UUID runId,
+                                                  @RequestBody Map<String, Object> request) {
+        if (bashApprovalGate == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Bash approval gate not available"));
+        }
+        String requestId = (String) request.get("requestId");
+        boolean approved = Boolean.TRUE.equals(request.get("approved"));
+        boolean allowAll = Boolean.TRUE.equals(request.get("allowAll"));
+        String blockId = (String) request.get("blockId");
+
+        if (requestId == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "requestId is required"));
+        }
+        if (allowAll && blockId != null) {
+            bashApprovalGate.autoApproveBlock(runId, blockId);
+        }
+        // allowAll implies approving the current command too
+        boolean effectiveApproved = approved || allowAll;
+        bashApprovalGate.resolve(requestId, effectiveApproved);
+        auditService.record("BASH_APPROVAL", "run", runId.toString(),
+            Map.of("requestId", requestId, "approved", effectiveApproved, "allowAll", allowAll));
+        return ResponseEntity.ok(Map.of("success", true, "approved", effectiveApproved, "allowAll", allowAll));
+    }
+
+    @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
     @GetMapping("/runs/{runId}/tool-calls")
     public ResponseEntity<?> getToolCalls(@PathVariable UUID runId) {
         if (toolCallAuditRepository == null) {
@@ -679,8 +769,45 @@ public class RunController {
             m.put("inputJson", c.getInputJson());
             m.put("isError", c.isError());
             m.put("durationMs", c.getDurationMs());
+            if (c.getOutputText() != null && !c.getOutputText().isBlank()) {
+                m.put("outputText", c.getOutputText());
+            }
             return m;
         }).toList();
         return ResponseEntity.ok(result);
+    }
+
+    /**
+     * Resolves the PipelineConfig for a stuck/paused run.
+     * Primary source: configSnapshotJson (saved at run creation).
+     * Fallback: scan the config directory for a pipeline whose name matches the run's pipelineName.
+     */
+    private PipelineConfig resolveConfigForRun(PipelineRun run) {
+        // Primary: use snapshot saved at run creation
+        if (run.getConfigSnapshotJson() != null && !run.getConfigSnapshotJson().isBlank()) {
+            try {
+                return objectMapper.readValue(run.getConfigSnapshotJson(), PipelineConfig.class);
+            } catch (Exception e) {
+                log.warn("Failed to parse configSnapshotJson for run {}: {}", run.getId(), e.getMessage());
+            }
+        }
+        // Fallback: find config file by pipeline name
+        String pipelineName = run.getPipelineName();
+        if (pipelineName == null) return null;
+        try {
+            java.nio.file.Path cfgDir = Paths.get(configDir);
+            for (java.nio.file.Path p : pipelineConfigLoader.listConfigs(cfgDir)) {
+                try {
+                    PipelineConfig candidate = pipelineConfigLoader.load(p);
+                    if (pipelineName.equals(candidate.getName())) {
+                        log.info("Resolved config for stuck run {} via name match: {}", run.getId(), p);
+                        return candidate;
+                    }
+                } catch (Exception ignored) {}
+            }
+        } catch (Exception e) {
+            log.warn("Failed to scan configs for run {}: {}", run.getId(), e.getMessage());
+        }
+        return null;
     }
 }

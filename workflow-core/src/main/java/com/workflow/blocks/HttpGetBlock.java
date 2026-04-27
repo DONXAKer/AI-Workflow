@@ -56,8 +56,7 @@ public class HttpGetBlock implements Block {
     @Override public String getName() { return "http_get"; }
 
     @Override public String getDescription() {
-        return "Issues an HTTP GET to the configured URL. Exposes status, body, and "
-            + "response headers for downstream blocks. Optional JSON parse.";
+        return "Выполняет HTTP GET на настроенный URL. Передаёт статус, тело и заголовки ответа следующим блокам. Опциональный парсинг JSON.";
     }
 
     @Override

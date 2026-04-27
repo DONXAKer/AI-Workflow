@@ -28,6 +28,9 @@ import java.util.concurrent.atomic.AtomicReference;
 @Component
 public class BashTool implements Tool {
 
+    @Autowired(required = false)
+    private BashApprovalGate bashApprovalGate;
+
     private static final Logger log = LoggerFactory.getLogger(BashTool.class);
 
     static final int DEFAULT_TIMEOUT_SEC = 120;
@@ -83,7 +86,17 @@ public class BashTool implements Tool {
         if (timeoutSec <= 0) timeoutSec = DEFAULT_TIMEOUT_SEC;
 
         DenyList.assertBashAllowed(command);
-        BashAllowlist.assertMatch(command, ctx.bashAllowlist());
+        if (!BashAllowlist.matches(command, ctx.bashAllowlist())) {
+            if (bashApprovalGate != null && ctx.runId() != null) {
+                boolean approved = bashApprovalGate.requestApproval(ctx.runId(), ctx.blockId(), command);
+                if (!approved) {
+                    throw new ToolInvocationException(
+                        "команда отклонена оператором: '" + command + "'");
+                }
+            } else {
+                BashAllowlist.assertMatch(command, ctx.bashAllowlist());
+            }
+        }
 
         ProcessBuilder pb = new ProcessBuilder("sh", "-c", command);
         pb.directory(ctx.workingDir().toFile());

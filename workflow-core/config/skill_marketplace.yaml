@@ -10,12 +10,18 @@ entry_points:
     description: "Читает задачу из .md файла в проекте → план → код → тесты → review"
     from_block: task_md
     requires_input: task_file
+    inject:
+      - block_id: youtrack_input
+        source: empty
 
   - id: from_requirement
     name: "Новая задача с нуля"
     description: "Анализ → декомпозиция → план → код → тесты"
     from_block: analysis
     requires_input: requirement
+    inject:
+      - block_id: youtrack_input
+        source: empty
 
   - id: from_youtrack
     name: "Задача из YouTrack"
@@ -29,10 +35,13 @@ entry_points:
     from_block: codegen
     requires_input: requirement
     inject:
+      - block_id: youtrack_input
+        source: empty
       - block_id: analysis
         source: empty
       - block_id: plan
         source: empty
+
 
 # =============================================================================
 # Integrations
@@ -59,15 +68,7 @@ knowledge_base:
 pipeline:
 
   # ---------------------------------------------------------------------------
-  # 0a. Task file input (entry point: from_task_file)
-  # ---------------------------------------------------------------------------
-  - id: task_md
-    block: task_md_input
-    config:
-      task_file: "${input.task_file}"
-
-  # ---------------------------------------------------------------------------
-  # 0b. YouTrack Input (entry point: from_youtrack)
+  # 0a. YouTrack Input (entry point: from_youtrack)
   # ---------------------------------------------------------------------------
   - id: youtrack_input
     block: youtrack_input
@@ -75,6 +76,15 @@ pipeline:
       issue_id: ""
       task_mode: decompose
     approval: true
+
+  # ---------------------------------------------------------------------------
+  # 0b. Task file input (entry point: from_task_file)
+  # ---------------------------------------------------------------------------
+  - id: task_md
+    block: task_md_input
+    approval: false
+    config:
+      file_path: "${input.task_file}"
 
   # ---------------------------------------------------------------------------
   # 1. Analysis (fast first pass — determines complexity for clarification gate)
@@ -85,9 +95,12 @@ pipeline:
       - youtrack_input
       - task_md
     agent:
-      model: claude-opus-4-7
+      model: google/gemini-2.5-pro-preview
       system_prompt: |
-        Ты senior software architect. Проект — маркетплейс AI-навыков (skills/plugins для LLM-ассистентов).
+        Всегда отвечай на русском языке.
+
+        Ты senior software architect с 15+ годами опыта в enterprise-разработке и design of distributed systems.
+        Проект — маркетплейс AI-навыков (skills/plugins для LLM-ассистентов).
 
         Стек:
         - Backend: Java 21, Spring Boot 3.5, Gradle, PostgreSQL 16 (Flyway), Redis, MinIO/S3
@@ -100,8 +113,16 @@ pipeline:
         Рабочая директория: /projects/skill_marketplace
         Миграции: api/src/main/resources/db/migration/
 
-        Анализируй глубоко. Учитывай 289-ФЗ, 152-ФЗ при изменениях хранения данных.
-        Обязательно укажи: affected_components, technical_approach, complexity, risks.
+        Best practices для глубокого архитектурного анализа:
+        - Оценивай влияние на связанные компоненты (coupling, cohesion)
+        - Рассматривай performance implications: N+1 запросы, отсутствие индексов, блокирующие операции
+        - Выявляй security risks: injection, broken access control, sensitive data exposure
+        - При изменениях хранения данных — учитывай 289-ФЗ, 152-ФЗ
+        - Оценивай backward compatibility и migration path
+        - Указывай, нужны ли Flyway-миграции и в какой последовательности
+        - Для async-компонентов (модерация) — проверяй idempotency и error recovery
+
+        Обязательно верни: affected_components, technical_approach, complexity (low/medium/high), risks.
       max_tokens: 8192
     approval: true
 
@@ -114,7 +135,19 @@ pipeline:
       - analysis
     condition: "$.analysis.estimated_complexity != 'low'"
     agent:
-      model: claude-sonnet-4-6
+      model: google/gemini-2.5-pro-preview
+      system_prompt: |
+        Всегда отвечай на русском языке.
+
+        Ты опытный бизнес-аналитик и tech lead, специализирующийся на уточнении требований перед разработкой.
+
+        Best practices для качественного clarification:
+        - Задавай только вопросы, без ответов на которые нельзя приступить к реализации
+        - Один вопрос = одна неопределённость; не объединяй несколько в один
+        - Приоритизируй: сначала вопросы, влияющие на архитектуру и схему БД
+        - Избегай вопросов об очевидном из контекста и стека проекта
+        - Формулируй вопросы конкретно, с вариантами ответа если возможно
+        - Максимум 5 вопросов за итерацию
       max_tokens: 4096
     approval: true
 
@@ -128,9 +161,22 @@ pipeline:
       - analysis
       - task_md
     agent:
-      model: claude-opus-4-7
+      model: google/gemini-2.5-pro-preview
       temperature: 0.1
       max_tokens: 8192
+      system_prompt: |
+        Всегда отвечай на русском языке.
+
+        Ты principal software architect с глубокой экспертизой в Java/Spring Boot и Next.js.
+        Твоя задача — создать детальный, исполняемый план реализации.
+
+        Best practices для планирования:
+        - Изучи реальный код (Read/Grep/Glob) перед составлением плана — не угадывай структуру
+        - Укажи точные пути файлов для изменения/создания (не пакеты, а конкретные .java/.ts)
+        - Flyway-миграции: пронумеруй в правильном порядке, проверь последний V-номер в db/migration/
+        - Definition of Done должен быть ВЕРИФИЦИРУЕМЫМ: тесты, компиляция, конкретные API endpoints
+        - Учитывай зависимости между файлами: entity → repository → service → controller
+        - Для фронтенда: проверь существующие компоненты в web/components/ перед созданием новых
     config:
       mode: plan
       context_blocks:
@@ -156,34 +202,81 @@ pipeline:
     depends_on:
       - plan
     agent:
-      model: claude-opus-4-7
+      model: google/gemini-2.5-pro-preview
       system_prompt: |
-        Ты senior full-stack разработчик. Генерируй production-ready код для skill_marketplace.
+        Всегда отвечай на русском языке.
+
+        Ты senior full-stack разработчик с экспертизой в Java 21 / Spring Boot 3.5 и Next.js 16.
+        Генерируй production-ready код для skill_marketplace.
 
         Рабочая директория проекта: /projects/skill_marketplace
 
-        Правила:
-        - Java миграции: api/src/main/resources/db/migration/V<N>__description.sql
-        - Тесты: api/src/test/java/... (Testcontainers для интеграционных)
-        - Новые REST endpoints добавляй в соответствующий Controller, не создавай новые без необходимости
-        - Добавляй Springdoc аннотации (@Operation, @ApiResponse) на все новые endpoints
-        - Frontend компоненты: web/components/, страницы: web/app/
-        - Всегда добавляй Flyway миграцию при изменении схемы БД
-        - Соблюдай стиль существующего кода (читай соседние файлы перед написанием)
+        Структура проекта (рабочая директория /projects/skill_marketplace):
+        - Backend: api/ (Gradle Kotlin DSL — файлы api/build.gradle.kts и api/settings.gradle.kts)
+        - Frontend: web/ (Next.js, TypeScript)
+        - Gradlew находится в api/: запускай через `cd api && ./gradlew <задача>`
+        - Миграции: api/src/main/resources/db/migration/
+        - НЕ ищи build.gradle — файл называется build.gradle.kts (Kotlin DSL)
+
+        Разрешённые Bash-команды (строго этот список, других не используй):
+        - `cd api && ./gradlew compileJava` — проверить компиляцию бэкенда
+        - `cd api && ./gradlew compileTestJava` — скомпилировать тесты
+        - `cd api && ./gradlew test` — запустить unit-тесты
+        - `cd web && npm run build` — собрать фронтенд
+        - `cd web && npm run type-check` — проверить типы
+        - `ls <путь>` — посмотреть содержимое директории
+        - `find <путь> -name "*.java"` или `find <путь> -name "*.ts"` — найти файлы
+        - `grep <паттерн> <файл>` — поиск в файлах
+        - `cat <файл>` — вывести файл (используй Read вместо cat когда возможно)
+
+        Best practices для написания кода:
+        - ВСЕГДА читай соседние файлы (Read) перед написанием нового кода — соблюдай стиль и паттерны
+        - Java: используй record-классы для DTO, @Validated + @NotNull/@NotBlank для валидации
+        - Spring Security: проверяй @PreAuthorize на новых endpoints, не забывай про роли
+        - Flyway: проверь последний V-номер (ls api/src/main/resources/db/migration/), используй следующий
+        - Тесты: unit-тест на сервисный слой, интеграционный (Testcontainers) для репозитория
+        - TypeScript: строгие типы, никаких `any`; компоненты — React Server Components если нет клиентского состояния
+        - API-клиент фронтенда: используй существующие функции из web/lib/api.ts, не дублируй fetch-логику
+        - Springdoc: @Operation(summary=...) + @ApiResponse на каждый новый endpoint
+        - Не создавай новые Controller-классы без необходимости — добавляй в существующий
+        - После написания кода — запусти `cd api && ./gradlew compileJava` для проверки компиляции
       max_tokens: 16384
       temperature: 0.2
       max_iterations: 10
     config:
       working_dir: /projects/skill_marketplace
+      allowed_tools:
+        - Read
+        - Write
+        - Edit
+        - Glob
+        - Grep
+        - Bash
+      user_message: |
+        Реализуй задачу согласно плану.
+
+        ## Цель
+        {plan.goal}
+
+        ## Файлы для изменения
+        {plan.files_to_touch}
+
+        ## Подход
+        {plan.approach}
+
+        ## Definition of Done
+        {plan.definition_of_done}
+
+        После реализации запусти `cd api && ./gradlew compileJava` чтобы убедиться в отсутствии ошибок компиляции.
       bash_allowlist:
-        - "Bash(./gradlew test*)"
-        - "Bash(./gradlew compileJava)"
-        - "Bash(./gradlew compileTestJava)"
-        - "Bash(npm run build)"
-        - "Bash(npm run type-check)"
-        - "Bash(find * -name '*.java')"
-        - "Bash(find * -name '*.ts')"
+        - "Bash(./gradlew*)"
+        - "Bash(cd api*)"
+        - "Bash(cd web*)"
+        - "Bash(npm run*)"
+        - "Bash(find *)"
+        - "Bash(ls*)"
         - "Bash(grep *)"
+        - "Bash(cat *)"
     approval: true
 
   # ---------------------------------------------------------------------------
@@ -197,13 +290,13 @@ pipeline:
       working_dir: /projects/skill_marketplace
       command: |
         echo "=== API build ===" &&
-        cd api && ./gradlew compileJava compileTestJava --no-daemon -q &&
+        cd /projects/skill_marketplace/api && ./gradlew compileJava compileTestJava --no-daemon -q 2>&1 | tail -20 &&
         echo "=== API tests (unit only) ===" &&
-        ./gradlew test --no-daemon -x integrationTest -q 2>&1 | tail -30 &&
+        ./gradlew test --no-daemon -q 2>&1 | tail -30 &&
         echo "=== Frontend type check ===" &&
-        cd ../web && npm run build 2>&1 | tail -20 &&
+        cd /projects/skill_marketplace/web && npm run build 2>&1 | tail -20 &&
         echo "=== DONE ==="
-      timeout_seconds: 300
+      timeout_seconds: 600
     approval: false
 
   # ---------------------------------------------------------------------------
@@ -214,8 +307,23 @@ pipeline:
     depends_on:
       - build_test
     agent:
-      model: claude-opus-4-7
+      model: google/gemini-2.5-pro-preview
       max_tokens: 8192
+      system_prompt: |
+        Всегда отвечай на русском языке.
+
+        Ты senior code reviewer с экспертизой в Java/Spring Boot, Next.js и security-аудите.
+        Твоя цель — проверить реализацию по критериям Definition of Done, не придираясь к стилю.
+
+        Best practices для code review:
+        - Проверяй ФАКТЫ (читай реальные файлы через Read/Grep), а не предполагай
+        - Тесты: убедись что тест реально запускается и покрывает новую логику (не просто существует файл)
+        - Security: broken access control (@PreAuthorize), SQL injection (нативные запросы без параметров)
+        - Производительность: N+1 в JPA (fetch lazy без @EntityGraph где нужен join), отсутствие индексов на FK
+        - Не требуй Javadoc — он не используется в проекте
+        - Не блокируй на стилистических замечаниях (форматирование, именование) — только функциональные проблемы
+        - action=retry только если проблема исправима в рамках следующей итерации codegen
+        - action=escalate если проблема архитектурная или требует изменения требований
     config:
       mode: review
       plan_block: plan
@@ -225,6 +333,12 @@ pipeline:
       max_iterations: 10
       system_prompt_extra: |
         Java 21 Spring Boot 3.5 + Next.js 16 monorepo.
+        Working directory: /projects/skill_marketplace
+
+        IMPORTANT: This project has NO git history — do NOT use git diff or git log.
+        Instead, use Read/Grep/Glob tools to check the actual files listed in the plan.
+        Use `find /projects/skill_marketplace -name "*.java" -newer /tmp/.review_start` if you need to find recently modified files.
+
         MANDATORY documentation checks:
         - OpenAPI/Springdoc annotations (@Operation, @ApiResponse, @Schema) present on all new/changed REST endpoints
         - CLAUDE.md updated if architecture or major component changed

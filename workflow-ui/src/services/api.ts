@@ -74,6 +74,7 @@ export const api = {
     fromBlock?: string
     entryPointId?: string
     injectedOutputs?: Record<string, Record<string, unknown>>
+    inputs?: Record<string, string>
     dryRun?: boolean
   }) =>
     request<{ id: string; runId: string; status: string }>(
@@ -129,6 +130,12 @@ export const api = {
     request<Record<string, unknown>>(
       `${BASE}/runs/${runId}/approval`,
       { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(decision) }
+    ),
+
+  resolveBashApproval: (runId: string, requestId: string, approved: boolean, allowAll = false, blockId?: string) =>
+    request<Record<string, unknown>>(
+      `${BASE}/runs/${runId}/bash-approval`,
+      { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ requestId, approved, allowAll, blockId }) }
     ),
 
   listPipelines: (): Promise<{ path: string; name: string; pipelineName?: string; description?: string; error?: string }[]> =>

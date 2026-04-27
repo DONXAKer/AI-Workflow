@@ -1,14 +1,16 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { Play, AlertCircle, Loader2 } from 'lucide-react'
 import { api } from '../../services/api'
 import { EntryPoint } from '../../types'
+import { runHref } from '../../utils/runHref'
 import clsx from 'clsx'
 
 type PipelineInfo = { path: string; name: string; pipelineName?: string; description?: string; error?: string }
 
 export default function LaunchTab() {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const [pipelines, setPipelines] = useState<PipelineInfo[]>([])
   const [loadingPipelines, setLoadingPipelines] = useState(true)
   const [pipelinesError, setPipelinesError] = useState<string | null>(null)
@@ -72,6 +74,7 @@ export default function LaunchTab() {
       if (dryRun) body.dryRun = true
       if (selectedEntryPoint) {
         body.entryPointId = selectedEntryPoint.id
+        const extraInputs: Record<string, string> = {}
         for (const field of selectedEntryPoint.inputFields) {
           const val = fieldValues[field.name]?.trim()
           if (!val) continue
@@ -79,13 +82,19 @@ export default function LaunchTab() {
           else if (field.name === 'youtrackIssue') body.youtrackIssue = val
           else if (field.name === 'branchName') body.branchName = val
           else if (field.name === 'mrIid') body.mrIid = parseInt(val, 10)
+          else extraInputs[field.name] = val
+        }
+        if (Object.keys(extraInputs).length > 0) {
+          body.inputs = extraInputs
+          // Use first extra input value as display label if no explicit requirement
+          if (!body.requirement) body.requirement = Object.values(extraInputs)[0]
         }
       } else {
         const req = fieldValues['requirement']?.trim()
         if (req) body.requirement = req
       }
       const run = await api.startRun(body)
-      if (run?.id) navigate(`/runs/${run.id}`)
+      if (run?.id) navigate(runHref(run.id, pathname))
       else setSubmitError('Неожиданный ответ сервера')
     } catch {
       setSubmitError('Не удалось запустить. Сервер работает?')

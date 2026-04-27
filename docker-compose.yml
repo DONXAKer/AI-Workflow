@@ -7,6 +7,7 @@ services:
     volumes:
       - workflow-state:/app/.workflow
       - ${PROJECTS_ROOT}:/projects:rw
+      - gradle-cache:/root/.gradle
     environment:
       WORKFLOW_MODE: gui
       BROWSE_ROOT_PATH: /projects
@@ -26,3 +27,4 @@ services:
 
 volumes:
   workflow-state:
+  gradle-cache:

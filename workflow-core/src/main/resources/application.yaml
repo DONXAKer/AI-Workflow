@@ -38,6 +38,9 @@ logging:
 
 server:
   port: 8020
+  servlet:
+    session:
+      timeout: 24h
 
 management:
   endpoints:

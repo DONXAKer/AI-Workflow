@@ -37,6 +37,7 @@ public class RunWebSocketHandler {
         message.put("status", "running");
         message.put("runId", runId.toString());
         send(runId, message);
+        broadcastGlobal(message);
     }
 
     public void sendBlockComplete(UUID runId, String blockId, Map<String, Object> output) {
@@ -57,6 +58,23 @@ public class RunWebSocketHandler {
         message.put("output", output);
         message.put("status", "awaiting_approval");
         message.put("runId", runId.toString());
+        send(runId, message);
+        // Broadcast lightweight signal (no output) so the active-runs list updates in real-time
+        Map<String, Object> globalSignal = new HashMap<>();
+        globalSignal.put("type", "APPROVAL_REQUEST");
+        globalSignal.put("blockId", blockId);
+        globalSignal.put("status", "awaiting_approval");
+        globalSignal.put("runId", runId.toString());
+        broadcastGlobal(globalSignal);
+    }
+
+    public void sendBashApprovalRequest(UUID runId, String blockId, String command, String requestId) {
+        Map<String, Object> message = new HashMap<>();
+        message.put("type", "BASH_APPROVAL_REQUEST");
+        message.put("runId", runId.toString());
+        message.put("blockId", blockId);
+        message.put("command", command);
+        message.put("requestId", requestId);
         send(runId, message);
     }
 

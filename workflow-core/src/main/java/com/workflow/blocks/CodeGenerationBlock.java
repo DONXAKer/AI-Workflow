@@ -2,6 +2,7 @@ package com.workflow.blocks;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.workflow.config.AgentConfig;
 import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
 import com.workflow.knowledge.KnowledgeBase;
@@ -18,10 +19,40 @@ public class CodeGenerationBlock implements Block {
 
     private static final Logger log = LoggerFactory.getLogger(CodeGenerationBlock.class);
 
-    private static final String SYSTEM_PROMPT =
-        "Ты — эксперт-разработчик. Ты генерируешь точные изменения кода production-качества на основе требований задачи " +
-        "и контекста существующей кодовой базы. Ты всегда следуешь устоявшимся паттернам в кодовой базе и пишешь чистый, " +
-        "хорошо задокументированный код. Отвечай только валидным JSON согласно инструкции.";
+    private static final String SYSTEM_PROMPT_HEADER = """
+        You are a Senior Software Engineer with 10+ years of experience delivering production-grade \
+        features across complex codebases. You write code that is readable, testable, and maintainable \
+        by the next engineer who touches it.
+
+        ## Core Task
+        Generate precise file changes that implement the given task. Every change must be grounded in \
+        the existing codebase — read existing patterns before inventing new ones.
+
+        ## Best Practices
+        1. Read the relevant existing files before generating any code.
+        2. Follow the naming conventions, package structure, and patterns already in the codebase.
+        3. Make the smallest change that satisfies the requirement — do not refactor unrelated code.
+        4. Include tests alongside the implementation, not as an afterthought.
+        5. If the change touches a database schema, include the migration file.
+        6. Commit message must follow Conventional Commits: feat/fix/refactor/test/chore(scope): description.
+        7. Each file in "changes" must contain the complete file content, not a patch.""";
+
+    private static final String SYSTEM_PROMPT_FOOTER = """
+        ## Output Contract
+        Respond ONLY with a valid JSON object matching the schema in the user message.
+        No markdown fences, no preamble, no commentary outside the JSON.
+
+        ## Quality Bar
+        High-quality code generation:
+        - Each changed file has been conceptually read before modification
+        - No change outside the scope of the task
+        - Tests exist for the new logic
+
+        NEVER:
+        - Generate code for a file you have not conceptually read in this context
+        - Omit the migration when a database table changes
+        - Write TODO comments without a ticket reference
+        - Skip the test_changes array (use empty array [] if tests are not applicable)""";
 
     private static final String USER_TEMPLATE =
         "## Задача для реализации\n{task_summary}\n\n{task_description}\n\n" +
@@ -162,11 +193,9 @@ public class CodeGenerationBlock implements Block {
                 .replace("{approved_approach}", approvedApproach.isBlank() ? "(не указан)" : approvedApproach)
                 + loopbackSection;
 
-            String effectiveSystemPrompt = SYSTEM_PROMPT;
-            if (config.getAgent() != null && config.getAgent().getSystemPrompt() != null
-                    && !config.getAgent().getSystemPrompt().isBlank()) {
-                effectiveSystemPrompt = config.getAgent().getSystemPrompt() + "\n\n" + SYSTEM_PROMPT;
-            }
+            String yamlPrompt = config.getAgent() != null ? config.getAgent().getSystemPrompt() : null;
+            String effectiveSystemPrompt = AgentConfig.buildSystemPrompt(
+                SYSTEM_PROMPT_HEADER, yamlPrompt, SYSTEM_PROMPT_FOOTER);
 
             String llmResponse;
             try {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
-import { Bell } from 'lucide-react'
+import { Link, useSearchParams, useLocation } from 'react-router-dom'
+import { Bell, CheckCircle, Loader2 } from 'lucide-react'
 import { api } from '../services/api'
 import { PipelineRunSummary } from '../types'
 import { connectToGlobalRuns } from '../services/websocket'
@@ -8,6 +8,8 @@ import RunStatusBadge from '../components/runs/RunStatusBadge'
 import RunDuration from '../components/runs/RunDuration'
 import CancelButton from '../components/runs/CancelButton'
 import PageHeader from '../components/layout/PageHeader'
+import { blockIdLabel } from '../utils/blockLabels'
+import { runHref } from '../utils/runHref'
 import clsx from 'clsx'
 
 type ActiveFilter = 'all' | 'RUNNING' | 'PAUSED_FOR_APPROVAL'
@@ -19,6 +21,7 @@ const FILTERS: { key: ActiveFilter; label: string }[] = [
 ]
 
 export default function ActiveRunsPage() {
+  const { pathname } = useLocation()
   const [searchParams] = useSearchParams()
   const [runs, setRuns] = useState<PipelineRunSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -30,10 +33,11 @@ export default function ActiveRunsPage() {
   const [pipelineFilter, setPipelineFilter] = useState('')
   const [pipelines, setPipelines] = useState<string[]>([])
   const [fadingOut, setFadingOut] = useState<Set<string>>(new Set())
+  const [approvingIds, setApprovingIds] = useState<Set<string>>(new Set())
 
   const load = useCallback(async () => {
     try {
-      const data = await api.listRuns({ status: ['RUNNING', 'PAUSED_FOR_APPROVAL'], size: 100, page: 0 })
+      const data = await api.listRuns({ status: ['RUNNING', 'PAUSED_FOR_APPROVAL'], size: 100, page: 0, allProjects: true })
       setRuns(data.content)
       const names = [...new Set(data.content.map(r => r.pipelineName))]
       setPipelines(names)
@@ -48,19 +52,26 @@ export default function ActiveRunsPage() {
     load()
 
     const disconnect = connectToGlobalRuns(msg => {
-      if (msg.type === 'RUN_COMPLETE' && msg.runId) {
-        const runId = msg.runId
+      const runId = msg.runId
+      if (!runId) return
+      if (msg.type === 'RUN_COMPLETE') {
         if (msg.status === 'FAILED') {
-          // Keep FAILED rows visible — update the status so the badge reflects failure
           setRuns(prev => prev.map(r => r.id === runId ? { ...r, status: 'FAILED' as const } : r))
         } else {
-          // COMPLETED and other terminal statuses fade out and disappear after 3s
           setFadingOut(prev => new Set([...prev, runId]))
           setTimeout(() => {
             setRuns(prev => prev.filter(r => r.id !== runId))
             setFadingOut(prev => { const s = new Set(prev); s.delete(runId); return s })
           }, 3000)
         }
+      } else if (msg.type === 'BLOCK_STARTED' && msg.blockId) {
+        setRuns(prev => prev.map(r =>
+          r.id === runId ? { ...r, status: 'RUNNING' as const, currentBlock: msg.blockId ?? r.currentBlock } : r
+        ))
+      } else if (msg.type === 'APPROVAL_REQUEST' && msg.blockId) {
+        setRuns(prev => prev.map(r =>
+          r.id === runId ? { ...r, status: 'PAUSED_FOR_APPROVAL' as const, currentBlock: msg.blockId ?? r.currentBlock } : r
+        ))
       } else {
         load()
       }
@@ -86,6 +97,19 @@ export default function ActiveRunsPage() {
 
   // FAILED rows remain until page refresh — they are not fading out
   const isFailed = (id: string) => runs.find(r => r.id === id)?.status === 'FAILED'
+
+  const handleQuickApprove = useCallback(async (runId: string, blockId: string | null) => {
+    if (!blockId) return
+    setApprovingIds(prev => new Set([...prev, runId]))
+    try {
+      await api.submitApproval(runId, { blockId, decision: 'APPROVE' })
+      setRuns(prev => prev.map(r => r.id === runId ? { ...r, status: 'RUNNING' as const } : r))
+    } catch {
+      // ignore — user can navigate to run page for full approval
+    } finally {
+      setApprovingIds(prev => { const s = new Set(prev); s.delete(runId); return s })
+    }
+  }, [])
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
@@ -206,7 +230,7 @@ export default function ActiveRunsPage() {
                       <RunStatusBadge status={run.status} />
                     </td>
                     <td className="px-4 py-3.5">
-                      <span className="font-mono text-xs text-slate-400">{run.currentBlock ?? '—'}</span>
+                      <span className="text-xs text-slate-400" title={run.currentBlock ?? undefined}>{blockIdLabel(run.currentBlock)}</span>
                     </td>
                     <td className="px-4 py-3.5 text-xs text-slate-500 font-mono">
                       <RunDuration startedAt={run.startedAt} completedAt={run.completedAt} live={run.status === 'RUNNING' || run.status === 'PAUSED_FOR_APPROVAL'} />
@@ -215,31 +239,44 @@ export default function ActiveRunsPage() {
                       <div className="flex items-center gap-2">
                         {run.status === 'FAILED' ? (
                           <Link
-                            to={`/runs/${run.id}`}
-                            state={{ from: 'active' }}
+                            to={runHref(run.id, pathname)}
+                            state={{ from: 'active', backHref: pathname }}
                             className="text-xs text-red-400 hover:text-red-300 transition-colors font-medium"
                           >
                             Ошибка
                           </Link>
                         ) : run.status === 'PAUSED_FOR_APPROVAL' ? (
-                          <Link
-                            to={`/runs/${run.id}`}
-                            state={{ from: 'active' }}
-                            className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 transition-colors font-medium"
-                          >
-                            <Bell className="w-3.5 h-3.5" />
-                            Рассмотреть
-                          </Link>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleQuickApprove(run.id, run.currentBlock)}
+                              disabled={approvingIds.has(run.id)}
+                              className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-green-800/50 border border-green-700/60 text-green-300 hover:bg-green-800 disabled:opacity-50 transition-colors"
+                              title={`Одобрить блок «${blockIdLabel(run.currentBlock)}»`}
+                            >
+                              {approvingIds.has(run.id)
+                                ? <Loader2 className="w-3 h-3 animate-spin" />
+                                : <CheckCircle className="w-3 h-3" />}
+                              Одобрить
+                            </button>
+                            <Link
+                              to={runHref(run.id, pathname)}
+                              state={{ from: 'active', backHref: pathname }}
+                              className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 transition-colors"
+                              title="Открыть для полного рассмотрения"
+                            >
+                              <Bell className="w-3 h-3" />
+                            </Link>
+                          </div>
                         ) : (
                           <Link
-                            to={`/runs/${run.id}`}
-                            state={{ from: 'active' }}
+                            to={runHref(run.id, pathname)}
+                            state={{ from: 'active', backHref: pathname }}
                             className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
                           >
                             Подробнее
                           </Link>
                         )}
-                        {/* Cancel only available for active (non-failed) runs */}
                         {run.status !== 'FAILED' && (
                           <CancelButton runId={run.id} onCancelled={load} />
                         )}

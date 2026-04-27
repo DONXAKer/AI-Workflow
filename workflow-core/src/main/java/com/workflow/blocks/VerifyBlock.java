@@ -2,6 +2,7 @@ package com.workflow.blocks;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.workflow.config.AgentConfig;
 import com.workflow.config.BlockConfig;
 import com.workflow.config.FieldCheckConfig;
 import com.workflow.config.LLMCheckConfig;
@@ -91,11 +92,31 @@ public class VerifyBlock implements Block {
                 "\n\nRespond ONLY with a JSON object: {\"passed\": bool, \"score\": 0-10, \"issues\": [], \"recommendation\": \"\"}";
 
             try {
-                String verifySystemPrompt = "You are a quality assurance expert. Evaluate outputs objectively and return valid JSON.";
-                if (config.getAgent() != null && config.getAgent().getSystemPrompt() != null
-                        && !config.getAgent().getSystemPrompt().isBlank()) {
-                    verifySystemPrompt = config.getAgent().getSystemPrompt() + "\n\n" + verifySystemPrompt;
-                }
+                String verifyHeader = """
+                    You are a Staff QA Engineer and technical reviewer with 10+ years experience \
+                    evaluating software designs, implementations, and processes.
+
+                    ## Core Task
+                    Objectively evaluate the provided output against the given criteria. \
+                    Score it honestly — a lenient review that misses real issues causes production bugs.
+
+                    ## Best Practices
+                    1. Evaluate each criterion independently before forming an overall judgment.
+                    2. Be specific: name the exact field, line, or pattern that fails, not just "it's wrong".
+                    3. Distinguish between blocking issues (score < min) and advisory observations.
+                    4. A score of 10 requires zero issues — reserve it for exceptional outputs.
+                    5. If the output is ambiguous, score conservatively and explain what is unclear.""";
+                String verifyFooter = """
+                    ## Output Contract
+                    Respond ONLY with valid JSON: {"passed": bool, "score": 0-10, "issues": [], "recommendation": ""}
+                    No markdown, no preamble, no commentary outside the JSON.
+
+                    NEVER:
+                    - Give a passing score to an output with a blocking issue
+                    - Write an empty issues array when score < 7
+                    - Use vague issue descriptions like "could be improved" without specifics""";
+                String yamlVerifyPrompt = config.getAgent() != null ? config.getAgent().getSystemPrompt() : null;
+                String verifySystemPrompt = AgentConfig.buildSystemPrompt(verifyHeader, yamlVerifyPrompt, verifyFooter);
                 String llmResponse = llmClient.complete(model,
                     verifySystemPrompt,
                     llmPrompt, 1024, 0.3);

@@ -216,6 +216,10 @@ export async function setupApiMocks(page: Page, setup: MockSetup = {}) {
     })
   })
 
+  await page.route(/\/api\/runs\/[^/?]+\/tool-calls$/, async (route: Route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+  })
+
   await page.route(/\/api\/runs\/[^/?]+$/, async (route: Route) => {
     await route.fulfill({
       status: 200,

@@ -34,3 +34,7 @@ docker-compose.override.yml
 # Misc
 *.tmp
 *.bak
+/workflow-ui/test-results/*
+
+# Personal pipeline configs
+config/

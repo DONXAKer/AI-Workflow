@@ -11,12 +11,48 @@ import ReturnDialog from '../components/ReturnDialog'
 import LoopbackTimeline from '../components/LoopbackTimeline'
 import LogPanel from '../components/LogPanel'
 import { parseConfigSnapshot } from '../utils/configSnapshot'
+import { blockIdLabel } from '../utils/blockLabels'
 import { useMemo } from 'react'
 import RunStatusBadge from '../components/runs/RunStatusBadge'
 import RunDuration from '../components/runs/RunDuration'
 import CancelButton from '../components/runs/CancelButton'
 import PageHeader from '../components/layout/PageHeader'
 import clsx from 'clsx'
+
+function ErrorBanner({ error }: { error: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const hasStack = error.includes('\n')
+  const summary = hasStack ? error.split('\n')[0] : error
+  const detail = hasStack ? error.slice(summary.length + 1).trimStart() : ''
+
+  return (
+    <div className="text-red-300 bg-red-950/50 border border-red-800 rounded-xl px-5 py-4 space-y-2">
+      <div className="flex items-start gap-3">
+        <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-red-200 mb-0.5">Запуск завершился с ошибкой</p>
+          <p className="text-sm font-mono break-all">{summary}</p>
+        </div>
+      </div>
+      {detail && (
+        <div>
+          <button
+            type="button"
+            onClick={() => setExpanded(v => !v)}
+            className="text-xs text-red-400 hover:text-red-300 underline underline-offset-2"
+          >
+            {expanded ? 'Скрыть стектрейс' : 'Показать стектрейс'}
+          </button>
+          {expanded && (
+            <pre className="mt-2 text-xs text-red-300/80 bg-red-950/60 border border-red-900 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap break-all leading-relaxed">
+              {detail}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function RunPage() {
   const { runId } = useParams<{ runId: string }>()
@@ -39,6 +75,13 @@ export default function RunPage() {
   const [activeTab, setActiveTab] = useState<'blocks' | 'timeline' | 'logs' | 'summary'>('blocks')
   const [toolCalls, setToolCalls] = useState<ToolCallEntry[]>([])
   const [showReturnDialog, setShowReturnDialog] = useState(false)
+  const [requirementExpanded, setRequirementExpanded] = useState(false)
+  const [relaunchBlock, setRelaunchBlock] = useState<string | null>(null)
+  const [relaunchLoading, setRelaunchLoading] = useState(false)
+  const [relaunchError, setRelaunchError] = useState<string | null>(null)
+  const [bashApprovalRequest, setBashApprovalRequest] = useState<{ command: string; requestId: string; blockId: string } | null>(null)
+  const [bashApprovalLoading, setBashApprovalLoading] = useState(false)
+  const [bashApprovalError, setBashApprovalError] = useState<string | null>(null)
   const { show: showToast } = useToast()
 
   // Keep a stable ref to the latest run so reconnect handler can read current state
@@ -135,7 +178,7 @@ export default function RunPage() {
     if (msg.type === 'BLOCK_STARTED') {
       const blockId = msg.blockId ?? 'unknown'
       const startedAt = new Date().toISOString()
-      addLog(`Block started: ${blockId}`)
+      addLog(`Блок запущен: ${blockIdLabel(blockId)}`)
       setBlockStatuses(prev => {
         const exists = prev.find(b => b.blockId === blockId)
         if (exists) return prev.map(b => b.blockId === blockId ? { ...b, status: 'running', startedAt } : b)
@@ -144,7 +187,7 @@ export default function RunPage() {
       setRun(prev => prev ? { ...prev, status: 'RUNNING', currentBlock: blockId } : prev)
     } else if (msg.type === 'BLOCK_COMPLETE') {
       const blockId = msg.blockId ?? 'unknown'
-      addLog(`Block complete: ${blockId} — ${msg.status ?? 'done'}`)
+      addLog(`Блок завершён: ${blockIdLabel(blockId)} — ${msg.status ?? 'done'}`)
       setBlockStatuses(prev =>
         prev.map(b =>
           b.blockId === blockId
@@ -156,7 +199,7 @@ export default function RunPage() {
       if (runId) api.getRunToolCalls(runId).then(setToolCalls).catch(() => {})
     } else if (msg.type === 'APPROVAL_REQUEST') {
       const blockId = msg.blockId ?? 'unknown'
-      addLog(`Approval requested for block: ${blockId}`)
+      addLog(`Требуется одобрение: ${blockIdLabel(blockId)}`)
       setPendingApproval(msg)
       setShowApprovalDialog(true)
       // Transition the running block to awaiting_approval so the table reflects the gate
@@ -168,9 +211,16 @@ export default function RunPage() {
         )
       )
       setRun(prev => prev ? { ...prev, status: 'PAUSED_FOR_APPROVAL' } : prev)
+    } else if (msg.type === 'BASH_APPROVAL_REQUEST') {
+      const cmd = msg.command ?? ''
+      const reqId = msg.requestId ?? ''
+      const bId = msg.blockId ?? ''
+      addLog(`Запрос разрешения bash: ${cmd}`)
+      setBashApprovalRequest({ command: cmd, requestId: reqId, blockId: bId })
+      setBashApprovalError(null)
     } else if (msg.type === 'AUTO_NOTIFY') {
       const blockId = msg.blockId ?? 'unknown'
-      addLog(`Auto-notify: ${blockId} completed without blocking approval`)
+      addLog(`Авто-уведомление: ${blockIdLabel(blockId)} завершён без подтверждения`)
       setBlockStatuses(prev =>
         prev.map(b =>
           b.blockId === blockId
@@ -180,7 +230,7 @@ export default function RunPage() {
       )
       showToast({
         severity: 'info',
-        title: `Блок «${blockId}» автоматически принят`,
+        title: `Блок «${blockIdLabel(blockId)}» автоматически принят`,
         body: msg.description ?? 'auto_notify mode — pipeline продолжился без блокирующего подтверждения.',
       })
     } else if (msg.type === 'BLOCK_PROGRESS') {
@@ -194,7 +244,7 @@ export default function RunPage() {
       )
     } else if (msg.type === 'BLOCK_SKIPPED') {
       const blockId = msg.blockId ?? 'unknown'
-      addLog(`Block skipped: ${blockId}`)
+      addLog(`Блок пропущен: ${blockIdLabel(blockId)}`)
       setBlockStatuses(prev => {
         const exists = prev.find(b => b.blockId === blockId)
         if (exists) return prev.map(b => b.blockId === blockId ? { ...b, status: 'skipped' } : b)
@@ -202,7 +252,7 @@ export default function RunPage() {
       })
     } else if (msg.type === 'RUN_COMPLETE') {
       const status = msg.status === 'FAILED' ? 'FAILED' : 'COMPLETED'
-      addLog(`Run ${status.toLowerCase()}`)
+      addLog(status === 'FAILED' ? 'Запуск завершился с ошибкой' : 'Запуск завершён')
       setRun(prev => prev ? { ...prev, status } : prev)
       // When a run fails, any block still marked running should transition to failed
       // so the block table reflects which step caused the failure.
@@ -250,7 +300,12 @@ export default function RunPage() {
       await api.submitApproval(runId, decision)
       setPendingApproval(null)
       setShowApprovalDialog(false)
-      addLog(`Approval submitted: ${decision.decision} for block ${decision.blockId}`)
+      addLog(`Одобрение отправлено: ${decision.decision} для блока ${blockIdLabel(decision.blockId)}`)
+      showToast({
+        severity: 'info',
+        title: `«${blockIdLabel(decision.blockId)}» одобрен`,
+        body: 'Пайплайн продолжается...',
+      })
       // Optimistically transition block back to running (WS will confirm with BLOCK_COMPLETE)
       if (decision.decision === 'APPROVE' || decision.decision === 'EDIT') {
         setBlockStatuses(prev =>
@@ -271,9 +326,10 @@ export default function RunPage() {
       }
       setRun(prev => prev ? { ...prev, status: 'RUNNING' } : prev)
     } catch {
-      addLog(`ERROR: Failed to submit approval for block ${decision.blockId}`)
+      addLog(`ОШИБКА: не удалось отправить одобрение для блока ${blockIdLabel(decision.blockId)}`)
+      showToast({ severity: 'error', title: 'Ошибка одобрения', body: 'Не удалось отправить решение. Попробуйте снова.' })
     }
-  }, [runId, addLog])
+  }, [runId, addLog, showToast])
 
   // Blocks that haven't finished yet — used to populate the Jump target list in ApprovalDialog
   const remainingBlocks = blockStatuses
@@ -297,6 +353,7 @@ export default function RunPage() {
     const taskMd = outputMap.get('task_md') as Record<string, unknown> | undefined
     const impl = outputMap.get('impl') as Record<string, unknown> | undefined
     const commit = outputMap.get('commit') as Record<string, unknown> | undefined
+    const analysis = outputMap.get('analysis') as Record<string, unknown> | undefined
 
     const writtenFiles = new Set<string>()
     const editedFiles = new Set<string>()
@@ -312,8 +369,55 @@ export default function RunPage() {
       } catch { /* skip */ }
     }
 
-    return { taskMd, impl, commit, writtenFiles: [...writtenFiles], editedFiles: [...editedFiles] }
+    return { taskMd, impl, commit, analysis, writtenFiles: [...writtenFiles], editedFiles: [...editedFiles] }
   }, [run?.outputs, toolCalls])
+
+  // Redirect global /runs/:runId to project-scoped URL when possible
+  useEffect(() => {
+    if (!run || !runId) return
+    const inProjectRoute = location.pathname.includes('/projects/')
+    if (!inProjectRoute && run.projectSlug && run.projectSlug !== 'default') {
+      navigate(`/projects/${run.projectSlug}/runs/${runId}`, { replace: true })
+    }
+  }, [run?.projectSlug, runId, location.pathname, navigate])
+
+  const relaunchInjectedBlocks = useMemo(() => {
+    if (!relaunchBlock || !run) return []
+    const completed = run.completedBlocks ?? []
+    const idx = completed.indexOf(relaunchBlock)
+    return idx >= 0 ? completed.slice(0, idx) : completed
+  }, [relaunchBlock, run])
+
+  const handleRelaunchSubmit = useCallback(async () => {
+    if (!run || !relaunchBlock) return
+    setRelaunchLoading(true)
+    setRelaunchError(null)
+    try {
+      const pipelines = await api.listPipelines()
+      const match = pipelines.find(p => p.pipelineName === run.pipelineName || p.name === run.pipelineName)
+      if (!match) throw new Error(`Не найден конфиг для "${run.pipelineName}"`)
+
+      const injectedOutputs: Record<string, Record<string, unknown>> = {}
+      for (const stored of (run.outputs ?? [])) {
+        if (relaunchInjectedBlocks.includes(stored.blockId)) {
+          try { injectedOutputs[stored.blockId] = JSON.parse(stored.outputJson) } catch { /* skip */ }
+        }
+      }
+
+      const result = await api.startRun({
+        configPath: match.path,
+        requirement: run.requirement,
+        fromBlock: relaunchBlock,
+        injectedOutputs,
+      })
+      setRelaunchBlock(null)
+      navigate(`/runs/${result.id ?? result.runId}`)
+    } catch (e) {
+      setRelaunchError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRelaunchLoading(false)
+    }
+  }, [run, relaunchBlock, relaunchInjectedBlocks, navigate])
 
   const handleReturn = useCallback(async (targetBlock: string, comment: string) => {
     if (!runId || !run) return
@@ -322,9 +426,32 @@ export default function RunPage() {
     if (!match) throw new Error(`Не удалось найти путь к конфигу для "${run.pipelineName}"`)
     await api.returnRun(runId, { targetBlock, comment, configPath: match.path })
     setShowReturnDialog(false)
-    addLog(`Return submitted: back to ${targetBlock}`)
+    addLog(`Возврат отправлен: к блоку «${blockIdLabel(targetBlock)}»`)
     loadRun(true)
   }, [runId, run, addLog, loadRun])
+
+  const handleBashApproval = useCallback(async (approved: boolean, allowAll = false) => {
+    if (!runId || !bashApprovalRequest) return
+    setBashApprovalLoading(true)
+    setBashApprovalError(null)
+    try {
+      await api.resolveBashApproval(runId, bashApprovalRequest.requestId, approved, allowAll, bashApprovalRequest.blockId)
+      if (allowAll) {
+        addLog(`Разрешены все команды для блока «${blockIdLabel(bashApprovalRequest.blockId)}»`)
+      } else {
+        addLog(approved
+          ? `Команда разрешена: ${bashApprovalRequest.command}`
+          : `Команда отклонена: ${bashApprovalRequest.command}`)
+      }
+      setBashApprovalRequest(null)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      addLog(`Ошибка ответа на запрос bash: ${msg}`)
+      setBashApprovalError(msg)
+    } finally {
+      setBashApprovalLoading(false)
+    }
+  }, [runId, bashApprovalRequest, addLog])
 
   // Load tool calls for all runs; refresh when a block completes
   useEffect(() => {
@@ -402,7 +529,10 @@ export default function RunPage() {
             {isHistorical && run && (
               <button
                 type="button"
-                onClick={() => navigate('/pipelines', { state: { pipeline: run.pipelineName, requirement: run.requirement } })}
+                onClick={() => {
+                  const slug = run.projectSlug && run.projectSlug !== 'default' ? run.projectSlug : null
+                  navigate(slug ? `/projects/${slug}/launch` : '/')
+                }}
                 className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
@@ -426,13 +556,7 @@ export default function RunPage() {
         <>
           {/* FAILED banner */}
           {run.status === 'FAILED' && run.error && (
-            <div className="flex items-start gap-3 text-red-300 bg-red-950/50 border border-red-800 rounded-xl px-5 py-4">
-              <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-medium text-red-200 mb-0.5">Запуск завершился с ошибкой</p>
-                <p className="text-sm">{run.error}</p>
-              </div>
-            </div>
+            <ErrorBanner error={run.error} />
           )}
 
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
@@ -446,11 +570,22 @@ export default function RunPage() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
               <div>
                 <p className="text-slate-500 text-xs uppercase tracking-wide mb-1">Требование</p>
-                <p className="text-slate-200 line-clamp-3">{run.requirement || '—'}</p>
+                <p className={clsx('text-slate-200 whitespace-pre-wrap', !requirementExpanded && 'line-clamp-3')}>
+                  {run.requirement || '—'}
+                </p>
+                {(run.requirement?.length ?? 0) > 120 && (
+                  <button
+                    type="button"
+                    onClick={() => setRequirementExpanded(v => !v)}
+                    className="mt-1 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+                  >
+                    {requirementExpanded ? 'Свернуть' : 'Показать полностью'}
+                  </button>
+                )}
               </div>
               <div>
                 <p className="text-slate-500 text-xs uppercase tracking-wide mb-1">Текущий блок</p>
-                <p className="text-slate-200 font-mono">{run.currentBlock || '—'}</p>
+                <p className="text-slate-200" title={run.currentBlock ?? undefined}>{blockIdLabel(run.currentBlock)}</p>
               </div>
               <div>
                 <p className="text-slate-500 text-xs uppercase tracking-wide mb-1">Начало</p>
@@ -487,6 +622,64 @@ export default function RunPage() {
         />
       )}
 
+      {/* Bash command approval dialog */}
+      {bashApprovalRequest && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+          <div className="bg-slate-900 border border-amber-700/60 rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-full bg-amber-900/50 border border-amber-700/60 flex items-center justify-center flex-shrink-0">
+                <span className="text-amber-400 text-sm font-bold">$</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-amber-200">Команда вне списка разрешённых</p>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Блок <span className="font-mono text-slate-300">{blockIdLabel(bashApprovalRequest.blockId)}</span> хочет выполнить:
+                </p>
+              </div>
+            </div>
+            <pre className="bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-sm text-amber-100 font-mono whitespace-pre-wrap break-all max-h-40 overflow-auto">
+              {bashApprovalRequest.command}
+            </pre>
+            {bashApprovalError && (
+              <div className="flex items-start gap-2 rounded-lg bg-red-950/60 border border-red-800 px-3 py-2 text-xs text-red-300">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>Ошибка: {bashApprovalError}</span>
+              </div>
+            )}
+            <p className="text-xs text-slate-500">
+              Нажмите «Разрешить всё для блока» чтобы не подтверждать каждую команду отдельно.
+            </p>
+            <div className="flex gap-2 justify-end pt-1 flex-wrap">
+              <button
+                type="button"
+                onClick={() => handleBashApproval(false)}
+                disabled={bashApprovalLoading}
+                className="px-3 py-2 rounded-lg text-sm font-medium bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-50 transition-colors"
+              >
+                Запретить
+              </button>
+              <button
+                type="button"
+                onClick={() => handleBashApproval(true)}
+                disabled={bashApprovalLoading}
+                className="px-3 py-2 rounded-lg text-sm font-medium bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white transition-colors"
+              >
+                {bashApprovalLoading ? 'Отправка...' : 'Разрешить'}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleBashApproval(true, true)}
+                disabled={bashApprovalLoading}
+                className="px-3 py-2 rounded-lg text-sm font-medium bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white transition-colors"
+                title="Разрешить эту и все следующие команды в текущем блоке"
+              >
+                {bashApprovalLoading ? 'Отправка...' : 'Разрешить всё для блока'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Return-to-block dialog */}
       {showReturnDialog && run && (
         <ReturnDialog
@@ -494,6 +687,58 @@ export default function RunPage() {
           onSubmit={handleReturn}
           onClose={() => setShowReturnDialog(false)}
         />
+      )}
+
+      {/* Relaunch from block dialog */}
+      {relaunchBlock && run && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+            <h3 className="text-base font-semibold text-slate-100">Новый запуск с блока</h3>
+            <div className="space-y-2 text-sm">
+              <div>
+                <span className="text-slate-400">Старт с блока:</span>{' '}
+                <span className="font-mono text-blue-300">{relaunchBlock}</span>
+              </div>
+              <div>
+                <span className="text-slate-400">Передаётся выходов:</span>{' '}
+                <span className="text-slate-200">{relaunchInjectedBlocks.length} блок{relaunchInjectedBlocks.length === 1 ? '' : relaunchInjectedBlocks.length < 5 ? 'а' : 'ов'}</span>
+              </div>
+              {relaunchInjectedBlocks.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {relaunchInjectedBlocks.map(b => (
+                    <span key={b} className="px-2 py-0.5 text-xs font-mono rounded bg-slate-800 text-slate-300 border border-slate-700">
+                      {b}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            {relaunchError && (
+              <div className="flex items-start gap-2 rounded-lg bg-red-950/60 border border-red-800 px-3 py-2 text-xs text-red-300">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>{relaunchError}</span>
+              </div>
+            )}
+            <div className="flex gap-2 justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => { setRelaunchBlock(null); setRelaunchError(null) }}
+                disabled={relaunchLoading}
+                className="px-3 py-2 rounded-lg text-sm font-medium bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-50 transition-colors"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={handleRelaunchSubmit}
+                disabled={relaunchLoading}
+                className="px-3 py-2 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white transition-colors"
+              >
+                {relaunchLoading ? 'Запуск...' : 'Запустить'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Tabs — Event Log hidden for historical runs (backend does not persist events) */}
@@ -597,6 +842,47 @@ export default function RunPage() {
             </div>
           )}
 
+          {/* Analysis */}
+          {runSummary.analysis && (
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Анализ требования</h3>
+                {(() => {
+                  const complexity = runSummary.analysis!['estimated_complexity'] as string | undefined
+                  if (!complexity) return null
+                  return (
+                    <span className={clsx(
+                      'text-xs px-2 py-0.5 rounded-full font-medium border',
+                      complexity === 'low'
+                        ? 'bg-green-900/40 border-green-800/60 text-green-300'
+                        : complexity === 'high'
+                          ? 'bg-red-900/40 border-red-800/60 text-red-300'
+                          : 'bg-amber-900/40 border-amber-800/60 text-amber-300'
+                    )}>
+                      {complexity === 'low' ? 'Низкая сложность' : complexity === 'high' ? 'Высокая сложность' : 'Средняя сложность'}
+                    </span>
+                  )
+                })()}
+              </div>
+              {(() => {
+                const approach = runSummary.analysis!['technical_approach'] as string | undefined
+                return approach ? (
+                  <p className="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">{approach}</p>
+                ) : null
+              })()}
+              {Array.isArray(runSummary.analysis['affected_components']) && (runSummary.analysis['affected_components'] as string[]).length > 0 && (
+                <div>
+                  <p className="text-xs text-slate-500 uppercase tracking-wide mb-1.5">Затронутые компоненты</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(runSummary.analysis['affected_components'] as string[]).map((c, i) => (
+                      <span key={i} className="px-2 py-0.5 text-xs font-mono rounded bg-slate-800 text-slate-300 border border-slate-700">{c}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Agent summary */}
           {runSummary.impl && (
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
@@ -674,10 +960,10 @@ export default function RunPage() {
           blockStatuses={blockStatuses}
           snapshots={blockSnapshots}
           toolCalls={toolCalls}
-          // Only live runs with a pending approval expose the Review action
           onReviewApproval={!isHistorical && pendingApproval ? (blockId) => {
             if (pendingApproval.blockId === blockId) setShowApprovalDialog(true)
           } : undefined}
+          onRelaunchFromBlock={isHistorical ? (blockId) => setRelaunchBlock(blockId) : undefined}
         />
       </div>
       <div className={activeTab === 'timeline' ? undefined : 'hidden'}>

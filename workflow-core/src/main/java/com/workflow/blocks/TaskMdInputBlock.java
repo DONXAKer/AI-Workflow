@@ -89,8 +89,7 @@ public class TaskMdInputBlock implements Block {
     @Override public String getName() { return "task_md_input"; }
 
     @Override public String getDescription() {
-        return "Parses a task.md file into structured sections, "
-            + "extracts feat_id/slug/title, and sets heuristic classification flags.";
+        return "Парсит файл task.md на структурированные секции, извлекает feat_id/slug/title и проставляет эвристические флаги классификации.";
     }
 
     @Override

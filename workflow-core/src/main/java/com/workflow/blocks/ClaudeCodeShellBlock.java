@@ -65,9 +65,7 @@ public class ClaudeCodeShellBlock implements Block {
     @Override public String getName() { return "claude_code_shell"; }
 
     @Override public String getDescription() {
-        return "Shells out to the local Claude Code CLI (claude -p) with MCP config "
-            + "and tool allowlist. Used for Layer 3 flows (e.g. MCP-driven Blueprint "
-            + "generation) that are not routed through OpenRouter.";
+        return "Вызывает локальный Claude Code CLI (claude -p) с MCP-конфигом и списком разрешённых инструментов. Используется для Layer 3 сценариев (MCP-driven Blueprint), которые не проходят через OpenRouter.";
     }
 
     @Override

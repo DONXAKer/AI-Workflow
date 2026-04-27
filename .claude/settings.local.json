@@ -140,7 +140,11 @@
       "Bash(make full *)",
       "Bash(./gradlew compileTestJava --no-daemon -q)",
       "Bash(./gradlew test *)",
-      "Bash(xargs -I{} grep -o 'tests: [0-9]*, failures: [0-9]*, errors: [0-9]*' {})"
+      "Bash(xargs -I{} grep -o 'tests: [0-9]*, failures: [0-9]*, errors: [0-9]*' {})",
+      "Bash(npx playwright *)",
+      "Bash(./gradlew compileJava -q)",
+      "Bash(gradle compileJava)",
+      "Bash(gradle test *)"
     ]
   }
 }

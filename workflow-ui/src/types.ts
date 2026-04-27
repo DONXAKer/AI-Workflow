@@ -26,6 +26,7 @@ export interface ToolCallEntry {
   inputJson: string
   isError: boolean
   durationMs: number
+  outputText?: string
 }
 
 export interface StoredBlockOutput {
@@ -138,6 +139,7 @@ export type WsMessageType =
   | 'BLOCK_COMPLETE'
   | 'BLOCK_PROGRESS'
   | 'APPROVAL_REQUEST'
+  | 'BASH_APPROVAL_REQUEST'
   | 'AUTO_NOTIFY'
   | 'BLOCK_SKIPPED'
   | 'RUN_COMPLETE'
@@ -150,6 +152,9 @@ export interface WsMessage {
   description?: string
   detail?: string
   runId?: string
+  // BASH_APPROVAL_REQUEST fields
+  command?: string
+  requestId?: string
 }
 
 export interface AgentProfile {

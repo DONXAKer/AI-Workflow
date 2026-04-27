@@ -30,6 +30,16 @@ public final class BashAllowlist {
 
     private BashAllowlist() {}
 
+    public static boolean matches(String command, List<String> allowlist) {
+        if (command == null || command.isBlank()) return false;
+        if (allowlist == null || allowlist.isEmpty()) return false;
+        String trimmed = command.trim();
+        for (String rawPattern : allowlist) {
+            if (toRegex(rawPattern).matcher(trimmed).matches()) return true;
+        }
+        return false;
+    }
+
     public static void assertMatch(String command, List<String> allowlist) {
         if (command == null || command.isBlank()) {
             throw new ToolInvocationException("empty bash command");

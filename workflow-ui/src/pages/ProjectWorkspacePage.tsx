@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Activity, History, Settings, Plug, Sparkles, Loader2, AlertCircle, Server } from 'lucide-react'
+import { ArrowLeft, Activity, History, Settings, Plug, Sparkles, Play, Loader2, AlertCircle, Server } from 'lucide-react'
 import { api } from '../services/api'
 import { ProjectInfo } from '../types'
 import { setCurrentProjectSlug } from '../services/projectContext'
@@ -9,6 +9,7 @@ import clsx from 'clsx'
 
 const TABS = [
   { to: 'smart-start',  label: 'Умный запуск', icon: Sparkles },
+  { to: 'launch',       label: 'Запуск',       icon: Play },
   { to: 'active',       label: 'Активные',     icon: Activity },
   { to: 'history',      label: 'История',      icon: History },
   { to: 'integrations', label: 'Интеграции',   icon: Plug },

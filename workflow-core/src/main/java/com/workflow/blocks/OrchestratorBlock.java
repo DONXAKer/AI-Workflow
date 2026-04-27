@@ -111,8 +111,7 @@ public class OrchestratorBlock implements Block {
     @Override public String getName() { return "orchestrator"; }
 
     @Override public String getDescription() {
-        return "Supervisor agent: plan mode produces a structured implementation plan; "
-            + "review mode verifies the result against the plan's definition_of_done.";
+        return "Агент-супервайзер: в режиме plan формирует структурированный план реализации; в режиме review сверяет результат с definition_of_done из плана.";
     }
 
     @Override
@@ -128,16 +127,19 @@ public class OrchestratorBlock implements Block {
             .filter(s -> !s.isBlank())
             .collect(Collectors.joining("\n\n"));
 
+        AgentConfig agent = blockConfig.getAgent() != null ? blockConfig.getAgent() : new AgentConfig();
+        String agentSystemPrompt = agent.getSystemPrompt() != null ? agent.getSystemPrompt().strip() : "";
+
         if ("review".equals(mode)) {
-            return runReview(cfg, input, blockConfig, run, workingDir, combinedExtra);
+            return runReview(cfg, input, blockConfig, run, workingDir, combinedExtra, agentSystemPrompt);
         }
-        return runPlan(cfg, input, blockConfig, run, workingDir, combinedExtra);
+        return runPlan(cfg, input, blockConfig, run, workingDir, combinedExtra, agentSystemPrompt);
     }
 
     // ── Plan mode ──────────────────────────────────────────────────────────────
 
     private Map<String, Object> runPlan(Map<String, Object> cfg, Map<String, Object> input,
-            BlockConfig blockConfig, PipelineRun run, Path workingDir, String extra) throws Exception {
+            BlockConfig blockConfig, PipelineRun run, Path workingDir, String extra, String agentSystemPrompt) throws Exception {
 
         StringBuilder userMsg = new StringBuilder("Analyze the task and produce an implementation plan.\n\n");
 
@@ -152,7 +154,7 @@ public class OrchestratorBlock implements Block {
         }
 
         return runLoop(blockConfig, run, workingDir, userMsg.toString(),
-            buildPlanSystemPrompt(extra), PLAN_TOOLS, PLAN_BASH,
+            buildPlanSystemPrompt(extra, agentSystemPrompt), PLAN_TOOLS, PLAN_BASH,
             asInt(cfg, "max_iterations", DEFAULT_MAX_ITER_PLAN),
             asDouble(cfg, "budget_usd_cap", DEFAULT_BUDGET_USD), "plan");
     }
@@ -161,7 +163,7 @@ public class OrchestratorBlock implements Block {
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> runReview(Map<String, Object> cfg, Map<String, Object> input,
-            BlockConfig blockConfig, PipelineRun run, Path workingDir, String extra) throws Exception {
+            BlockConfig blockConfig, PipelineRun run, Path workingDir, String extra, String agentSystemPrompt) throws Exception {
 
         String planBlockId = asString(cfg, "plan_block", "");
         Map<String, Object> planOut = planBlockId.isBlank() ? Map.of()
@@ -196,7 +198,7 @@ public class OrchestratorBlock implements Block {
         }
 
         return runLoop(blockConfig, run, workingDir, userMsg.toString(),
-            buildReviewSystemPrompt(extra), REVIEW_TOOLS, REVIEW_BASH,
+            buildReviewSystemPrompt(extra, agentSystemPrompt), REVIEW_TOOLS, REVIEW_BASH,
             asInt(cfg, "max_iterations", DEFAULT_MAX_ITER_REVIEW),
             asDouble(cfg, "budget_usd_cap", DEFAULT_BUDGET_USD), "review");
     }
@@ -279,8 +281,11 @@ public class OrchestratorBlock implements Block {
 
     // ── System prompts ─────────────────────────────────────────────────────────
 
-    private static String buildPlanSystemPrompt(String extra) {
+    private static String buildPlanSystemPrompt(String extra, String agentSystemPrompt) {
         StringBuilder sb = new StringBuilder();
+        if (!agentSystemPrompt.isBlank()) {
+            sb.append(agentSystemPrompt).append("\n\n");
+        }
         sb.append("You are a technical architect. Explore the codebase and produce a detailed implementation plan.\n\n");
         sb.append("Use Read, Grep, and Glob to explore. Do NOT write or modify any files.\n");
         if (!extra.isBlank()) {
@@ -310,8 +315,11 @@ Respond with the JSON only. No text after the closing ```.
         return sb.toString();
     }
 
-    private static String buildReviewSystemPrompt(String extra) {
+    private static String buildReviewSystemPrompt(String extra, String agentSystemPrompt) {
         StringBuilder sb = new StringBuilder();
+        if (!agentSystemPrompt.isBlank()) {
+            sb.append(agentSystemPrompt).append("\n\n");
+        }
         sb.append("You are a code reviewer. Verify that the implementation matches the definition of done.\n\n");
         sb.append("Use Read, Grep, Glob, and git diff (Bash) to examine the actual changes. Do NOT modify files.\n");
         sb.append("CRITICAL: After gathering evidence, you MUST end your response with ONLY a JSON block.\n");

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { Sparkles, AlertCircle, Loader2, Play, ChevronDown } from 'lucide-react'
 import { api } from '../../services/api'
+import { runHref } from '../../utils/runHref'
 import clsx from 'clsx'
 
 type DetectResult = Awaited<ReturnType<typeof api.smartDetect>>
@@ -20,6 +21,7 @@ const confidenceColor = (c: number) =>
 
 export default function SmartStartTab() {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
 
   const [pipelines, setPipelines] = useState<PipelineInfo[]>([])
   const [selectedPipeline, setSelectedPipeline] = useState('')
@@ -86,7 +88,7 @@ export default function SmartStartTab() {
         body.requirement = input.trim()
       }
       const run = await api.startRun(body)
-      if (run?.id) navigate(`/runs/${run.id}`)
+      if (run?.id) navigate(runHref(run.id, pathname))
       else setLaunchError('Неожиданный ответ сервера')
     } catch (e) {
       setLaunchError(e instanceof Error ? e.message : 'Не удалось запустить. Сервер работает?')

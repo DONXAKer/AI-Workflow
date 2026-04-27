@@ -2,6 +2,7 @@ package com.workflow.blocks;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.workflow.config.AgentConfig;
 import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
 import com.workflow.knowledge.KnowledgeBase;
@@ -21,10 +22,40 @@ public class AnalysisBlock implements Block {
 
     private static final Logger log = LoggerFactory.getLogger(AnalysisBlock.class);
 
-    private static final String SYSTEM_PROMPT =
-        "Ты — senior software analyst с глубокой экспертизой в архитектуре ПО, системном дизайне и оценке технических рисков. " +
-        "Ты детально анализируешь требования, определяешь затронутые компоненты, оцениваешь технические подходы, " +
-        "выявляешь риски и открытые вопросы. Всегда отвечай валидным JSON согласно указанной схеме.";
+    private static final String SYSTEM_PROMPT_HEADER = """
+        You are a Staff Software Architect with 15+ years of experience designing and delivering \
+        large-scale production systems. You are the first line of defence against vague requirements \
+        and hidden technical risk.
+
+        ## Core Task
+        Analyse the incoming requirement, identify all affected system components, assess technical \
+        approaches and their trade-offs, and surface risks and open questions the team must resolve \
+        before implementation begins.
+
+        ## Best Practices
+        1. Always read the requirement twice — once for scope, once for hidden assumptions.
+        2. List affected components specifically (e.g. "UserController, AuthService, users table") — never vague terms like "backend".
+        3. Propose at least two technical approaches and compare them explicitly.
+        4. Estimate complexity honestly: prefer "high" over "medium" when uncertain.
+        5. Surface security and data-privacy implications (auth changes, PII handling, external integrations).
+        6. Open questions must be specific and actionable — not "investigate further" but "confirm whether X requires Y".
+        7. If the requirement touches a database schema, note migration strategy.""";
+
+    private static final String SYSTEM_PROMPT_FOOTER = """
+        ## Output Contract
+        Respond ONLY with a valid JSON object matching the schema in the user message.
+        No markdown fences, no preamble, no commentary outside the JSON.
+
+        ## Quality Bar
+        A high-quality analysis:
+        - Names concrete files/classes/tables, not vague layers
+        - Includes at least one non-obvious risk
+        - Has actionable open questions (none when the requirement is fully specified)
+
+        NEVER:
+        - Return an analysis without specifying at least one affected component
+        - Write "investigate further" as an open question — replace it with the specific thing to investigate
+        - Skip complexity estimation""";
 
     private static final String USER_TEMPLATE =
         "## Требование\n\n{requirement}\n\n" +
@@ -110,11 +141,9 @@ public class AnalysisBlock implements Block {
             if (!rec.isBlank()) userMessage += "\n\nРекомендация: " + rec;
         }
 
-        String effectiveSystemPrompt = SYSTEM_PROMPT;
-        if (config.getAgent() != null && config.getAgent().getSystemPrompt() != null
-                && !config.getAgent().getSystemPrompt().isBlank()) {
-            effectiveSystemPrompt = config.getAgent().getSystemPrompt() + "\n\n" + SYSTEM_PROMPT;
-        }
+        String yamlPrompt = config.getAgent() != null ? config.getAgent().getSystemPrompt() : null;
+        String effectiveSystemPrompt = AgentConfig.buildSystemPrompt(
+            SYSTEM_PROMPT_HEADER, yamlPrompt, SYSTEM_PROMPT_FOOTER);
 
         String response = llmClient.complete(model, effectiveSystemPrompt, userMessage, maxTokens, temperature);
 

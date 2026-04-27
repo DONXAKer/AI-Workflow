@@ -19,6 +19,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.*;
@@ -152,6 +153,7 @@ public class PipelineRunner {
             try { pipelineRun.setRunInputsJson(objectMapper.writeValueAsString(runInputs)); }
             catch (Exception e) { log.warn("Failed to serialize runInputs: {}", e.getMessage()); }
         }
+        captureConfigSnapshot(pipelineRun, config);
 
         List<BlockConfig> sorted = topologicalSort(config.getPipeline());
         for (BlockConfig blockConfig : sorted) {
@@ -193,6 +195,7 @@ public class PipelineRunner {
         return future;
     }
 
+    @Transactional
     public PipelineRun resume(PipelineConfig config, String runIdStr) {
         UUID runId = UUID.fromString(runIdStr);
         PipelineRun run = runRepository.findById(runId)
@@ -202,6 +205,12 @@ public class PipelineRunner {
             log.warn("Run {} is already in terminal state: {}", runId, run.getStatus());
             return run;
         }
+
+        // Force-initialize lazy collections while still inside the JPA session so
+        // the virtual thread (which has no Hibernate session) can access them freely.
+        run.getCompletedBlocks().size();
+        run.getAutoApprove().size();
+        run.getOutputs().forEach(o -> o.getBlockId()); // touch each element
 
         run.setStatus(RunStatus.RUNNING);
         runRepository.save(run);
@@ -729,11 +738,8 @@ public class PipelineRunner {
                     handleCancellation(run);
                     return;
                 }
-                Throwable rootCause = e;
-                while (rootCause.getCause() != null) rootCause = rootCause.getCause();
-                String causeMsg = rootCause == e ? "" : " | root cause: " + rootCause.getMessage();
-                log.error("Block {} failed: {}{}", blockId, e.getMessage(), causeMsg);
-                markFailed(run, "Block " + blockId + " failed: " + e.getMessage() + causeMsg);
+                log.error("Block {} failed: {}", blockId, e.getMessage(), e);
+                markFailed(run, "Block " + blockId + " failed: " + e.getMessage(), e);
                 throw new RuntimeException("Block execution failed: " + blockId, e);
             }
 
@@ -790,7 +796,7 @@ public class PipelineRunner {
                     continue;
 
                 } catch (PipelineRejectedException rejectEx) {
-                    markFailed(run, "Pipeline rejected: " + rejectEx.getMessage());
+                    markFailed(run, "Pipeline rejected: " + rejectEx.getMessage(), rejectEx);
                     throw rejectEx;
                 }
             }
@@ -911,6 +917,32 @@ public class PipelineRunner {
         runRepository.save(run);
         if (wsHandler != null) wsHandler.sendRunComplete(run.getId(), "FAILED");
         if (metrics != null) metrics.recordRunComplete("failed");
+    }
+
+    private void markFailed(PipelineRun run, String summary, Throwable cause) {
+        run.setStatus(RunStatus.FAILED);
+        run.setError(summary + "\n\n" + formatStackTrace(cause));
+        run.setCompletedAt(Instant.now());
+        runRepository.save(run);
+        if (wsHandler != null) wsHandler.sendRunComplete(run.getId(), "FAILED");
+        if (metrics != null) metrics.recordRunComplete("failed");
+    }
+
+    private static String formatStackTrace(Throwable t) {
+        java.io.StringWriter sw = new java.io.StringWriter();
+        java.io.PrintWriter pw = new java.io.PrintWriter(sw);
+        // Walk the full cause chain
+        Throwable current = t;
+        boolean first = true;
+        while (current != null) {
+            if (!first) pw.println("\nCaused by:");
+            current.printStackTrace(pw);
+            Throwable next = current.getCause();
+            if (next == current) break;
+            current = next;
+            first = false;
+        }
+        return sw.toString();
     }
 
     private void clearApprovalTimeout(PipelineRun run) {

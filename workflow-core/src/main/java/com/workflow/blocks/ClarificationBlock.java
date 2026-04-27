@@ -2,6 +2,7 @@ package com.workflow.blocks;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.workflow.config.AgentConfig;
 import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
 import com.workflow.llm.LlmClient;
@@ -16,6 +17,17 @@ import java.util.*;
 public class ClarificationBlock implements Block {
 
     private static final Logger log = LoggerFactory.getLogger(ClarificationBlock.class);
+
+    private static final String BASE_PROMPT_HEADER = """
+        You are a Senior Business Analyst and Requirements Engineer bridging product intent and \
+        technical implementation. You are precise, concise, and intolerant of ambiguity.
+
+        ## Best Practices
+        1. Ask only questions that materially change the implementation — skip cosmetic or obvious ones.
+        2. Each question must be independently answerable — no compound "A and B?" questions.
+        3. Prioritise questions about: scope boundaries, integration points, edge cases, and non-functional requirements.
+        4. When synthesising answers, preserve the user's exact intent — do not reinterpret.
+        5. The refined requirement must be implementable without further questions.""";
 
     @Autowired
     private LlmClient llmClient;
@@ -103,13 +115,12 @@ public class ClarificationBlock implements Block {
             "[\"Вопрос 1?\", \"Вопрос 2?\"]\n\n" +
             "Если дополнительные вопросы не нужны, ответь пустым массивом: []";
 
-        String profileSystemPrompt = null;
-        if (config.getAgent() != null && config.getAgent().getSystemPrompt() != null
-                && !config.getAgent().getSystemPrompt().isBlank()) {
-            profileSystemPrompt = config.getAgent().getSystemPrompt();
-        }
+        String yamlPrompt = config.getAgent() != null ? config.getAgent().getSystemPrompt() : null;
+        String questionPhasePrompt = AgentConfig.buildSystemPrompt(
+            BASE_PROMPT_HEADER, yamlPrompt,
+            "## Current Phase\nGenerate clarifying questions. Respond ONLY with a JSON array of question strings.");
 
-        String additionalQuestionsResponse = llmClient.complete(model, profileSystemPrompt, additionalQuestionsPrompt, maxTokens, temperature);
+        String additionalQuestionsResponse = llmClient.complete(model, questionPhasePrompt, additionalQuestionsPrompt, maxTokens, temperature);
 
         List<String> additionalQuestions = new ArrayList<>();
         try {
@@ -149,7 +160,11 @@ public class ClarificationBlock implements Block {
             "  \"approved_approach\": \"<резюме технического подхода>\"\n" +
             "}";
 
-        String refineResponse = llmClient.complete(model, profileSystemPrompt, refinePrompt, maxTokens, temperature);
+        String synthesisPhasePrompt = AgentConfig.buildSystemPrompt(
+            BASE_PROMPT_HEADER, yamlPrompt,
+            "## Current Phase\nSynthesise clarification answers into a precise, implementable requirement. "
+            + "Respond ONLY with valid JSON: {\"refined_requirement\": \"\", \"approved_approach\": \"\"}");
+        String refineResponse = llmClient.complete(model, synthesisPhasePrompt, refinePrompt, maxTokens, temperature);
 
         Map<String, Object> refined;
         try {

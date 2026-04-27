@@ -1,7 +1,7 @@
-import { Loader2, CheckCircle, XCircle, SkipForward, Clock, AlertCircle, Copy, Check, Bell, ChevronDown, ChevronRight, Hand, Zap, BellRing } from 'lucide-react'
+import { Loader2, CheckCircle, XCircle, SkipForward, Clock, AlertCircle, Copy, Check, Bell, ChevronDown, ChevronRight, Hand, Zap, BellRing, RotateCcw } from 'lucide-react'
 import { BlockStatus, BlockSnapshot, ApprovalMode, ToolCallEntry } from '../types'
 import { effectiveApprovalMode } from '../utils/configSnapshot'
-import { blockTypeLabel } from '../utils/blockLabels'
+import { blockIdLabel } from '../utils/blockLabels'
 import clsx from 'clsx'
 import { useState, useCallback, useEffect, Fragment } from 'react'
 
@@ -45,6 +45,8 @@ interface Props {
   blockStatuses: BlockStatus[]
   /** When provided, an "Review" button is shown on awaiting_approval rows */
   onReviewApproval?: (blockId: string) => void
+  /** When provided, a relaunch button is shown on complete rows */
+  onRelaunchFromBlock?: (blockId: string) => void
   /** Per-block config snapshots (approval_mode, enabled, condition) used for badges */
   snapshots?: Map<string, BlockSnapshot>
   /** Tool call audit entries — when provided, enables per-block iteration expansion */
@@ -110,15 +112,22 @@ function IterationRow({ iteration, calls }: { iteration: number; calls: ToolCall
             const colorCls = TOOL_COLORS[c.toolName] ?? 'text-slate-400 bg-slate-800/40 border-slate-700'
             const summary = summarizeInput(c.toolName, c.inputJson)
             return (
-              <div key={i} className="flex items-center gap-2 px-3 py-1.5 text-xs">
-                <span className={clsx('px-1.5 py-0.5 rounded border text-[10px] font-mono font-medium flex-shrink-0', colorCls)}>
-                  {c.toolName}
-                </span>
-                <span className="font-mono text-slate-400 truncate flex-1 min-w-0">{summary}</span>
-                {c.isError
-                  ? <XCircle className="w-3 h-3 text-red-400 flex-shrink-0" />
-                  : <CheckCircle className="w-3 h-3 text-green-600/70 flex-shrink-0" />}
-                <span className="text-slate-600 text-[10px] flex-shrink-0">{c.durationMs}ms</span>
+              <div key={i} className="px-3 py-1.5 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className={clsx('px-1.5 py-0.5 rounded border text-[10px] font-mono font-medium flex-shrink-0', colorCls)}>
+                    {c.toolName}
+                  </span>
+                  <span className="font-mono text-slate-400 truncate flex-1 min-w-0">{summary}</span>
+                  {c.isError
+                    ? <XCircle className="w-3 h-3 text-red-400 flex-shrink-0" />
+                    : <CheckCircle className="w-3 h-3 text-green-600/70 flex-shrink-0" />}
+                  <span className="text-slate-600 text-[10px] flex-shrink-0">{c.durationMs}ms</span>
+                </div>
+                {c.isError && c.outputText && (
+                  <pre className="mt-1 ml-7 text-[10px] text-red-300/80 bg-red-950/30 border border-red-900/40 rounded px-2 py-1 whitespace-pre-wrap break-all leading-relaxed max-h-32 overflow-auto">
+                    {c.outputText}
+                  </pre>
+                )}
               </div>
             )
           })}
@@ -258,7 +267,7 @@ function OutputCell({ output }: { output?: Record<string, unknown> }) {
   )
 }
 
-export default function BlockProgressTable({ blockStatuses, onReviewApproval, snapshots, toolCalls }: Props) {
+export default function BlockProgressTable({ blockStatuses, onReviewApproval, onRelaunchFromBlock, snapshots, toolCalls }: Props) {
   const [expandedBlocks, setExpandedBlocks] = useState<Set<string>>(new Set())
 
   const toggleBlock = useCallback((blockId: string) => {
@@ -311,8 +320,7 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, sn
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Длительность</th>
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Вход</th>
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Выход</th>
-              {/* Actions column only rendered when there's an onReviewApproval handler */}
-              {onReviewApproval && (
+              {(onReviewApproval || onRelaunchFromBlock) && (
                 <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Действия</th>
               )}
             </tr>
@@ -324,7 +332,8 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, sn
               const blockCalls = toolCalls?.filter(tc => tc.blockId === block.blockId) ?? []
               const iterCount = new Set(blockCalls.map(tc => tc.iteration)).size
               const isExpanded = expandedBlocks.has(block.blockId)
-              const colSpan = onReviewApproval ? 7 : 6
+              const hasActionsCol = !!(onReviewApproval || onRelaunchFromBlock)
+              const colSpan = hasActionsCol ? 7 : 6
 
               return (
                 <Fragment key={block.blockId}>
@@ -334,13 +343,10 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, sn
                       <div className="flex items-start gap-2 flex-wrap">
                         <div>
                           {(() => {
-                            const snapshot = snapshots?.get(block.blockId)
-                            const label = blockTypeLabel(snapshot?.block)
+                            const label = blockIdLabel(block.blockId)
                             return (
                               <>
-                                {label && (
-                                  <div className="text-sm text-slate-100 font-medium leading-tight">{label}</div>
-                                )}
+                                <div className="text-sm text-slate-100 font-medium leading-tight">{label}</div>
                                 <div className="font-mono text-slate-500 text-xs mt-0.5">{block.blockId}</div>
                               </>
                             )
@@ -413,9 +419,9 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, sn
                     <td className="px-5 py-3.5 max-w-xs">
                       <OutputCell output={block.output} />
                     </td>
-                    {onReviewApproval && (
+                    {hasActionsCol && (
                       <td className="px-5 py-3.5">
-                        {block.status === 'awaiting_approval' && (
+                        {block.status === 'awaiting_approval' && onReviewApproval && (
                           <button
                             type="button"
                             onClick={() => onReviewApproval(block.blockId)}
@@ -423,6 +429,16 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, sn
                           >
                             <Bell className="w-3.5 h-3.5" />
                             Рассмотреть
+                          </button>
+                        )}
+                        {block.status === 'complete' && onRelaunchFromBlock && (
+                          <button
+                            type="button"
+                            onClick={() => onRelaunchFromBlock(block.blockId)}
+                            className="p-1.5 rounded-md text-slate-600 hover:text-blue-400 hover:bg-blue-950/40 transition-colors"
+                            title="Перезапустить с этого блока"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
                           </button>
                         )}
                       </td>

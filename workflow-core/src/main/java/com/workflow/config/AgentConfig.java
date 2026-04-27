@@ -59,4 +59,20 @@ public class AgentConfig {
     public double getTemperatureOrDefault() {
         return temperature != null ? temperature : 1.0;
     }
+
+    /**
+     * Composes the effective system prompt in the correct order:
+     * built-in header (role + best practices) → YAML project context → built-in footer (output contract + quality bar).
+     * If yamlPrompt is absent, header and footer are joined directly.
+     */
+    public static String buildSystemPrompt(String header, String yamlPrompt, String footer) {
+        StringBuilder sb = new StringBuilder(header);
+        if (yamlPrompt != null && !yamlPrompt.isBlank()) {
+            sb.append("\n\n## Project Context\n").append(yamlPrompt.strip());
+        }
+        if (footer != null && !footer.isBlank()) {
+            sb.append("\n\n").append(footer.strip());
+        }
+        return sb.toString();
+    }
 }

@@ -267,10 +267,21 @@ public class LlmClient {
                     .onStatus(
                         status -> status.is4xxClientError() || status.is5xxServerError(),
                         resp -> resp.bodyToMono(String.class).map(errBody -> {
-                            log.error("OpenRouter HTTP {} body: {}", resp.statusCode(), errBody);
+                            int code = resp.statusCode().value();
+                            String friendly;
+                            if (code == 402) {
+                                friendly = "Недостаточно кредитов OpenRouter. Пополните баланс: https://openrouter.ai/settings/credits";
+                            } else if (code == 401) {
+                                friendly = "Неверный OPENROUTER_API_KEY (401 Unauthorized)";
+                            } else if (code == 429) {
+                                friendly = "Превышен лимит запросов OpenRouter (429 Rate Limit)";
+                            } else {
+                                friendly = "OpenRouter " + code + ": " + errBody;
+                            }
+                            log.error("OpenRouter ошибка {}: {}", code, friendly);
                             return new org.springframework.web.reactive.function.client.WebClientResponseException(
-                                resp.statusCode().value(), resp.statusCode().toString(), null,
-                                errBody.getBytes(java.nio.charset.StandardCharsets.UTF_8), java.nio.charset.StandardCharsets.UTF_8);
+                                code, friendly, null,
+                                friendly.getBytes(java.nio.charset.StandardCharsets.UTF_8), java.nio.charset.StandardCharsets.UTF_8);
                         })
                     )
                     .bodyToMono(String.class)

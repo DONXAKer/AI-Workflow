@@ -61,8 +61,7 @@ public class ShellExecBlock implements Block {
     @Override public String getName() { return "shell_exec"; }
 
     @Override public String getDescription() {
-        return "Runs a shell command as a pipeline step (no LLM). Working dir falls "
-            + "back to the current project's workingDir. Global deny-list still applies.";
+        return "Выполняет shell-команду как шаг пайплайна (без LLM). Рабочая директория — workingDir проекта. Глобальный deny-list применяется.";
     }
 
     @Override
