@@ -266,6 +266,20 @@ export interface PipelineConfigSettings {
   blocks: PipelineBlockSetting[]
 }
 
+/** Single error from `POST /api/pipelines/validate` (mirrors Java `ValidationError` record). */
+export interface ValidationError {
+  code: string
+  message: string
+  location: string | null
+  blockId: string | null
+}
+
+/** Result envelope from `POST /api/pipelines/validate`. */
+export interface ValidationResult {
+  valid: boolean
+  errors: ValidationError[]
+}
+
 export interface ProjectInfo {
   id: number
   slug: string

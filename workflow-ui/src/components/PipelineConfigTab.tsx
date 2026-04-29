@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Save, Loader2, AlertCircle, ChevronDown, Settings2, X } from 'lucide-react'
+import { Save, Loader2, AlertCircle, ChevronDown, Settings2, X, CheckCircle2, ShieldCheck } from 'lucide-react'
 import { api } from '../services/api'
-import { PipelineConfigSettings, PipelineBlockSetting, PipelineAgentOverride, AgentProfile, SkillInfo } from '../types'
+import { PipelineConfigSettings, PipelineBlockSetting, PipelineAgentOverride, AgentProfile, SkillInfo, ValidationError } from '../types'
 import { blockTypeLabel, BLOCK_TYPE_RECOMMENDED_PRESET, MODEL_TIERS } from '../utils/blockLabels'
 
 const MODEL_PRESETS = [
@@ -229,6 +229,11 @@ export default function PipelineConfigTab(_props: Props) {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [editingBlock, setEditingBlock] = useState<PipelineBlockSetting | null>(null)
+  // Validation panel state — populated by both the explicit "Validate" button and by
+  // PUT /api/pipelines/config when the backend returns 400 with `errors`.
+  const [validating, setValidating] = useState(false)
+  const [validationErrors, setValidationErrors] = useState<ValidationError[] | null>(null)
+  const [validationOk, setValidationOk] = useState(false)
 
   useEffect(() => {
     Promise.all([api.listPipelines(), api.listAgentProfiles(), api.listAvailableSkills()])
@@ -289,15 +294,46 @@ export default function PipelineConfigTab(_props: Props) {
     setSaving(true)
     setSaveError(null)
     setSaved(false)
+    setValidationOk(false)
     try {
       await api.savePipelineConfig(selectedPath, settings)
       setSaved(true)
       setDirty(false)
+      setValidationErrors(null)
       setTimeout(() => setSaved(false), 3000)
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : 'Не удалось сохранить')
+      // Surface structured validation errors (400 from validator) in the dedicated panel
+      // instead of the generic save-error banner. Local edit state is preserved (we don't
+      // touch `settings` or `dirty`), so the operator can fix and retry.
+      const errBody = (e as { body?: { errors?: ValidationError[] } } | null)?.body
+      if (errBody && Array.isArray(errBody.errors) && errBody.errors.length > 0) {
+        setValidationErrors(errBody.errors)
+        setSaveError('Конфиг невалиден — исправьте ошибки ниже и сохраните снова.')
+      } else {
+        setSaveError(e instanceof Error ? e.message : 'Не удалось сохранить')
+      }
     } finally {
       setSaving(false)
+    }
+  }
+
+  const validate = async () => {
+    if (!selectedPath) return
+    setValidating(true)
+    setValidationOk(false)
+    setValidationErrors(null)
+    try {
+      const result = await api.validatePipeline(selectedPath)
+      if (result.valid) {
+        setValidationOk(true)
+        setValidationErrors([])
+      } else {
+        setValidationErrors(result.errors)
+      }
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Не удалось выполнить валидацию')
+    } finally {
+      setValidating(false)
     }
   }
 
@@ -463,7 +499,50 @@ export default function PipelineConfigTab(_props: Props) {
             </div>
           )}
 
-          <div className="flex justify-end">
+          {validationOk && (
+            <div className="flex items-center gap-2 text-emerald-400 text-sm bg-emerald-950/40 border border-emerald-800 rounded-lg px-3 py-2">
+              <CheckCircle2 className="w-4 h-4 flex-shrink-0" /> Конфиг валиден.
+            </div>
+          )}
+
+          {validationErrors && validationErrors.length > 0 && (
+            <div className="bg-red-950/40 border border-red-800 rounded-xl overflow-hidden">
+              <div className="px-4 py-2.5 border-b border-red-800/60 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400" />
+                <span className="text-sm font-medium text-red-200">
+                  Найдено ошибок: {validationErrors.length}
+                </span>
+              </div>
+              <ul className="divide-y divide-red-900/60">
+                {validationErrors.map((ve, idx) => (
+                  <li key={idx} className="px-4 py-2.5 text-xs">
+                    <div className="flex items-baseline gap-2 flex-wrap">
+                      <span className="font-mono text-[10px] uppercase tracking-wide bg-red-900/60 text-red-200 px-1.5 py-0.5 rounded">
+                        {ve.code}
+                      </span>
+                      {ve.blockId && (
+                        <span className="font-mono text-red-300">{ve.blockId}</span>
+                      )}
+                      {ve.location && (
+                        <span className="font-mono text-red-400/70">{ve.location}</span>
+                      )}
+                    </div>
+                    <div className="text-red-100 mt-1">{ve.message}</div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={validate}
+              disabled={validating || !selectedPath}
+              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 disabled:text-slate-600 text-slate-200 text-sm font-medium px-4 py-2 rounded-lg transition-colors border border-slate-700"
+            >
+              {validating ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+              Проверить
+            </button>
             <button
               onClick={save}
               disabled={saving || !dirty}

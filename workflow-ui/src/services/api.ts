@@ -1,4 +1,4 @@
-import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry, PipelineConfigSettings, McpServer } from '../types'
+import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry, PipelineConfigSettings, McpServer, ValidationResult } from '../types'
 import { currentProjectSlug } from './projectContext'
 
 const BASE = '/api'
@@ -36,13 +36,19 @@ async function request<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     let message = `HTTP ${res.status} ${res.statusText}`
+    let body: unknown = null
     try {
-      const body = await res.json()
-      if (body?.error) message = body.error
+      body = await res.json()
+      if (body && typeof body === 'object' && 'error' in body && typeof (body as { error: unknown }).error === 'string') {
+        message = (body as { error: string }).error
+      }
     } catch {
       // ignore parse error — use status message
     }
-    throw new Error(message)
+    const err = new Error(message) as Error & { status?: number; body?: unknown }
+    err.status = res.status
+    err.body = body
+    throw err
   }
   // 204 No Content — return undefined cast to T
   if (res.status === 204) return undefined as T
@@ -149,6 +155,12 @@ export const api = {
     request<{ saved: boolean }>(
       `${BASE}/pipelines/config?configPath=${encodeURIComponent(configPath)}`,
       { method: 'PUT', headers: JSON_HEADERS, body: JSON.stringify(settings) }
+    ),
+
+  validatePipeline: (configPath: string): Promise<ValidationResult> =>
+    request<ValidationResult>(
+      `${BASE}/pipelines/validate?configPath=${encodeURIComponent(configPath)}`,
+      { method: 'POST' }
     ),
 
   // Integrations

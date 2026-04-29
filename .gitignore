@@ -36,6 +36,7 @@ docker-compose.override.yml
 *.bak
 /workflow-ui/test-results/*
 
-# Personal pipeline configs
-config/
+# Personal pipeline configs (top-level only — must NOT match the Java
+# package src/main/java/com/workflow/config/ that holds POJO config classes)
+/config/
 workflow-core/config/skill_marketplace.yaml

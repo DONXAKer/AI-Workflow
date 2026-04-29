@@ -49,6 +49,8 @@ Dual approval gate modes: `WebSocketApprovalGate` (real-time via `/ws`) or `CliA
 
 **Block-based DAG execution** (`com.workflow`):
 - `core/PipelineRunner.java` — block registry, topological sort, execution loop with condition/loopback support
+- `core/BlockRegistry.java` — Spring bean wrapping block-type lookup (used by validator + runner)
+- `config/PipelineConfigValidator.java` — single source of truth for pipeline YAML validation (Level 1 structure / Level 2 graph / Level 3 data flow); pre-run gate on `POST /api/runs`, on-save gate in `PipelineConfigWriter`, explicit endpoint `POST /api/pipelines/validate`
 - `blocks/Block.java` — interface (implement `run(input, config, run) -> Map`)
 - `core/PipelineRun.java` — JPA entity: run state, completedBlocks, loopIterations, loopHistory
 - `core/BlockOutput.java` — per-block JSON output persisted to H2
@@ -110,7 +112,7 @@ Fail-loud: missing paths throw `PathNotFoundException` — they never render as 
 2. Annotate with `@Component` — auto-registered in `PipelineRunner.buildRegistry()`
 3. Reference in YAML as `block: my_block_name`
 
-### Config Structure (`config/pipeline.example.yaml`)
+### Config Structure (`config/feature.yaml`)
 ```yaml
 entry_points:
   - id: from_scratch

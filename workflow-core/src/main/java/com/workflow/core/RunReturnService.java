@@ -3,8 +3,11 @@ package com.workflow.core;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.workflow.config.BlockConfig;
+import com.workflow.config.InvalidPipelineException;
 import com.workflow.config.PipelineConfig;
 import com.workflow.config.PipelineConfigLoader;
+import com.workflow.config.PipelineConfigValidator;
+import com.workflow.config.ValidationResult;
 import com.workflow.llm.LlmClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -73,6 +76,9 @@ public class RunReturnService {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private PipelineConfigValidator pipelineConfigValidator;
 
     public PipelineRun returnToBlock(UUID runId, String configPath, String targetBlockId, String comment)
             throws Exception {
@@ -228,30 +234,21 @@ public class RunReturnService {
         return -1;
     }
 
+    /**
+     * Validates the config via {@link PipelineConfigValidator} (throws
+     * {@link InvalidPipelineException} on failure), then returns the topological order
+     * via the shared utility in {@link PipelineRunner}. Keeps a single source of truth
+     * for ordering so PipelineRunner and RunReturnService never diverge.
+     */
     private List<BlockConfig> topologicalSort(List<BlockConfig> blocks) {
-        Map<String, BlockConfig> map = new LinkedHashMap<>();
-        for (BlockConfig b : blocks) map.put(b.getId(), b);
-
-        List<BlockConfig> sorted = new ArrayList<>();
-        Set<String> visited = new LinkedHashSet<>();
-        Set<String> inStack = new HashSet<>();
-        for (String id : map.keySet()) {
-            if (!visited.contains(id)) dfs(id, map, visited, inStack, sorted);
+        if (pipelineConfigValidator != null) {
+            PipelineConfig wrapper = new PipelineConfig();
+            wrapper.setPipeline(blocks);
+            ValidationResult result = pipelineConfigValidator.validate(wrapper);
+            if (!result.valid()) {
+                throw new InvalidPipelineException(result);
+            }
         }
-        return sorted;
-    }
-
-    private void dfs(String id, Map<String, BlockConfig> map, Set<String> visited,
-                     Set<String> inStack, List<BlockConfig> out) {
-        if (inStack.contains(id)) throw new IllegalStateException("Cycle: " + id);
-        if (visited.contains(id)) return;
-        inStack.add(id);
-        BlockConfig b = map.get(id);
-        if (b != null && b.getDependsOn() != null) {
-            for (String dep : b.getDependsOn()) dfs(dep, map, visited, inStack, out);
-        }
-        inStack.remove(id);
-        visited.add(id);
-        if (b != null) out.add(b);
+        return PipelineRunner.topologicalSortValidated(blocks);
     }
 }

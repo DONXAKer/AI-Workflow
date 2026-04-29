@@ -21,9 +21,11 @@ public class PipelineConfigWriter {
 
     private final ObjectMapper yamlMapper;
     private final PipelineConfigLoader loader;
+    private final PipelineConfigValidator validator;
 
-    public PipelineConfigWriter(PipelineConfigLoader loader) {
+    public PipelineConfigWriter(PipelineConfigLoader loader, PipelineConfigValidator validator) {
         this.loader = loader;
+        this.validator = validator;
         YAMLFactory yamlFactory = new YAMLFactory();
         yamlFactory.configure(YAMLGenerator.Feature.WRITE_DOC_START_MARKER, false);
         this.yamlMapper = new ObjectMapper(yamlFactory);
@@ -64,8 +66,17 @@ public class PipelineConfigWriter {
         String yaml = yamlMapper.writeValueAsString(config);
         Files.writeString(yamlPath, yaml, StandardCharsets.UTF_8);
 
-        // Re-parse with env expansion to validate
-        return loader.load(yamlPath);
+        // Re-parse with env expansion to validate the bytes-on-disk round-trip
+        PipelineConfig parsed = loader.load(yamlPath);
+
+        // Schema-level validation: refuse to leave a broken pipeline on disk. The write
+        // already happened above, but the contract is "applyAndWrite returns a usable config" —
+        // so we throw and let the operator see the structured errors. The next save can fix it.
+        ValidationResult result = validator.validate(parsed);
+        if (!result.valid()) {
+            throw new InvalidPipelineException(result);
+        }
+        return parsed;
     }
 
     private AgentConfig toAgentConfig(BlockSettingDto.AgentOverride src) {

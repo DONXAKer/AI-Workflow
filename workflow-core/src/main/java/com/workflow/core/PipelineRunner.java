@@ -8,8 +8,11 @@ import com.workflow.config.ApprovalMode;
 import com.workflow.config.BlockConfig;
 import com.workflow.config.GateConfig;
 import com.workflow.config.IntegrationsConfig;
+import com.workflow.config.InvalidPipelineException;
 import com.workflow.config.OnFailureConfig;
 import com.workflow.config.PipelineConfig;
+import com.workflow.config.PipelineConfigValidator;
+import com.workflow.config.ValidationResult;
 import com.workflow.config.VerifyConfig;
 import com.workflow.model.IntegrationConfig;
 import com.workflow.model.IntegrationConfigRepository;
@@ -66,6 +69,9 @@ public class PipelineRunner {
 
     @Autowired
     private com.workflow.project.TechStackPromptEnricher techStackPromptEnricher;
+
+    @Autowired
+    private PipelineConfigValidator pipelineConfigValidator;
 
     private Map<String, Block> blockRegistry;
 
@@ -285,20 +291,33 @@ public class PipelineRunner {
         }).orElse(false);
     }
 
-    private List<BlockConfig> topologicalSort(List<BlockConfig> blocks) {
-        Map<String, BlockConfig> blockMap = new LinkedHashMap<>();
-        for (BlockConfig b : blocks) blockMap.put(b.getId(), b);
-
-        for (BlockConfig b : blocks) {
-            if (b.getDependsOn() != null) {
-                for (String dep : b.getDependsOn()) {
-                    if (!blockMap.containsKey(dep)) {
-                        throw new IllegalStateException(
-                            "Block '" + b.getId() + "' depends on unknown block '" + dep + "'");
-                    }
-                }
+    /**
+     * Validates the pipeline config and returns the topological order of its blocks.
+     *
+     * <p>Validation runs first via {@link PipelineConfigValidator} — on failure, an
+     * {@link InvalidPipelineException} carrying the full {@link ValidationResult} is thrown.
+     * The graph traversal below is then a pure utility: structural rules (unknown deps,
+     * cycles) are guaranteed not to occur because the validator already caught them.
+     */
+    List<BlockConfig> topologicalSort(List<BlockConfig> blocks) {
+        if (pipelineConfigValidator != null) {
+            PipelineConfig wrapper = new PipelineConfig();
+            wrapper.setPipeline(blocks);
+            ValidationResult result = pipelineConfigValidator.validate(wrapper);
+            if (!result.valid()) {
+                throw new InvalidPipelineException(result);
             }
         }
+        return topologicalSortValidated(blocks);
+    }
+
+    /**
+     * Pure topological sort — assumes the input has already been validated.
+     * Defense-in-depth IllegalStateException if invariants somehow break.
+     */
+    static List<BlockConfig> topologicalSortValidated(List<BlockConfig> blocks) {
+        Map<String, BlockConfig> blockMap = new LinkedHashMap<>();
+        for (BlockConfig b : blocks) blockMap.put(b.getId(), b);
 
         List<BlockConfig> sorted = new ArrayList<>();
         Set<String> visited = new LinkedHashSet<>();
@@ -310,13 +329,14 @@ public class PipelineRunner {
         return sorted;
     }
 
-    private void dfsVisit(String blockId, Map<String, BlockConfig> blockMap,
-                           Set<String> visited, Set<String> inStack, List<BlockConfig> sorted) {
+    private static void dfsVisit(String blockId, Map<String, BlockConfig> blockMap,
+                                 Set<String> visited, Set<String> inStack, List<BlockConfig> sorted) {
         if (inStack.contains(blockId)) throw new IllegalStateException("Cycle detected involving block: " + blockId);
         if (visited.contains(blockId)) return;
 
         inStack.add(blockId);
         BlockConfig block = blockMap.get(blockId);
+        if (block == null) throw new IllegalStateException("Unknown block in dependency graph: " + blockId);
         if (block.getDependsOn() != null) {
             for (String dep : block.getDependsOn()) dfsVisit(dep, blockMap, visited, inStack, sorted);
         }

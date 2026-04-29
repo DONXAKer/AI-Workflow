@@ -708,7 +708,7 @@ WorkflowJava/
 │   │   ├── knowledge/      # KnowledgeBase (RAG)
 │   │   └── llm/            # LlmClient (OpenRouter / Anthropic)
 │   └── config/
-│       └── pipeline.example.yaml
+│       └── feature.yaml
 └── workflow-ui/            # React + TypeScript frontend
     └── src/
         ├── components/     # UI компоненты
@@ -718,7 +718,7 @@ WorkflowJava/
 
 Workflow/                   # Shared configs and docs
 ├── config/
-│   └── pipeline.example.yaml
+│   └── feature.yaml
 └── docs/
     └── workflow.md         # этот файл
 ```
