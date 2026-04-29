@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { ChevronRight, ChevronDown, FileCode, FilePlus, Trash2, FileEdit } from 'lucide-react'
 import clsx from 'clsx'
+import ReactMarkdown from 'react-markdown'
 
 interface FileChange {
   file_path?: string
@@ -139,14 +140,43 @@ function ShellOutputField({ label, value }: { label: string; value: string }) {
   )
 }
 
-function StringField({ label, value }: { label: string; value: string }) {
+/** Fields whose values are expected to contain markdown prose. */
+const MARKDOWN_KEYS = new Set([
+  'summary', 'technical_approach', 'approach', 'recommendation',
+  'goal', 'description', 'analysis', 'plan', 'review',
+  'retry_instruction', 'carry_forward', 'issues', 'message',
+  'definition_of_done', 'risk', 'risks',
+])
+
+function looksLikeMarkdown(value: string): boolean {
+  return /^#{1,6}\s|^\*\*|\n#{1,6}\s|\n\*\s|\n-\s|\n\d+\.\s/.test(value)
+}
+
+function StringField({ label, value, fieldKey }: { label: string; value: string; fieldKey?: string }) {
   const [expanded, setExpanded] = useState(false)
-  const long = value.length > 300
-  const shown = long && !expanded ? value.slice(0, 300) + '…' : value
+  const long = value.length > 600
+  const shown = long && !expanded ? value.slice(0, 600) + '…' : value
+  const isMarkdown = (fieldKey && MARKDOWN_KEYS.has(fieldKey)) || looksLikeMarkdown(value)
+
   return (
     <div>
       <dt className="text-[10px] font-medium text-slate-500 uppercase tracking-wide mb-0.5">{label}</dt>
-      <dd className="text-sm text-slate-200 font-mono whitespace-pre-wrap break-all leading-relaxed">{shown}</dd>
+      {isMarkdown ? (
+        <dd className="prose prose-invert prose-sm max-w-none text-slate-200 leading-relaxed
+          [&_h1]:text-base [&_h1]:font-semibold [&_h1]:mt-2 [&_h1]:mb-1
+          [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1
+          [&_h3]:text-sm [&_h3]:font-medium [&_h3]:mt-1.5 [&_h3]:mb-0.5
+          [&_ul]:my-1 [&_ul]:pl-4 [&_li]:my-0.5
+          [&_ol]:my-1 [&_ol]:pl-4
+          [&_p]:my-1 [&_code]:bg-slate-800 [&_code]:px-1 [&_code]:rounded [&_code]:text-xs
+          [&_pre]:bg-slate-950 [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-xs [&_pre]:overflow-auto
+          [&_strong]:text-white [&_em]:text-slate-300
+          [&_blockquote]:border-l-2 [&_blockquote]:border-slate-600 [&_blockquote]:pl-3 [&_blockquote]:text-slate-400">
+          <ReactMarkdown>{shown}</ReactMarkdown>
+        </dd>
+      ) : (
+        <dd className="text-sm text-slate-200 font-mono whitespace-pre-wrap break-words leading-relaxed">{shown}</dd>
+      )}
       {long && (
         <button type="button" onClick={() => setExpanded(e => !e)} className="text-xs text-blue-400 hover:text-blue-300 mt-0.5">
           {expanded ? 'Свернуть' : 'Показать полностью'}
@@ -237,7 +267,7 @@ export default function BlockOutputViewer({ output }: Props) {
   return (
     <dl className="space-y-3">
       {stringFields.map(({ key, value }) => (
-        <StringField key={key} label={FIELD_LABELS[key] ?? key} value={value} />
+        <StringField key={key} label={FIELD_LABELS[key] ?? key} value={value} fieldKey={key} />
       ))}
       {scalarFields.map(({ key, value }) => (
         <ScalarField key={key} label={FIELD_LABELS[key] ?? key} value={value} />

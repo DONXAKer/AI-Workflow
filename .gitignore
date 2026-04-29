@@ -38,3 +38,4 @@ docker-compose.override.yml
 
 # Personal pipeline configs
 config/
+workflow-core/config/skill_marketplace.yaml

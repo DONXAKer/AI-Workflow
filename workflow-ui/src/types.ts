@@ -52,6 +52,8 @@ export interface PipelineRun {
   configSnapshotJson?: string | null
   projectSlug?: string
   dryRun?: boolean
+  entryPointId?: string
+  runInputsJson?: string | null
 }
 
 export type ApprovalMode = 'manual' | 'auto' | 'auto_notify'

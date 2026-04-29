@@ -164,6 +164,14 @@ public class RunController {
                 pipelineRunner.run(config, requirement, runId, dryRun, namedInputs);
             }
 
+            // Persist entryPointId so the UI can reconstruct restart calls.
+            if (entryPointId != null && !entryPointId.isBlank()) {
+                pipelineRunRepository.findById(runId).ifPresent(run -> {
+                    run.setEntryPointId(entryPointId);
+                    pipelineRunRepository.save(run);
+                });
+            }
+
             Map<String, Object> response = new HashMap<>();
             response.put("runId", runId.toString());
             response.put("id", runId.toString());
@@ -503,7 +511,8 @@ public class RunController {
         String targetBlockId = (String) request.get("targetBlockId");
 
         @SuppressWarnings("unchecked")
-        Map<String, Object> output = (Map<String, Object>) request.getOrDefault("output", new HashMap<>());
+        // null when absent — non-null empty map would overwrite the real block output in PipelineRunner
+        Map<String, Object> output = (Map<String, Object>) request.get("output");
 
         if (blockId == null || decision == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "blockId and decision are required"));

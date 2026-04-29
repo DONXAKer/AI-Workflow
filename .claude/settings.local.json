@@ -144,7 +144,9 @@
       "Bash(npx playwright *)",
       "Bash(./gradlew compileJava -q)",
       "Bash(gradle compileJava)",
-      "Bash(gradle test *)"
+      "Bash(gradle test *)",
+      "Read(//var/lib/docker/volumes/ai-workflow_workflow-state/**)",
+      "Bash(sudo ls *)"
     ]
   }
 }

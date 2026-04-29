@@ -96,6 +96,13 @@ public class AnalysisBlock implements Block {
     public Map<String, Object> run(Map<String, Object> input, BlockConfig config, PipelineRun run) throws Exception {
         String requirement = (String) input.getOrDefault("requirement", "");
 
+        // If task_md output is available (via depends_on), use its body as the requirement.
+        // This avoids the LLM analysing a file path instead of the actual task content.
+        if (input.get("task_md") instanceof Map<?, ?> taskMd) {
+            Object body = taskMd.get("body");
+            if (body instanceof String s && !s.isBlank()) requirement = s;
+        }
+
         // Query knowledge base for context
         String context = "No additional context available.";
         if (requirement != null && !requirement.isBlank()) {
@@ -149,7 +156,16 @@ public class AnalysisBlock implements Block {
 
         Map<String, Object> result;
         try {
-            result = objectMapper.readValue(response, new TypeReference<Map<String, Object>>() {});
+            String json = response.strip();
+            // Strip markdown code fences: ```json ... ``` or ``` ... ```
+            if (json.startsWith("```")) {
+                int start = json.indexOf('\n');
+                int end   = json.lastIndexOf("```");
+                if (start > 0 && end > start) json = json.substring(start + 1, end).strip();
+            }
+            // Fix invalid JSON escapes produced by some models (e.g. \` is not valid JSON)
+            json = json.replace("\\`", "`");
+            result = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
         } catch (Exception e) {
             log.error("Failed to parse analysis JSON: {}", e.getMessage());
             throw new RuntimeException("Failed to parse analysis LLM response as JSON: " + e.getMessage(), e);

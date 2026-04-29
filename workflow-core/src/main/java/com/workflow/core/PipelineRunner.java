@@ -64,6 +64,9 @@ public class PipelineRunner {
     @Autowired
     private ProdDeployMutex prodDeployMutex;
 
+    @Autowired
+    private com.workflow.project.TechStackPromptEnricher techStackPromptEnricher;
+
     private Map<String, Block> blockRegistry;
 
     /** Tracks virtual threads running active pipelines for cancellation */
@@ -104,6 +107,7 @@ public class PipelineRunner {
             try { pipelineRun.setRunInputsJson(objectMapper.writeValueAsString(runInputs)); }
             catch (Exception e) { log.warn("Failed to serialize runInputs: {}", e.getMessage()); }
         }
+        techStackPromptEnricher.enrich(config, pipelineRun.getProjectSlug());
         captureConfigSnapshot(pipelineRun, config);
         runRepository.save(pipelineRun);
 
@@ -153,6 +157,7 @@ public class PipelineRunner {
             try { pipelineRun.setRunInputsJson(objectMapper.writeValueAsString(runInputs)); }
             catch (Exception e) { log.warn("Failed to serialize runInputs: {}", e.getMessage()); }
         }
+        techStackPromptEnricher.enrich(config, pipelineRun.getProjectSlug());
         captureConfigSnapshot(pipelineRun, config);
 
         List<BlockConfig> sorted = topologicalSort(config.getPipeline());

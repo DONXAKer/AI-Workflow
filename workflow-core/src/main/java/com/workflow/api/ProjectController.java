@@ -48,6 +48,7 @@ public class ProjectController {
             if (body.getWorkingDir() != null) existing.setWorkingDir(body.getWorkingDir());
             if (body.getOrchestratorModel() != null) existing.setOrchestratorModel(body.getOrchestratorModel());
             if (body.getOrchestratorSystemPromptExtra() != null) existing.setOrchestratorSystemPromptExtra(body.getOrchestratorSystemPromptExtra());
+            if (body.getTechStackJson() != null) existing.setTechStackJson(body.getTechStackJson());
             existing.setOrchestratorEnabled(body.isOrchestratorEnabled());
             return ResponseEntity.ok(repository.save(existing));
         }).orElse(ResponseEntity.notFound().build());

@@ -244,10 +244,16 @@ public class OrchestratorBlock implements Block {
 
         Map<String, Object> parsed = extractJson(response.finalText());
 
-        // Rescue: model hit maxIterations mid-tool-call, finalText is preamble not JSON
-        if (parsed.containsKey("raw_text") && response.stopReason() == StopReason.MAX_ITERATIONS) {
-            log.info("orchestrator[{}]: no JSON after maxIterations, attempting rescue completion", blockId);
-            parsed = rescueJson(response.finalText(), mode, model);
+        // Rescue triggers when:
+        // 1. extractJson produced a raw_text marker (found text but no valid JSON)
+        // 2. extractJson returned empty map but finalText is non-blank (model returned markdown, not JSON)
+        String finalText = response.finalText();
+        boolean needsRescue = parsed.containsKey("raw_text")
+            || (parsed.isEmpty() && finalText != null && !finalText.isBlank());
+        if (needsRescue) {
+            log.info("orchestrator[{}]: no valid JSON in response (stopReason={}, emptyParsed={}, textLen={}), attempting rescue",
+                blockId, response.stopReason(), parsed.isEmpty(), finalText != null ? finalText.length() : 0);
+            parsed = rescueJson(finalText, mode, model);
         }
 
         Map<String, Object> out = new LinkedHashMap<>(parsed);
@@ -391,31 +397,36 @@ Rules:
 
     private Map<String, Object> extractJson(String text) {
         if (text == null || text.isBlank()) return Map.of();
-        String json = text;
 
-        // Try ```json ... ``` block first
-        int fenceStart = text.indexOf("```json");
-        if (fenceStart >= 0) {
-            int lineStart = text.indexOf('\n', fenceStart);
-            if (lineStart >= 0) {
-                int fenceEnd = text.indexOf("```", lineStart + 1);
-                if (fenceEnd > lineStart) {
-                    json = text.substring(lineStart + 1, fenceEnd).trim();
+        // Try fenced code blocks: ```json ... ``` or plain ``` ... ```
+        for (String fence : new String[]{"```json", "```"}) {
+            int fenceStart = text.indexOf(fence);
+            if (fenceStart >= 0) {
+                int lineStart = text.indexOf('\n', fenceStart);
+                if (lineStart >= 0) {
+                    int fenceEnd = text.indexOf("```", lineStart + 1);
+                    if (fenceEnd > lineStart) {
+                        String candidate = text.substring(lineStart + 1, fenceEnd).trim();
+                        try {
+                            return objectMapper.readValue(candidate, new TypeReference<Map<String, Object>>() {});
+                        } catch (Exception ignored) { /* try next strategy */ }
+                    }
                 }
             }
-        } else {
-            // Fall back to first { ... } span
-            int start = text.indexOf('{');
-            int end   = text.lastIndexOf('}');
-            if (start >= 0 && end > start) json = text.substring(start, end + 1).trim();
         }
 
-        try {
-            return objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
-        } catch (Exception e) {
-            log.warn("orchestrator: could not parse JSON from response ({}); returning raw_text", e.getMessage());
-            return Map.of("raw_text", text);
+        // Fall back to first { ... } span
+        int start = text.indexOf('{');
+        int end   = text.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            String candidate = text.substring(start, end + 1).trim();
+            try {
+                return objectMapper.readValue(candidate, new TypeReference<Map<String, Object>>() {});
+            } catch (Exception ignored) { /* fall through */ }
         }
+
+        log.warn("orchestrator: could not parse JSON from response (len={}); returning raw_text", text.length());
+        return Map.of("raw_text", text);
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

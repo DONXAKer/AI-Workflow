@@ -260,34 +260,53 @@ public class LlmClient {
             long startedAt = System.currentTimeMillis();
             JsonNode responseJson;
             try {
-                String responseBody = client.post()
-                    .uri("/chat/completions")
-                    .bodyValue(body)
-                    .retrieve()
-                    .onStatus(
-                        status -> status.is4xxClientError() || status.is5xxServerError(),
-                        resp -> resp.bodyToMono(String.class).map(errBody -> {
-                            int code = resp.statusCode().value();
-                            String friendly;
-                            if (code == 402) {
-                                friendly = "Недостаточно кредитов OpenRouter. Пополните баланс: https://openrouter.ai/settings/credits";
-                            } else if (code == 401) {
-                                friendly = "Неверный OPENROUTER_API_KEY (401 Unauthorized)";
-                            } else if (code == 429) {
-                                friendly = "Превышен лимит запросов OpenRouter (429 Rate Limit)";
-                            } else {
-                                friendly = "OpenRouter " + code + ": " + errBody;
-                            }
-                            log.error("OpenRouter ошибка {}: {}", code, friendly);
-                            return new org.springframework.web.reactive.function.client.WebClientResponseException(
-                                code, friendly, null,
-                                friendly.getBytes(java.nio.charset.StandardCharsets.UTF_8), java.nio.charset.StandardCharsets.UTF_8);
-                        })
-                    )
-                    .bodyToMono(String.class)
-                    .block();
+                String responseBody = null;
+                Exception lastEx = null;
+                for (int attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        responseBody = client.post()
+                            .uri("/chat/completions")
+                            .bodyValue(body)
+                            .retrieve()
+                            .onStatus(
+                                status -> status.is4xxClientError() || status.is5xxServerError(),
+                                resp -> resp.bodyToMono(String.class).map(errBody -> {
+                                    int code = resp.statusCode().value();
+                                    String friendly;
+                                    if (code == 402) {
+                                        friendly = "Недостаточно кредитов OpenRouter. Пополните баланс: https://openrouter.ai/settings/credits";
+                                    } else if (code == 401) {
+                                        friendly = "Неверный OPENROUTER_API_KEY (401 Unauthorized)";
+                                    } else if (code == 429) {
+                                        friendly = "Превышен лимит запросов OpenRouter (429 Rate Limit)";
+                                    } else {
+                                        friendly = "OpenRouter " + code + ": " + errBody;
+                                    }
+                                    log.error("OpenRouter ошибка {}: {}", code, friendly);
+                                    return new org.springframework.web.reactive.function.client.WebClientResponseException(
+                                        code, friendly, null,
+                                        friendly.getBytes(java.nio.charset.StandardCharsets.UTF_8), java.nio.charset.StandardCharsets.UTF_8);
+                                })
+                            )
+                            .bodyToMono(String.class)
+                            .block();
+                        break;
+                    } catch (Exception ex) {
+                        boolean transient_ = ex.getMessage() != null && (
+                            ex.getMessage().contains("PrematureCloseException") ||
+                            ex.getMessage().contains("Connection reset") ||
+                            ex.getMessage().contains("connection") && ex.getMessage().contains("closed"));
+                        if (transient_ && attempt < 3) {
+                            log.warn("Tool-use iteration {} attempt {}/3 transient error, retrying: {}", iterations, attempt, ex.getMessage());
+                            Thread.sleep(2000L * attempt);
+                        } else {
+                            lastEx = ex;
+                            break;
+                        }
+                    }
+                }
                 if (responseBody == null) {
-                    throw new RuntimeException("Empty response from OpenRouter");
+                    throw lastEx != null ? lastEx : new RuntimeException("Empty response from OpenRouter");
                 }
                 responseJson = objectMapper.readTree(responseBody);
             } catch (Exception e) {
@@ -300,6 +319,20 @@ public class LlmClient {
             String finishReason = choice.path("finish_reason").asText("");
             String content = messageNode.path("content").isNull()
                 ? "" : messageNode.path("content").asText("");
+            // Gemini 2.5 Pro thinking models return content:null with the answer in reasoning.
+            // Fall back to reasoning field so the tool-use loop gets the final text.
+            if (content.isBlank()) {
+                String reasoning = messageNode.path("reasoning").asText("");
+                if (reasoning.isBlank()) {
+                    JsonNode rd = messageNode.path("reasoning_details");
+                    if (rd.isArray()) {
+                        StringBuilder sb = new StringBuilder();
+                        for (JsonNode r : rd) sb.append(r.path("text").asText(""));
+                        reasoning = sb.toString();
+                    }
+                }
+                if (!reasoning.isBlank()) content = reasoning;
+            }
             JsonNode toolCalls = messageNode.path("tool_calls");
 
             JsonNode usage = responseJson.path("usage");

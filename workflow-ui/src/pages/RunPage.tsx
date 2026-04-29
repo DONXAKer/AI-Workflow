@@ -82,6 +82,7 @@ export default function RunPage() {
   const [bashApprovalRequest, setBashApprovalRequest] = useState<{ command: string; requestId: string; blockId: string } | null>(null)
   const [bashApprovalLoading, setBashApprovalLoading] = useState(false)
   const [bashApprovalError, setBashApprovalError] = useState<string | null>(null)
+  const [restartLoading, setRestartLoading] = useState(false)
   const { show: showToast } = useToast()
 
   // Keep a stable ref to the latest run so reconnect handler can read current state
@@ -422,6 +423,30 @@ export default function RunPage() {
     }
   }, [run, relaunchBlock, relaunchInjectedBlocks, navigate])
 
+  const handleRestart = useCallback(async () => {
+    if (!run) return
+    setRestartLoading(true)
+    try {
+      const pipelines = await api.listPipelines()
+      const match = pipelines.find(p => p.pipelineName === run.pipelineName || p.name === run.pipelineName)
+      if (!match) throw new Error(`Не найден конфиг для "${run.pipelineName}"`)
+      const body: Parameters<typeof api.startRun>[0] = {
+        configPath: match.path,
+        requirement: run.requirement,
+      }
+      if (run.entryPointId) body.entryPointId = run.entryPointId
+      if (run.runInputsJson) {
+        try { body.inputs = JSON.parse(run.runInputsJson) } catch { /* ignore */ }
+      }
+      const result = await api.startRun(body)
+      navigate(`/runs/${result.id ?? result.runId}`)
+    } catch (e) {
+      addLog(`Ошибка перезапуска: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setRestartLoading(false)
+    }
+  }, [run, navigate, addLog])
+
   const handleReturn = useCallback(async (targetBlock: string, comment: string) => {
     if (!runId || !run) return
     const pipelines = await api.listPipelines()
@@ -532,14 +557,12 @@ export default function RunPage() {
             {isHistorical && run && (
               <button
                 type="button"
-                onClick={() => {
-                  const slug = run.projectSlug && run.projectSlug !== 'default' ? run.projectSlug : null
-                  navigate(slug ? `/projects/${slug}/launch` : '/')
-                }}
-                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+                onClick={handleRestart}
+                disabled={restartLoading}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors disabled:opacity-50"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Перезапуск
+                <RotateCcw className={`w-3.5 h-3.5 ${restartLoading ? 'animate-spin' : ''}`} />
+                {restartLoading ? 'Запуск...' : 'Перезапуск'}
               </button>
             )}
 

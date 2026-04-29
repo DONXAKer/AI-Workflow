@@ -20,7 +20,7 @@ const TABS = [
 export default function ProjectWorkspacePage() {
   const { slug } = useParams<{ slug: string }>()
   const navigate = useNavigate()
-  const { activeCount, pendingApprovalCount } = useRunsContext()
+  const { activeCount, pendingApprovalCount, refresh: refreshRunStats } = useRunsContext()
   const [project, setProject] = useState<ProjectInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -28,6 +28,8 @@ export default function ProjectWorkspacePage() {
   useEffect(() => {
     if (!slug) return
     setCurrentProjectSlug(slug)
+    // Re-fetch stats after slug is set so the badge uses the correct project scope.
+    refreshRunStats()
     setLoading(true)
     setError(null)
     api.listProjects()
@@ -92,12 +94,9 @@ export default function ProjectWorkspacePage() {
               <tab.icon className="w-3.5 h-3.5" />
               {tab.label}
               {tab.to === 'active' && activeCount > 0 && (
-                <span className="ml-1 text-xs bg-blue-600 text-white px-1.5 py-0.5 rounded-full leading-none">
+                <span className={`ml-1 text-xs px-1.5 py-0.5 rounded-full leading-none text-white ${pendingApprovalCount > 0 ? 'bg-amber-500' : 'bg-blue-600'}`}>
                   {activeCount > 99 ? '99+' : activeCount}
                 </span>
-              )}
-              {tab.to === 'active' && pendingApprovalCount > 0 && activeCount === 0 && (
-                <span className="ml-1 w-2 h-2 rounded-full bg-amber-400 inline-block" />
               )}
             </NavLink>
           ))}

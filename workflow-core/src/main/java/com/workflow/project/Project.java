@@ -55,6 +55,14 @@ public class Project {
     @Column(name = "orchestrator_system_prompt_extra", columnDefinition = "TEXT")
     private String orchestratorSystemPromptExtra;
 
+    /**
+     * Technology stack as JSON array: [{name, version}, ...].
+     * Example: [{"name":"java","version":"21"},{"name":"spring-boot","version":"3.5"}]
+     * Used by TechStackPromptEnricher to inject tech context into block system prompts at run time.
+     */
+    @Column(name = "tech_stack_json", columnDefinition = "TEXT")
+    private String techStackJson;
+
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -84,6 +92,8 @@ public class Project {
     public void setOrchestratorModel(String orchestratorModel) { this.orchestratorModel = orchestratorModel; }
     public String getOrchestratorSystemPromptExtra() { return orchestratorSystemPromptExtra; }
     public void setOrchestratorSystemPromptExtra(String orchestratorSystemPromptExtra) { this.orchestratorSystemPromptExtra = orchestratorSystemPromptExtra; }
+    public String getTechStackJson() { return techStackJson; }
+    public void setTechStackJson(String techStackJson) { this.techStackJson = techStackJson; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 }

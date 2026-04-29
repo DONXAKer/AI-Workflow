@@ -19,6 +19,8 @@ public interface PipelineRunRepository extends JpaRepository<PipelineRun, UUID>,
 
     List<PipelineRun> findByPipelineNameOrderByStartedAtDesc(String pipelineName);
 
+    List<PipelineRun> findByStatusIn(List<RunStatus> statuses);
+
     long countByStatusIn(List<RunStatus> statuses);
 
     long countByProjectSlugAndStatusIn(String projectSlug, List<RunStatus> statuses);

@@ -91,6 +91,10 @@ public class PipelineRun {
     @Column(name = "run_inputs_json", columnDefinition = "TEXT")
     private String runInputsJson;
 
+    /** Entry point ID used to start this run (e.g. "from_task_file"). Null for runs started without one. */
+    @Column(name = "entry_point_id")
+    private String entryPointId;
+
     /** Project scope — runs created under a given {@code X-Project-Slug}. Defaults to {@code default}. */
     @Column(nullable = false)
     private String projectSlug = "default";
@@ -177,6 +181,9 @@ public class PipelineRun {
 
     public boolean isDryRun() { return dryRun; }
     public void setDryRun(boolean dryRun) { this.dryRun = dryRun; }
+
+    public String getEntryPointId() { return entryPointId; }
+    public void setEntryPointId(String entryPointId) { this.entryPointId = entryPointId; }
 
     public String getProjectSlug() { return projectSlug; }
     public void setProjectSlug(String projectSlug) {

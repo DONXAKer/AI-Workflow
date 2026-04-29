@@ -18,10 +18,11 @@ async function request<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
     const token = readCsrfToken()
     if (token) headers.set('X-XSRF-TOKEN', token)
   }
-  // Always attach the project scope. Exempt auth/project endpoints which are inherently
-  // cross-project (login, project list, etc.).
+  // Always attach the project scope. Exempt auth/project endpoints and the run stats
+  // endpoint (used for the global nav badge — should reflect all active runs, not just
+  // those scoped to the current project).
   const urlStr = typeof input === 'string' ? input : input.url
-  const isCrossProject = urlStr.includes('/auth/') || urlStr.includes('/projects')
+  const isCrossProject = urlStr.includes('/auth/') || urlStr.includes('/projects') || urlStr.endsWith('/runs/stats')
   if (!isCrossProject && !headers.has('X-Project-Slug')) {
     headers.set('X-Project-Slug', currentProjectSlug())
   }
