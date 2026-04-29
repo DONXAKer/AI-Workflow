@@ -1,10 +1,13 @@
 package com.workflow.api;
 
 import com.workflow.config.BlockConfig;
+import com.workflow.config.InvalidPipelineException;
 import com.workflow.config.PipelineConfig;
 import com.workflow.config.PipelineConfigLoader;
 import com.workflow.config.PipelineConfigSettingsRequest;
+import com.workflow.config.PipelineConfigValidator;
 import com.workflow.config.PipelineConfigWriter;
+import com.workflow.config.ValidationResult;
 import com.workflow.core.*;
 import com.workflow.core.EntryPointResolver.DetectionResult;
 import com.workflow.project.ProjectContext;
@@ -53,6 +56,9 @@ public class RunController {
 
     @Autowired
     private PipelineConfigWriter pipelineConfigWriter;
+
+    @Autowired
+    private PipelineConfigValidator pipelineConfigValidator;
 
     @Autowired
     private EntryPointResolver entryPointResolver;
@@ -129,6 +135,21 @@ public class RunController {
 
         try {
             PipelineConfig config = pipelineConfigLoader.load(Paths.get(configPath));
+
+            // Pre-run validation gate: invalid configs are rejected before any DB write or
+            // run-thread start. The full structured error list is returned so the UI can
+            // surface it without parsing free-form text.
+            ValidationResult validation = pipelineConfigValidator.validate(config);
+            if (!validation.valid()) {
+                auditService.recordFailure("RUN_START", "run", "", Map.of(
+                    "reason", "invalid_pipeline_config",
+                    "configPath", configPath,
+                    "errorCount", validation.errors().size()));
+                Map<String, Object> body = new LinkedHashMap<>();
+                body.put("error", "Invalid pipeline config");
+                body.put("errors", validation.errors());
+                return ResponseEntity.badRequest().body(body);
+            }
 
             // Build userInputs map for the entry point resolver
             Map<String, Object> userInputs = new HashMap<>();
@@ -725,9 +746,34 @@ public class RunController {
         try {
             pipelineConfigWriter.applyAndWrite(Paths.get(configPath), request.getDefaults(), request.getBlocks());
             return ResponseEntity.ok(Map.of("saved", true));
+        } catch (InvalidPipelineException e) {
+            log.warn("Refused to save invalid pipeline config {}: {} errors",
+                configPath, e.getResult() != null ? e.getResult().errors().size() : 0);
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("error", "Invalid pipeline config");
+            body.put("errors", e.getResult() != null ? e.getResult().errors() : List.of());
+            return ResponseEntity.badRequest().body(body);
         } catch (IOException e) {
             log.error("Failed to save pipeline config {}: {}", configPath, e.getMessage(), e);
             return ResponseEntity.badRequest().body(Map.of("error", "Failed to save: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Explicit validation endpoint — returns the full {@link ValidationResult} for a
+     * config without triggering a run. Used by the GUI's "Validate" button and CI pre-flight.
+     *
+     * <p>Loads via {@code loadRaw} so unexpanded {@code ${VAR}} env tokens in
+     * {@code integrations} are preserved (they're not part of the validation surface).
+     */
+    @PostMapping("/pipelines/validate")
+    public ResponseEntity<?> validatePipeline(@RequestParam String configPath) {
+        try {
+            PipelineConfig config = pipelineConfigLoader.loadRaw(Paths.get(configPath));
+            ValidationResult result = pipelineConfigValidator.validate(config);
+            return ResponseEntity.ok(result);
+        } catch (IOException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Failed to load config: " + e.getMessage()));
         }
     }
 
