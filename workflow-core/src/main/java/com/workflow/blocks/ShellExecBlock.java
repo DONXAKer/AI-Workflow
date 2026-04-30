@@ -65,6 +65,27 @@ public class ShellExecBlock implements Block {
     }
 
     @Override
+    public BlockMetadata getMetadata() {
+        return new BlockMetadata(
+            "Shell exec",
+            "infra",
+            List.of(
+                new FieldSchema("command", "Команда", "string", true, null,
+                    "Shell-команда (sh -c). Поддерживает интерполяцию ${block.field}.",
+                    Map.of("multiline", true, "monospace", true)),
+                FieldSchema.string("working_dir", "Рабочая директория",
+                    "Абсолютный путь. Если пусто — берётся workingDir проекта."),
+                FieldSchema.number("timeout_sec", "Таймаут (сек)", DEFAULT_TIMEOUT_SEC,
+                    "Максимальное время выполнения. По умолчанию 300."),
+                FieldSchema.bool("allow_nonzero_exit", "Разрешать ненулевой exit", false,
+                    "Если true, блок не падает на ненулевом exit code (но выставляет success=false).")
+            ),
+            false,
+            Map.of()
+        );
+    }
+
+    @Override
     public Map<String, Object> run(Map<String, Object> input, BlockConfig blockConfig, PipelineRun run) throws Exception {
         Map<String, Object> cfg = blockConfig.getConfig() != null ? blockConfig.getConfig() : Map.of();
 

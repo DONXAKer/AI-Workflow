@@ -4,7 +4,7 @@ import { Save, Loader2, AlertCircle, Trash2, Plug, FileCode, FolderOpen, Brain }
 import { api } from '../../services/api'
 import { ProjectInfo, IntegrationConfig } from '../../types'
 import PathInput from '../../components/PathInput'
-import PipelineConfigTab from '../../components/PipelineConfigTab'
+import { PipelineEditor } from '../../components/PipelineEditor'
 
 const INTEGRATION_TYPE_LABELS: Record<string, string> = {
   OPENROUTER: 'OpenRouter',
@@ -114,9 +114,9 @@ export default function SettingsTab() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto px-4 sm:px-6 py-8 space-y-6">
+    <div className={activeTab === 'pipeline' ? '' : 'max-w-2xl mx-auto px-4 sm:px-6 py-8 space-y-6'}>
       {/* Tab bar */}
-      <div className="flex gap-1 border-b border-slate-800 pb-0">
+      <div className={`flex gap-1 border-b border-slate-800 pb-0 ${activeTab === 'pipeline' ? 'px-4 pt-4' : ''}`}>
         {([['project', 'Проект'], ['pipeline', 'Пайплайн']] as const).map(([tab, label]) => (
           <button
             key={tab}
@@ -132,9 +132,7 @@ export default function SettingsTab() {
         ))}
       </div>
 
-      {activeTab === 'pipeline' && (
-        <PipelineConfigTab />
-      )}
+      {activeTab === 'pipeline' && <PipelineEditor />}
 
       {activeTab === 'project' && <>
       <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wide sr-only">Настройки проекта</h2>

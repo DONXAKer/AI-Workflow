@@ -115,6 +115,32 @@ public class OrchestratorBlock implements Block {
     }
 
     @Override
+    public BlockMetadata getMetadata() {
+        return new BlockMetadata(
+            "Orchestrator",
+            "agent",
+            List.of(
+                FieldSchema.enumField("mode", "Режим", List.of("plan", "review"),
+                    "plan", "plan — построить план; review — проверить результат относительно definition_of_done."),
+                FieldSchema.stringArray("context_blocks", "Контекстные блоки",
+                    "ID блоков, чьи выводы передаются в plan-режиме (обычно task_md)."),
+                FieldSchema.blockRef("plan_block", "Plan-блок",
+                    "ID orchestrator-блока с режимом plan; используется в review-режиме."),
+                FieldSchema.string("working_dir", "Рабочая директория",
+                    "Абсолютный путь; если пусто — workingDir проекта."),
+                FieldSchema.number("max_iterations", "Max iterations", DEFAULT_MAX_ITER_PLAN,
+                    "Максимум раундов агента-супервайзера."),
+                FieldSchema.number("budget_usd_cap", "Бюджет USD", DEFAULT_BUDGET_USD,
+                    "Лимит стоимости вызовов LLM."),
+                FieldSchema.multilineString("system_prompt_extra", "Доп. системный промпт",
+                    "Дополнительный контекст проекта (стек, конвенции). Добавляется к встроенному.")
+            ),
+            false,
+            Map.of()
+        );
+    }
+
+    @Override
     public Map<String, Object> run(Map<String, Object> input, BlockConfig blockConfig, PipelineRun run) throws Exception {
         Map<String, Object> cfg = blockConfig.getConfig() != null ? blockConfig.getConfig() : Map.of();
         String mode = asString(cfg, "mode", "plan");

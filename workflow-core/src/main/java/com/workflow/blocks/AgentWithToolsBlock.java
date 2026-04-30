@@ -113,6 +113,31 @@ public class AgentWithToolsBlock implements Block {
     }
 
     @Override
+    public BlockMetadata getMetadata() {
+        return new BlockMetadata(
+            "Agent (tool-use)",
+            "agent",
+            List.of(
+                new FieldSchema("user_message", "User message", "string", true, null,
+                    "Сообщение для модели. Поддерживает ${block.field} и {placeholder}.",
+                    Map.of("multiline", true, "monospace", true)),
+                FieldSchema.string("working_dir", "Рабочая директория",
+                    "Абсолютный путь к рабочей директории; если пусто — workingDir проекта."),
+                FieldSchema.toolList("allowed_tools", "Разрешённые инструменты",
+                    "Подмножество [Read, Write, Edit, Glob, Grep, Bash]."),
+                FieldSchema.stringArray("bash_allowlist", "Bash allowlist",
+                    "Шаблоны вида Bash(git *), Bash(gradle *). Пустой — Bash отключён."),
+                FieldSchema.number("max_iterations", "Max iterations", DEFAULT_MAX_ITERATIONS,
+                    "Максимум раундов агента."),
+                FieldSchema.number("budget_usd_cap", "Бюджет USD", DEFAULT_BUDGET_USD_CAP,
+                    "Лимит стоимости вызовов LLM на блок.")
+            ),
+            true,   // hasCustomForm — UI uses dedicated AgentWithToolsForm
+            Map.of()
+        );
+    }
+
+    @Override
     public Map<String, Object> run(Map<String, Object> input, BlockConfig blockConfig, PipelineRun run) throws Exception {
         Map<String, Object> cfg = blockConfig.getConfig() != null ? blockConfig.getConfig() : Map.of();
 

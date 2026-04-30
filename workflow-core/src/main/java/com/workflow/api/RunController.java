@@ -1,10 +1,8 @@
 package com.workflow.api;
 
-import com.workflow.config.BlockConfig;
 import com.workflow.config.InvalidPipelineException;
 import com.workflow.config.PipelineConfig;
 import com.workflow.config.PipelineConfigLoader;
-import com.workflow.config.PipelineConfigSettingsRequest;
 import com.workflow.config.PipelineConfigValidator;
 import com.workflow.config.PipelineConfigWriter;
 import com.workflow.config.ValidationResult;
@@ -714,38 +712,40 @@ public class RunController {
         return ResponseEntity.ok(result);
     }
 
+    /**
+     * GET /api/pipelines/config
+     *
+     * <p>Returns the full {@link PipelineConfig} as JSON — Pipeline Editor consumes
+     * this and round-trips it back unchanged via PUT.
+     */
     @GetMapping("/pipelines/config")
     public ResponseEntity<?> getPipelineConfig(@RequestParam String configPath) {
         try {
             PipelineConfig config = pipelineConfigLoader.loadRaw(Paths.get(configPath));
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("defaults", config.getDefaults());
-            result.put("blocks", config.getPipeline().stream()
-                .map(b -> {
-                    Map<String, Object> dto = new LinkedHashMap<>();
-                    dto.put("id", b.getId());
-                    dto.put("block", b.getBlock());
-                    dto.put("enabled", b.isEnabled());
-                    dto.put("approval", b.isApproval());
-                    dto.put("profile", b.getProfile());
-                    dto.put("skills", b.getSkills());
-                    dto.put("agent", agentToMap(b));
-                    return dto;
-                })
-                .collect(Collectors.toList()));
-            return ResponseEntity.ok(result);
+            return ResponseEntity.ok(config);
         } catch (IOException e) {
             return ResponseEntity.badRequest().body(Map.of("error", "Failed to load config: " + e.getMessage()));
         }
     }
 
+    /**
+     * PUT /api/pipelines/config
+     *
+     * <p>Persists the full {@link PipelineConfig} JSON sent by the Pipeline Editor.
+     * Validates first; on validation failure returns 400 with {@code {error, errors[]}}
+     * matching {@code POST /api/pipelines/validate}'s error envelope so the UI can
+     * render both the same way.
+     */
     @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
     @PutMapping("/pipelines/config")
     public ResponseEntity<?> savePipelineConfig(@RequestParam String configPath,
-                                                 @RequestBody PipelineConfigSettingsRequest request) {
+                                                 @RequestBody PipelineConfig request) {
         try {
-            pipelineConfigWriter.applyAndWrite(Paths.get(configPath), request.getDefaults(), request.getBlocks());
-            return ResponseEntity.ok(Map.of("saved", true));
+            PipelineConfig saved = pipelineConfigWriter.writeFull(Paths.get(configPath), request);
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("saved", true);
+            body.put("config", saved);
+            return ResponseEntity.ok(body);
         } catch (InvalidPipelineException e) {
             log.warn("Refused to save invalid pipeline config {}: {} errors",
                 configPath, e.getResult() != null ? e.getResult().errors().size() : 0);
@@ -756,6 +756,89 @@ public class RunController {
         } catch (IOException e) {
             log.error("Failed to save pipeline config {}: {}", configPath, e.getMessage(), e);
             return ResponseEntity.badRequest().body(Map.of("error", "Failed to save: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * POST /api/pipelines/new
+     *
+     * <p>Creates a new pipeline YAML in the project's config directory by cloning the
+     * built-in {@code feature.yaml} template. Replaces {@code name} and
+     * {@code description} with caller-supplied values. Returns the new file path.
+     */
+    @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
+    @PostMapping("/pipelines/new")
+    public ResponseEntity<?> createPipeline(@RequestBody Map<String, Object> request) {
+        String slug = (String) request.get("slug");
+        String displayName = (String) request.get("displayName");
+        String description = (String) request.getOrDefault("description", "");
+
+        if (slug == null || slug.isBlank() || !slug.matches("[a-z0-9][a-z0-9-]*")) {
+            return ResponseEntity.badRequest().body(Map.of(
+                "error", "slug must be a non-empty kebab-case string (a-z, 0-9, -)"));
+        }
+        if (displayName == null || displayName.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "displayName is required"));
+        }
+
+        // Resolve effective config dir (project's, falling back to global).
+        String effectiveConfigDir = configDir;
+        String projectSlug = ProjectContext.get();
+        if (projectSlug != null && projectRepository != null) {
+            var project = projectRepository.findBySlug(projectSlug);
+            if (project.isPresent() && project.get().getConfigDir() != null
+                && !project.get().getConfigDir().isBlank()) {
+                effectiveConfigDir = project.get().getConfigDir();
+            }
+        }
+
+        Path dir = Paths.get(effectiveConfigDir);
+        try {
+            java.nio.file.Files.createDirectories(dir);
+        } catch (IOException e) {
+            return ResponseEntity.badRequest().body(Map.of("error",
+                "Cannot create config dir " + dir + ": " + e.getMessage()));
+        }
+
+        Path target = dir.resolve(slug + ".yaml");
+        if (java.nio.file.Files.exists(target)) {
+            return ResponseEntity.badRequest().body(Map.of(
+                "error", "Pipeline already exists: " + target));
+        }
+
+        // Load the built-in feature.yaml template from classpath via a temp file
+        // so the writer's loader runs against a real Path (matches the rest of
+        // the load surface).
+        PipelineConfig template;
+        try (java.io.InputStream is = new org.springframework.core.io.ClassPathResource(
+                "config/feature.yaml").getInputStream()) {
+            byte[] yaml = is.readAllBytes();
+            Path temp = java.nio.file.Files.createTempFile("feature-template-", ".yaml");
+            java.nio.file.Files.write(temp, yaml);
+            template = pipelineConfigLoader.loadRaw(temp);
+            try { java.nio.file.Files.deleteIfExists(temp); } catch (IOException ignored) {}
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of(
+                "error", "Failed to load template: " + e.getMessage()));
+        }
+        template.setName(displayName);
+        template.setDescription(description);
+
+        try {
+            pipelineConfigWriter.writeFull(target, template);
+            return ResponseEntity.ok(Map.of(
+                "path", target.toString(),
+                "name", target.getFileName().toString(),
+                "pipelineName", template.getName()));
+        } catch (InvalidPipelineException e) {
+            log.error("Built-in template is invalid?! errors: {}",
+                e.getResult() != null ? e.getResult().errors() : List.of());
+            return ResponseEntity.internalServerError().body(Map.of(
+                "error", "Internal: built-in template failed validation"));
+        } catch (IOException e) {
+            log.error("Failed to write new pipeline {}: {}", target, e.getMessage(), e);
+            return ResponseEntity.internalServerError().body(Map.of(
+                "error", "Failed to write pipeline: " + e.getMessage()));
         }
     }
 
@@ -775,15 +858,6 @@ public class RunController {
         } catch (IOException e) {
             return ResponseEntity.badRequest().body(Map.of("error", "Failed to load config: " + e.getMessage()));
         }
-    }
-
-    private Map<String, Object> agentToMap(BlockConfig b) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("model", b.getAgent() != null ? b.getAgent().getModel() : null);
-        m.put("temperature", b.getAgent() != null ? b.getAgent().getTemperature() : null);
-        m.put("maxTokens", b.getAgent() != null ? b.getAgent().getMaxTokens() : null);
-        m.put("systemPrompt", b.getAgent() != null ? b.getAgent().getSystemPrompt() : null);
-        return m;
     }
 
     @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")

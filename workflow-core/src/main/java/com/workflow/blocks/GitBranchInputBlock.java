@@ -25,6 +25,22 @@ public class GitBranchInputBlock implements Block {
     }
 
     @Override
+    public BlockMetadata getMetadata() {
+        return new BlockMetadata(
+            "Git branch input",
+            "input",
+            List.of(
+                FieldSchema.requiredString("branch", "Имя ветки",
+                    "Существующая ветка в GitLab проекта."),
+                new FieldSchema("target_branch", "Целевая ветка", "string", false, "main",
+                    "Ветка, относительно которой берётся diff (по умолчанию main).", Map.of())
+            ),
+            false,
+            Map.of()
+        );
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
     public Map<String, Object> run(Map<String, Object> input, BlockConfig config, PipelineRun run) throws Exception {
         Map<String, Object> cfg = config.getConfig();

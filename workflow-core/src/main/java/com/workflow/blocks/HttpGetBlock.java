@@ -60,6 +60,25 @@ public class HttpGetBlock implements Block {
     }
 
     @Override
+    public BlockMetadata getMetadata() {
+        return new BlockMetadata(
+            "HTTP GET",
+            "infra",
+            List.of(
+                FieldSchema.requiredString("url", "URL", "Полный URL запроса. Поддерживает ${...}."),
+                FieldSchema.number("timeout_sec", "Таймаут (сек)", DEFAULT_TIMEOUT_SEC,
+                    "По умолчанию 30."),
+                FieldSchema.bool("parse_json", "Парсить JSON", false,
+                    "Если true и body — валидный JSON, поле json будет доступно следующим блокам."),
+                FieldSchema.bool("allow_nonzero_status", "Разрешать non-2xx", false,
+                    "Если true, блок не падает на ошибочных HTTP-статусах.")
+            ),
+            false,
+            Map.of()
+        );
+    }
+
+    @Override
     public Map<String, Object> run(Map<String, Object> input, BlockConfig blockConfig, PipelineRun run) throws Exception {
         Map<String, Object> cfg = blockConfig.getConfig() != null ? blockConfig.getConfig() : Map.of();
 
