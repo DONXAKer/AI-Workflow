@@ -94,6 +94,20 @@ public class TaskMdInputBlock implements Block {
     }
 
     @Override
+    public BlockMetadata getMetadata() {
+        return new BlockMetadata(
+            "Task.md input",
+            "input",
+            List.of(
+                FieldSchema.requiredString("file_path", "Путь к task.md",
+                    "Абсолютный путь к файлу задачи или ${input.task_file} для подстановки из run inputs.")
+            ),
+            false,
+            Map.of()
+        );
+    }
+
+    @Override
     public Map<String, Object> run(Map<String, Object> input, BlockConfig blockConfig, PipelineRun run) throws Exception {
         Map<String, Object> cfg = blockConfig.getConfig() != null ? blockConfig.getConfig() : Map.of();
 

@@ -1,5 +1,6 @@
 package com.workflow.config;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -13,7 +14,12 @@ public class PipelineConfig {
     private String description;
     private DefaultsConfig defaults;
     private IntegrationsConfig integrations;
+
+    // Canonical wire form is camelCase (matches new feature.yaml). Legacy
+    // snake_case "knowledge_base" still accepted on deserialization.
+    @JsonAlias({"knowledge_base"})
     private KnowledgeBaseConfig knowledgeBase;
+
     private List<BlockConfig> pipeline = new ArrayList<>();
 
     @JsonProperty("entry_points")

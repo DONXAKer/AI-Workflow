@@ -280,6 +280,206 @@ export interface ValidationResult {
   errors: ValidationError[]
 }
 
+// ── Full PipelineConfig (matches Java POJOs in workflow-core/config/) ─────────
+
+/** AgentConfig override (block- or pipeline-level). Mirrors Java AgentConfig. */
+export interface AgentConfigDto {
+  model?: string | null
+  temperature?: number | null
+  /** Java side serialises as "maxTokens"; "max_tokens" / "maxTokensOrDefault" accepted on read. */
+  maxTokens?: number | null
+  /** Java side serialises as "systemPrompt"; "system_prompt" accepted on read. */
+  systemPrompt?: string | null
+}
+
+export interface DefaultsConfigDto {
+  agent?: AgentConfigDto | null
+}
+
+export interface IntegrationsConfigDto {
+  youtrack?: string | null
+  gitlab?: string | null
+  github?: string | null
+  openrouter?: string | null
+}
+
+export interface KnowledgeSourceConfigDto {
+  type?: string
+  url?: string
+  branch?: string
+  localPath?: string
+  path?: string
+}
+
+export interface KnowledgeBaseConfigDto {
+  sources?: KnowledgeSourceConfigDto[]
+}
+
+export interface FieldCheckConfigDto {
+  field?: string
+  rule?: string
+  value?: unknown
+  message?: string
+}
+
+export interface LLMCheckConfigDto {
+  enabled?: boolean
+  prompt?: string
+  minScore?: number
+  model?: string
+}
+
+export interface OnFailConfigDto {
+  /** loopback | fail | warn */
+  action?: string
+  target?: string
+  /** Java @JsonProperty("max_iterations"). */
+  max_iterations?: number
+  /** Java @JsonProperty("inject_context"). */
+  inject_context?: Record<string, string>
+}
+
+export interface VerifyConfigDto {
+  subject?: string
+  checks?: FieldCheckConfigDto[]
+  /** Java @JsonProperty("llm_check"). */
+  llm_check?: LLMCheckConfigDto | null
+  /** Java @JsonProperty("on_fail"). */
+  on_fail?: OnFailConfigDto | null
+}
+
+export interface OnFailureConfigDto {
+  action?: string
+  target?: string
+  max_iterations?: number
+  inject_context?: Record<string, string>
+  /** Java @JsonProperty("failed_statuses"). */
+  failed_statuses?: string[]
+}
+
+export interface GateConfigDto {
+  name?: string
+  expr?: string
+  description?: string
+}
+
+export interface TimeoutConfigDto {
+  action?: 'fail' | 'notify' | 'escalate'
+  target?: string
+  description?: string
+}
+
+export interface RetryConfigDto {
+  max_attempts?: number
+  backoff_ms?: number
+  max_backoff_ms?: number
+}
+
+/** Full BlockConfig (mirrors Java BlockConfig POJO including @JsonProperty mappings). */
+export interface BlockConfigDto {
+  id: string
+  block: string
+  agent?: AgentConfigDto | null
+  /** Boolean flag (legacy). True = manual approval. */
+  approval?: boolean
+  /** Java @JsonProperty("approval_mode"). */
+  approval_mode?: 'manual' | 'auto' | 'auto_notify' | null
+  enabled?: boolean
+  /** Java @JsonProperty("depends_on"). */
+  depends_on?: string[]
+  /** Free-form per-block config. */
+  config?: Record<string, unknown>
+  verify?: VerifyConfigDto | null
+  condition?: string | null
+  /** Java @JsonProperty("on_failure"). */
+  on_failure?: OnFailureConfigDto | null
+  skills?: string[]
+  profile?: string | null
+  /** Java @JsonProperty("required_gates"). */
+  required_gates?: GateConfigDto[]
+  /** Java @JsonProperty("timeout") (timeoutSeconds field). */
+  timeout?: number | null
+  /** Java @JsonProperty("on_timeout"). */
+  on_timeout?: TimeoutConfigDto | null
+  retry?: RetryConfigDto | null
+}
+
+export interface EntryPointInjectionDto {
+  /** Java @JsonProperty("block_id"). */
+  block_id?: string
+  source?: string
+  config?: Record<string, unknown>
+}
+
+export interface EntryPointConfigDto {
+  id?: string
+  name?: string
+  description?: string
+  /** Java @JsonProperty("from_block"). */
+  from_block?: string
+  inject?: EntryPointInjectionDto[]
+  /** Java @JsonProperty("auto_detect"). */
+  auto_detect?: string | null
+  /** Java @JsonProperty("requires_input"). */
+  requires_input?: string
+}
+
+export interface TriggerConfigDto {
+  id?: string
+  type?: string
+  provider?: string
+  event?: string
+  conditions?: Record<string, string>
+  /** Java @JsonProperty("entry_point_id"). */
+  entry_point_id?: string
+  /** Java @JsonProperty("from_block"). */
+  from_block?: string
+  enabled?: boolean
+}
+
+/** Full PipelineConfig (top-level YAML root, mirrors Java PipelineConfig). */
+export interface PipelineConfigDto {
+  name?: string
+  description?: string
+  defaults?: DefaultsConfigDto | null
+  integrations?: IntegrationsConfigDto | null
+  knowledgeBase?: KnowledgeBaseConfigDto | null
+  pipeline?: BlockConfigDto[]
+  /** Java @JsonProperty("entry_points"). */
+  entry_points?: EntryPointConfigDto[]
+  triggers?: TriggerConfigDto[]
+}
+
+// ── Block registry (UI editor metadata) ───────────────────────────────────────
+
+export type FieldSchemaType =
+  | 'string' | 'number' | 'boolean' | 'string_array'
+  | 'enum' | 'block_ref' | 'tool_list'
+
+export interface FieldSchemaDto {
+  name: string
+  label: string
+  type: FieldSchemaType
+  required?: boolean
+  defaultValue?: unknown
+  description?: string
+  hints?: Record<string, unknown>
+}
+
+export interface BlockMetadataDto {
+  label: string
+  category: string
+  configFields: FieldSchemaDto[]
+  hasCustomForm: boolean
+  uiHints?: Record<string, unknown>
+}
+
+export interface BlockRegistryEntry {
+  type: string
+  description: string
+  metadata: BlockMetadataDto
+}
+
 export interface ProjectInfo {
   id: number
   slug: string

@@ -92,6 +92,19 @@ public class AnalysisBlock implements Block {
     }
 
     @Override
+    public BlockMetadata getMetadata() {
+        // analysis-блок не имеет настраиваемых config-полей: всё управляется через
+        // agent (model/temperature/systemPrompt) и через текст требования.
+        return new BlockMetadata(
+            "Analysis",
+            "agent",
+            List.of(),
+            false,
+            Map.of()
+        );
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
     public Map<String, Object> run(Map<String, Object> input, BlockConfig config, PipelineRun run) throws Exception {
         String requirement = (String) input.getOrDefault("requirement", "");

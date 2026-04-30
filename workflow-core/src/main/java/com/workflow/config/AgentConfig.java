@@ -1,5 +1,6 @@
 package com.workflow.config;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -8,12 +9,18 @@ public class AgentConfig {
 
     private String model;
 
-    @JsonProperty("system_prompt")
+    // Canonical key on both read and write is camelCase (matches existing
+    // feature.yaml). Aliases accept snake_case and the legacy "*OrDefault" form
+    // some yamls use, so we never lose data on round-trip.
+    @JsonProperty("systemPrompt")
+    @JsonAlias({"system_prompt"})
     private String systemPrompt;
 
-    @JsonProperty("max_tokens")
+    @JsonProperty("maxTokens")
+    @JsonAlias({"max_tokens", "maxTokensOrDefault"})
     private Integer maxTokens;
 
+    @JsonAlias({"temperatureOrDefault"})
     private Double temperature;
 
     public AgentConfig() {}

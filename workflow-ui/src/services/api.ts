@@ -1,4 +1,4 @@
-import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry, PipelineConfigSettings, McpServer, ValidationResult } from '../types'
+import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry, McpServer, ValidationResult, PipelineConfigDto, BlockRegistryEntry } from '../types'
 import { currentProjectSlug } from './projectContext'
 
 const BASE = '/api'
@@ -148,13 +148,16 @@ export const api = {
   listPipelines: (): Promise<{ path: string; name: string; pipelineName?: string; description?: string; error?: string }[]> =>
     request(`${BASE}/pipelines`),
 
-  getPipelineConfig: (configPath: string): Promise<PipelineConfigSettings> =>
-    request<PipelineConfigSettings>(`${BASE}/pipelines/config?configPath=${encodeURIComponent(configPath)}`),
+  /** Returns the FULL PipelineConfig as a JSON object — used by Pipeline Editor. */
+  getPipelineConfig: (configPath: string): Promise<PipelineConfigDto> =>
+    request<PipelineConfigDto>(`${BASE}/pipelines/config?configPath=${encodeURIComponent(configPath)}`),
 
-  savePipelineConfig: (configPath: string, settings: PipelineConfigSettings): Promise<{ saved: boolean }> =>
-    request<{ saved: boolean }>(
+  /** Saves the FULL PipelineConfig (no partial overlay). Backend validates before write. */
+  savePipelineConfig: (configPath: string, config: PipelineConfigDto):
+    Promise<{ saved: boolean; config: PipelineConfigDto }> =>
+    request<{ saved: boolean; config: PipelineConfigDto }>(
       `${BASE}/pipelines/config?configPath=${encodeURIComponent(configPath)}`,
-      { method: 'PUT', headers: JSON_HEADERS, body: JSON.stringify(settings) }
+      { method: 'PUT', headers: JSON_HEADERS, body: JSON.stringify(config) }
     ),
 
   validatePipeline: (configPath: string): Promise<ValidationResult> =>
@@ -162,6 +165,17 @@ export const api = {
       `${BASE}/pipelines/validate?configPath=${encodeURIComponent(configPath)}`,
       { method: 'POST' }
     ),
+
+  /** Creates a new pipeline by cloning the built-in feature.yaml template. */
+  createPipeline: (body: { slug: string; displayName: string; description?: string }):
+    Promise<{ path: string; name: string; pipelineName: string }> =>
+    request(`${BASE}/pipelines/new`, {
+      method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body),
+    }),
+
+  /** Returns the catalog of registered block types and their UI-editor metadata. */
+  getBlockRegistry: (): Promise<BlockRegistryEntry[]> =>
+    request<BlockRegistryEntry[]>(`${BASE}/blocks/registry`),
 
   // Integrations
   listIntegrations: (): Promise<IntegrationConfig[]> =>

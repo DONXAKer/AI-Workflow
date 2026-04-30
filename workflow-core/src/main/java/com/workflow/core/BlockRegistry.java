@@ -7,7 +7,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,5 +57,12 @@ public class BlockRegistry {
     /** @return the set of registered block type names. */
     public Set<String> blockTypes() {
         return registry.keySet();
+    }
+
+    /** @return all registered Block beans, sorted by type name for stable UI ordering. */
+    public List<Block> getAllBlocks() {
+        List<Block> out = new ArrayList<>(registry.values());
+        out.sort(Comparator.comparing(Block::getName));
+        return out;
     }
 }

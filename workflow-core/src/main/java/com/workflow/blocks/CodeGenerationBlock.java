@@ -94,6 +94,19 @@ public class CodeGenerationBlock implements Block {
     }
 
     @Override
+    public BlockMetadata getMetadata() {
+        // code_generation также управляется в основном через agent.* и контекст из
+        // других блоков; нет настраиваемых config-ключей в YAML.
+        return new BlockMetadata(
+            "Code generation",
+            "agent",
+            List.of(),
+            false,
+            Map.of()
+        );
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
     public Map<String, Object> run(Map<String, Object> input, BlockConfig config, PipelineRun run) throws Exception {
         // Loopback context from verify/CI failure

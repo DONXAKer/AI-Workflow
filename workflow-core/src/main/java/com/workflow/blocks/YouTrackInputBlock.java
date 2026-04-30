@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Component
@@ -23,6 +24,20 @@ public class YouTrackInputBlock implements Block {
     @Override
     public String getDescription() {
         return "Загружает задачу из YouTrack (название, описание, комментарии) и преобразует её в строку требования для последующих блоков.";
+    }
+
+    @Override
+    public BlockMetadata getMetadata() {
+        return new BlockMetadata(
+            "YouTrack input",
+            "input",
+            List.of(
+                FieldSchema.string("issue_id", "ID задачи",
+                    "Опциональный ID задачи (PROJ-42). Если пусто — берётся из run inputs.")
+            ),
+            false,
+            Map.of()
+        );
     }
 
     @Override

@@ -11,10 +11,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
-import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 @Service
 public class PipelineConfigWriter {
@@ -35,43 +31,30 @@ public class PipelineConfigWriter {
     }
 
     /**
-     * Applies block-level overrides + new defaults to the YAML file and writes it back.
-     * Validates by re-parsing after write. Returns the validated (env-expanded) config.
+     * Writes the full PipelineConfig as-is to {@code yamlPath}. Pre-validates the
+     * incoming config; if invalid, throws {@link InvalidPipelineException} BEFORE
+     * touching the disk, so a bad payload from the editor never replaces the existing
+     * file. Returns the parsed, env-expanded config that ended up on disk.
+     *
+     * <p>This is the canonical save path used by the Pipeline Editor — it sends the
+     * full config and expects an atomic-ish save with structured validation errors on
+     * a 400 response (handled by the caller).
      */
-    public PipelineConfig applyAndWrite(Path yamlPath,
-                                        DefaultsConfig newDefaults,
-                                        List<BlockSettingDto> blockSettings) throws IOException {
-        PipelineConfig config = loader.loadRaw(yamlPath);
-
-        config.setDefaults(newDefaults);
-
-        if (blockSettings != null) {
-            Map<String, BlockConfig> index = config.getPipeline().stream()
-                .collect(Collectors.toMap(BlockConfig::getId, Function.identity()));
-
-            for (BlockSettingDto s : blockSettings) {
-                BlockConfig block = index.get(s.getId());
-                if (block == null) continue;
-
-                block.setEnabled(s.isEnabled());
-                block.setApproval(s.isApproval());
-                block.setProfile(nullIfBlank(s.getProfile()));
-                block.setSkills(s.getSkills() != null ? s.getSkills() : List.of());
-
-                AgentConfig ag = toAgentConfig(s.getAgent());
-                block.setAgent(ag);
-            }
+    public PipelineConfig writeFull(Path yamlPath, PipelineConfig config) throws IOException {
+        if (config == null) {
+            throw new IllegalArgumentException("PipelineConfig must not be null");
+        }
+        // Pre-write validation: refuse to write an invalid config.
+        ValidationResult preCheck = validator.validate(config);
+        if (!preCheck.valid()) {
+            throw new InvalidPipelineException(preCheck);
         }
 
         String yaml = yamlMapper.writeValueAsString(config);
         Files.writeString(yamlPath, yaml, StandardCharsets.UTF_8);
 
-        // Re-parse with env expansion to validate the bytes-on-disk round-trip
+        // Re-parse with env-expansion to confirm bytes-on-disk round-trip.
         PipelineConfig parsed = loader.load(yamlPath);
-
-        // Schema-level validation: refuse to leave a broken pipeline on disk. The write
-        // already happened above, but the contract is "applyAndWrite returns a usable config" —
-        // so we throw and let the operator see the structured errors. The next save can fix it.
         ValidationResult result = validator.validate(parsed);
         if (!result.valid()) {
             throw new InvalidPipelineException(result);
@@ -79,23 +62,8 @@ public class PipelineConfigWriter {
         return parsed;
     }
 
-    private AgentConfig toAgentConfig(BlockSettingDto.AgentOverride src) {
-        if (src == null) return null;
-        boolean hasModel = src.getModel() != null && !src.getModel().isBlank();
-        boolean hasTokens = src.getMaxTokens() != null;
-        boolean hasTemp = src.getTemperature() != null;
-        boolean hasPrompt = src.getSystemPrompt() != null && !src.getSystemPrompt().isBlank();
-        if (!hasModel && !hasTokens && !hasTemp && !hasPrompt) return null;
-
-        AgentConfig ag = new AgentConfig();
-        if (hasModel) ag.setModel(src.getModel());
-        if (hasTokens) ag.setMaxTokens(src.getMaxTokens());
-        if (hasTemp) ag.setTemperature(src.getTemperature());
-        if (hasPrompt) ag.setSystemPrompt(src.getSystemPrompt());
-        return ag;
-    }
-
-    private static String nullIfBlank(String s) {
-        return (s == null || s.isBlank()) ? null : s;
+    /** Exposed for tests: serialise to YAML without writing or validating. */
+    public String toYaml(PipelineConfig config) throws IOException {
+        return yamlMapper.writeValueAsString(config);
     }
 }

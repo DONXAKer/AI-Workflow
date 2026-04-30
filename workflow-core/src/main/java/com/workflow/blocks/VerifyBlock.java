@@ -39,6 +39,19 @@ public class VerifyBlock implements Block {
     }
 
     @Override
+    public BlockMetadata getMetadata() {
+        // Verify-блок настраивается через `verify:` поле BlockConfig (subject, checks,
+        // llm_check, on_fail), а не через `config:` map. UI открывает кастомную форму.
+        return new BlockMetadata(
+            "Verify",
+            "verify",
+            List.of(),     // нет config-полей — все настройки в BlockConfig.verify
+            true,          // hasCustomForm — UI uses dedicated VerifyForm
+            Map.of()
+        );
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
     public Map<String, Object> run(Map<String, Object> input, BlockConfig config, PipelineRun run) throws Exception {
         VerifyConfig verifyConfig = config.getVerify();
