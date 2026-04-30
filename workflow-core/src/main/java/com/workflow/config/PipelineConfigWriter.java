@@ -25,7 +25,10 @@ public class PipelineConfigWriter {
         YAMLFactory yamlFactory = new YAMLFactory();
         yamlFactory.configure(YAMLGenerator.Feature.WRITE_DOC_START_MARKER, false);
         this.yamlMapper = new ObjectMapper(yamlFactory);
-        this.yamlMapper.setSerializationInclusion(JsonInclude.Include.NON_NULL);
+        // NON_EMPTY also strips empty collections/maps (e.g. depends_on: [], skills: [],
+        // required_gates: [], config: {}) which would otherwise round-trip as YAML noise.
+        // Primitives (boolean approval, enabled) keep their explicit values either way.
+        this.yamlMapper.setSerializationInclusion(JsonInclude.Include.NON_EMPTY);
         this.yamlMapper.registerModule(new JavaTimeModule());
         this.yamlMapper.findAndRegisterModules();
     }

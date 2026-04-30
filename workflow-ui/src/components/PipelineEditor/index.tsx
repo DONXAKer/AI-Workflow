@@ -5,6 +5,7 @@ import { api } from '../../services/api'
 import { useBlockRegistry } from '../../hooks/useBlockRegistry'
 import { usePipelineEditor } from '../../hooks/usePipelineEditor'
 import { BlockConfigDto, BlockRegistryEntry, ValidationError } from '../../types'
+import { blockTypeLabelWithCode } from '../../utils/blockLabels'
 import Toolbar from './Toolbar'
 import Canvas from './Canvas'
 import BlockPalette from './BlockPalette'
@@ -42,6 +43,24 @@ export function PipelineEditor() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [editor.dirty])
 
+  // Ctrl/Cmd+Z → undo. Skip when typing inside a textarea so users can use native
+  // multi-line undo there; single-line inputs are controlled and rerender cleanly
+  // when our state rolls back, so app-level undo is safe (and more useful) there.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return
+      if (e.key !== 'z' && e.key !== 'Z') return
+      if (e.shiftKey) return
+      const t = e.target as HTMLElement | null
+      if (t && t.tagName === 'TEXTAREA') return
+      if (!editor.canUndo) return
+      e.preventDefault()
+      editor.undo()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [editor.canUndo, editor.undo])
+
   // Load pipelines list
   useEffect(() => {
     setPipelinesLoading(true)
@@ -67,7 +86,8 @@ export function PipelineEditor() {
     return () => window.removeEventListener('pipeline-editor:add-after', handler)
   }, [])
 
-  // Close popover on outside click
+  // Close popover on outside click or Escape. Capture phase so react-flow's
+  // pointer-event handlers can't swallow propagation before we see it.
   useEffect(() => {
     if (!showAddPicker) return
     const handler = (e: MouseEvent) => {
@@ -75,8 +95,15 @@ export function PipelineEditor() {
         setShowAddPicker(null)
       }
     }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
+    const escHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowAddPicker(null)
+    }
+    document.addEventListener('mousedown', handler, true)
+    document.addEventListener('keydown', escHandler)
+    return () => {
+      document.removeEventListener('mousedown', handler, true)
+      document.removeEventListener('keydown', escHandler)
+    }
   }, [showAddPicker])
 
   const selectedBlock = useMemo(() => {
@@ -137,6 +164,8 @@ export function PipelineEditor() {
         validating={editor.validating}
         validatedClean={editor.validatedClean}
         errorCount={editor.errors.length}
+        canUndo={editor.canUndo}
+        onUndo={editor.undo}
         onValidate={validate}
         onSave={save}
         onOpenSettings={() => setShowSettings(true)}
@@ -237,8 +266,8 @@ export function PipelineEditor() {
                     }}
                     className="w-full text-left px-2 py-1.5 rounded text-xs bg-slate-800/40 hover:bg-blue-900/40 border border-slate-800 hover:border-blue-700 text-slate-200 hover:text-blue-200"
                   >
-                    <div className="font-medium">{e.metadata.label}</div>
-                    <div className="font-mono text-[10px] text-slate-500">{e.type}</div>
+                    <div className="font-medium">{blockTypeLabelWithCode(e.type)}</div>
+                    <div className="font-mono text-[10px] text-slate-500">{e.metadata.label}</div>
                   </button>
                 ))}
               </div>

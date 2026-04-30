@@ -3,6 +3,7 @@ import { Handle, NodeProps, Position } from '@xyflow/react'
 import { AlertCircle, Ban, Plus, Sparkles, ShieldCheck, Wrench, Globe, FileInput, Cog } from 'lucide-react'
 import clsx from 'clsx'
 import { BlockNode as BlockNodeT } from './types'
+import { blockIdLabelWithCode, blockTypeLabelWithCode } from '../../utils/blockLabels'
 
 const CATEGORY_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
   input: FileInput,
@@ -39,10 +40,10 @@ function BlockNodeImpl(props: NodeProps<BlockNodeT>) {
         <Icon className="w-3.5 h-3.5 text-slate-400 mt-0.5 flex-shrink-0" />
         <div className="flex-1 min-w-0">
           <div className="text-sm font-semibold text-slate-100 truncate" title={data.blockId}>
-            {data.blockId}
+            {blockIdLabelWithCode(data.blockId)}
           </div>
           <div className="text-[10px] font-mono text-slate-500 truncate" title={data.blockType}>
-            {data.blockType}
+            {blockTypeLabelWithCode(data.blockType)}
           </div>
         </div>
       </div>

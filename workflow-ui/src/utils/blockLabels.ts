@@ -99,6 +99,26 @@ export function blockIdLabel(blockId: string | undefined | null): string {
   return BLOCK_ID_LABELS[blockId] ?? BLOCK_TYPE_LABELS[blockId] ?? blockId
 }
 
+/**
+ * Returns "Russian (english)" if a Russian label exists for the block ID, otherwise the raw ID.
+ * Use in headings where both a friendly name and the canonical identifier matter.
+ */
+export function blockIdLabelWithCode(blockId: string | undefined | null): string {
+  if (!blockId) return '—'
+  const ru = BLOCK_ID_LABELS[blockId] ?? BLOCK_TYPE_LABELS[blockId]
+  return ru && ru !== blockId ? `${ru} (${blockId})` : blockId
+}
+
+/**
+ * Returns "Russian (english)" if a Russian label exists for the block type, otherwise the raw type.
+ * Use in palettes and pickers that list block types.
+ */
+export function blockTypeLabelWithCode(blockType: string | undefined): string {
+  if (!blockType) return ''
+  const ru = BLOCK_TYPE_LABELS[blockType]
+  return ru && ru !== blockType ? `${ru} (${blockType})` : blockType
+}
+
 // ---------------------------------------------------------------------------
 // Model recommendations per block category
 // ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ import com.workflow.project.Project;
 import com.workflow.project.ProjectContext;
 import com.workflow.project.ProjectRepository;
 import com.workflow.tools.DefaultToolExecutor;
+import com.workflow.tools.ProjectTreeSummary;
 import com.workflow.tools.Tool;
 import com.workflow.tools.ToolCallAuditRepository;
 import com.workflow.tools.ToolContext;
@@ -79,7 +80,18 @@ public class AgentWithToolsBlock implements Block {
         4. Follow existing naming conventions, package structure, and patterns in the codebase.
         5. Write tests alongside the implementation (check where existing tests live first).
         6. Use Bash to verify the build/tests pass before declaring the task done.
-        7. If you encounter an unexpected state, investigate with tools — do not guess.""";
+        7. If you encounter an unexpected state, investigate with tools — do not guess.
+
+        ## Working Directory & Bash
+        - Your tools all run relative to the working directory shown in the user message.
+        - The user message may include a `## Codebase layout` section listing the project tree —
+          use it to pick paths for `Read`/`Edit` directly, do NOT re-Glob the whole tree.
+        - Bash CWD does NOT persist between tool calls. Every Bash invocation starts at the
+          working_dir. If you need to run a command from a subdirectory, chain it inline:
+          `cd subdir && ./gradlew compileJava`. Do NOT split that across two Bash calls —
+          the second call would forget the cd and fail.
+        - When the plan provides `files_to_touch`, Read each listed file ONCE before editing
+          it; do not re-Read the same file repeatedly.""";
 
     private static final String FALLBACK_PROMPT_FOOTER = """
         ## Quality Bar
@@ -104,6 +116,7 @@ public class AgentWithToolsBlock implements Block {
     @Autowired(required = false) private ProjectRepository projectRepository;
     @Autowired(required = false) private StringInterpolator stringInterpolator;
     @Autowired(required = false) private RunWebSocketHandler wsHandler;
+    @Autowired(required = false) private com.workflow.tools.FileSystemCache fileSystemCache;
 
     @Override public String getName() { return "agent_with_tools"; }
 
@@ -130,7 +143,11 @@ public class AgentWithToolsBlock implements Block {
                 FieldSchema.number("max_iterations", "Max iterations", DEFAULT_MAX_ITERATIONS,
                     "Максимум раундов агента."),
                 FieldSchema.number("budget_usd_cap", "Бюджет USD", DEFAULT_BUDGET_USD_CAP,
-                    "Лимит стоимости вызовов LLM на блок.")
+                    "Лимит стоимости вызовов LLM на блок."),
+                FieldSchema.string("preload_from", "Preload from plan block",
+                    "ID upstream-плана (orchestrator mode=plan), из которого взять files_to_touch "
+                        + "и предзагрузить содержимое в user_message — экономит 3-5 итераций "
+                        + "exploration на impl-блоке.")
             ),
             true,   // hasCustomForm — UI uses dedicated AgentWithToolsForm
             Map.of()
@@ -156,6 +173,8 @@ public class AgentWithToolsBlock implements Block {
             ? stringInterpolator.interpolate(userTemplate, run, input)
             : userTemplate;
         String userMessage = appendLoopbackFeedback(interpolate(expanded, input), input);
+        userMessage = prependCodebaseTree(userMessage, workingDir);
+        userMessage = prependPreloadedFiles(userMessage, cfg, input, workingDir);
 
         List<String> allowedTools = asStringList(cfg, "allowed_tools");
         if (allowedTools.isEmpty()) {
@@ -293,6 +312,157 @@ public class AgentWithToolsBlock implements Block {
      * {@code ${input._loopback.issues}} syntax — fresh agent sessions still see the
      * diagnosis on retry.
      */
+    /**
+     * Prepends a codebase layout summary so the agent doesn't burn iterations re-Glob'ing
+     * the working dir to figure out package structure. Saves typically 5-10 iterations on
+     * impl blocks where the agent would otherwise alternate between `pwd`/`ls`/`Glob` to
+     * orient itself.
+     */
+    private static String prependCodebaseTree(String userMessage, Path workingDir) {
+        String tree = ProjectTreeSummary.summarise(workingDir);
+        if (tree.isEmpty()) return userMessage;
+        return "## Working directory\n" + workingDir + "\n\n"
+            + "## Codebase layout\n```\n" + tree + "```\n\n---\n\n"
+            + userMessage;
+    }
+
+    /** Hard cap on number of files we'll inline from a plan handoff. */
+    private static final int PRELOAD_MAX_FILES = 12;
+    /** Hard cap on total characters across all inlined files (~8K tokens at avg ratio). */
+    private static final int PRELOAD_MAX_CHARS = 32_000;
+
+    /**
+     * When the block declares {@code preload_from: <plan_block_id>}, looks up the upstream
+     * plan output, parses its {@code files_to_touch} list, and inlines the file contents
+     * at the top of the user message. This skips the 3-5 iterations the agent would
+     * otherwise spend Reading those files one by one before producing any Edit.
+     *
+     * <p>Caps: {@link #PRELOAD_MAX_FILES} files, {@link #PRELOAD_MAX_CHARS} chars total.
+     * Files past the budget are listed by path only, and the agent can still Read them
+     * explicitly. Missing files (paths not on disk) are skipped silently — a stale plan
+     * shouldn't crash the run.
+     *
+     * <p>Files are read via {@link FileSystemCache#getRead}/{@code putRead} so a later
+     * explicit {@code Read} of the same path inside the agent is a cache hit.
+     */
+    private String prependPreloadedFiles(String userMessage, Map<String, Object> cfg,
+                                          Map<String, Object> input, Path workingDir) {
+        Object pf = cfg.get("preload_from");
+        if (!(pf instanceof String planBlockId) || planBlockId.isBlank()) return userMessage;
+
+        Object planOut = input.get(planBlockId);
+        if (!(planOut instanceof Map<?, ?> planMap)) {
+            log.info("preload_from='{}' but no output found for that block — skipping", planBlockId);
+            return userMessage;
+        }
+        Object filesField = planMap.get("files_to_touch");
+        if (filesField == null) {
+            log.info("preload_from='{}' has no files_to_touch field — skipping", planBlockId);
+            return userMessage;
+        }
+
+        List<String> paths = parseFilesToTouch(filesField.toString());
+        if (paths.isEmpty()) return userMessage;
+
+        StringBuilder loaded = new StringBuilder();
+        loaded.append("## Pre-loaded files (from plan block `").append(planBlockId)
+            .append("`)\n\n");
+        int filesShown = 0;
+        int charsUsed = 0;
+        List<String> skipped = new ArrayList<>();
+        for (String relPath : paths) {
+            if (filesShown >= PRELOAD_MAX_FILES || charsUsed >= PRELOAD_MAX_CHARS) {
+                skipped.add(relPath);
+                continue;
+            }
+            Path resolved = workingDir.resolve(relPath).normalize();
+            if (!resolved.startsWith(workingDir) || !java.nio.file.Files.isRegularFile(resolved)) {
+                skipped.add(relPath);
+                continue;
+            }
+            String content;
+            try {
+                content = readWithCache(resolved);
+            } catch (Exception e) {
+                log.debug("preload skip {} — {}", relPath, e.getMessage());
+                skipped.add(relPath);
+                continue;
+            }
+            // Truncate per-file so a single huge file doesn't eat the whole budget.
+            int budgetLeft = PRELOAD_MAX_CHARS - charsUsed;
+            boolean truncated = false;
+            if (content.length() > budgetLeft) {
+                content = content.substring(0, budgetLeft);
+                truncated = true;
+            }
+            String fenceLang = guessFence(relPath);
+            loaded.append("### ").append(relPath).append("\n```").append(fenceLang).append("\n")
+                .append(content);
+            if (!content.endsWith("\n")) loaded.append('\n');
+            if (truncated) loaded.append("... (truncated — Read for full content)\n");
+            loaded.append("```\n\n");
+            charsUsed += content.length();
+            filesShown++;
+        }
+        if (!skipped.isEmpty()) {
+            loaded.append("Files not preloaded (read explicitly if needed): ")
+                .append(String.join(", ", skipped)).append("\n\n");
+        }
+        loaded.append("---\n\n");
+        return loaded + userMessage;
+    }
+
+    private String readWithCache(Path resolved) throws java.io.IOException {
+        if (fileSystemCache != null) {
+            List<String> cachedLines = fileSystemCache.getRead(resolved);
+            if (cachedLines != null) return String.join("\n", cachedLines);
+        }
+        List<String> lines = java.nio.file.Files.readAllLines(resolved, java.nio.charset.StandardCharsets.UTF_8);
+        if (fileSystemCache != null) fileSystemCache.putRead(resolved, lines);
+        return String.join("\n", lines);
+    }
+
+    /** Splits a `files_to_touch` blob (newline- or comma-separated) into clean paths. */
+    private static List<String> parseFilesToTouch(String raw) {
+        List<String> out = new ArrayList<>();
+        for (String line : raw.split("[\\n,]")) {
+            String trimmed = line.trim();
+            // Strip leading bullets / numbering ("- foo.java", "1. foo.java")
+            trimmed = trimmed.replaceFirst("^[-*]\\s+", "").replaceFirst("^\\d+\\.\\s+", "");
+            // Strip surrounding backticks the model sometimes adds
+            if (trimmed.startsWith("`") && trimmed.endsWith("`") && trimmed.length() > 1) {
+                trimmed = trimmed.substring(1, trimmed.length() - 1);
+            }
+            if (!trimmed.isEmpty()) out.add(trimmed);
+        }
+        return out;
+    }
+
+    private static String guessFence(String path) {
+        int dot = path.lastIndexOf('.');
+        if (dot < 0) return "";
+        String ext = path.substring(dot + 1).toLowerCase();
+        return switch (ext) {
+            case "java" -> "java";
+            case "kt", "kts" -> "kotlin";
+            case "py" -> "python";
+            case "js", "mjs", "cjs" -> "javascript";
+            case "ts", "tsx" -> "typescript";
+            case "jsx" -> "jsx";
+            case "yaml", "yml" -> "yaml";
+            case "json" -> "json";
+            case "xml" -> "xml";
+            case "sh", "bash" -> "bash";
+            case "go" -> "go";
+            case "rs" -> "rust";
+            case "cpp", "cc", "cxx", "h", "hpp" -> "cpp";
+            case "cs" -> "csharp";
+            case "rb" -> "ruby";
+            case "md" -> "markdown";
+            default -> "";
+        };
+    }
+
     @SuppressWarnings("unchecked")
     private static String appendLoopbackFeedback(String userMessage, Map<String, Object> input) {
         Object raw = input.get("_loopback");

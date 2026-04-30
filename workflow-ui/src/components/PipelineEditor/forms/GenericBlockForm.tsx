@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { X } from 'lucide-react'
 import { BlockConfigDto, FieldSchemaDto, PipelineConfigDto } from '../../../types'
+import { HelpPopover, InterpolationHelpBody } from '../HelpPopover'
 
 const NATIVE_TOOLS = ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash']
 
@@ -55,11 +56,24 @@ function FieldRow({
   currentBlockId: string
 }) {
   const id = `field-${field.name}`
+  const hints = field.hints ?? {}
+  // Show ${...}-syntax hint on text fields that look like templates: explicit
+  // hint, or any multiline/monospace string (the "code-like" fields).
+  const showInterpolationHelp = field.type === 'string' && (
+    hints.interpolatable === true || hints.multiline === true || hints.monospace === true
+  )
   return (
     <div>
-      <label htmlFor={id} className="block text-xs font-medium text-slate-300 mb-1">
-        {field.label}{' '}
-        {field.required && <span className="text-red-400">*</span>}
+      <label htmlFor={id} className="text-xs font-medium text-slate-300 mb-1 flex items-center gap-1.5">
+        <span>
+          {field.label}{' '}
+          {field.required && <span className="text-red-400">*</span>}
+        </span>
+        {showInterpolationHelp && (
+          <HelpPopover testId={`field-${field.name}`} title="Подстановка значений">
+            <InterpolationHelpBody />
+          </HelpPopover>
+        )}
       </label>
       <FieldControl
         id={id}

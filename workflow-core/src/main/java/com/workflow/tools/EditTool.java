@@ -75,12 +75,20 @@ public class EditTool implements Tool {
 
         int occurrences = countOccurrences(content, oldStr);
         if (occurrences == 0) {
-            throw new ToolInvocationException("old_string not found in " + filePath);
+            // Self-correction context: instead of forcing the model to re-Read the file,
+            // include up to 3 closest-prefix matches with ±5 surrounding lines so it can
+            // diagnose drift (whitespace, newlines, slightly different identifiers) directly.
+            throw new ToolInvocationException(
+                "old_string not found in " + filePath
+                    + closestMatchesContext(content, oldStr));
         }
         if (!replaceAll && occurrences > 1) {
+            // Same idea for ambiguous matches: show ±3 lines around each occurrence so the
+            // model can pick which one it meant and add disambiguating context to its retry.
             throw new ToolInvocationException(
                 "old_string appears " + occurrences + " times in " + filePath
-                    + " — add surrounding context to make it unique, or set replace_all=true");
+                    + " — add surrounding context to make it unique, or set replace_all=true."
+                    + multipleMatchesContext(content, oldStr));
         }
 
         String updated = replaceAll
@@ -112,5 +120,138 @@ public class EditTool implements Tool {
         int idx = haystack.indexOf(needle);
         if (idx < 0) return haystack;
         return haystack.substring(0, idx) + replacement + haystack.substring(idx + needle.length());
+    }
+
+    /** Total payload cap for self-correction context (chars). Models pay token cost on this. */
+    private static final int CONTEXT_BUDGET_CHARS = 2000;
+    /** Length of prefix used when no exact match exists, to find approximate sites. */
+    private static final int PREFIX_PROBE_CHARS = 40;
+    /** Max number of ambiguous-match snippets to include in a multi-match error. */
+    private static final int MAX_AMBIGUOUS_HITS = 5;
+    /** Max number of prefix-probe matches to include when old_string isn't present at all. */
+    private static final int MAX_PREFIX_HITS = 3;
+
+    /**
+     * Builds a "closest matches by prefix" snippet for the no-occurrence error path.
+     * Looks for the first {@link #PREFIX_PROBE_CHARS} of {@code oldStr} in {@code content}
+     * (progressively trimming the prefix on whitespace boundaries until something hits)
+     * and returns up to {@link #MAX_PREFIX_HITS} hits with ±5 surrounding lines each.
+     * Returns an empty string when no prefix overlap is found.
+     */
+    private static String closestMatchesContext(String content, String oldStr) {
+        String probe = oldStr.length() > PREFIX_PROBE_CHARS
+            ? oldStr.substring(0, PREFIX_PROBE_CHARS)
+            : oldStr;
+        // Trim trailing whitespace on the probe so we don't fail on EOL drift.
+        while (!probe.isEmpty() && Character.isWhitespace(probe.charAt(probe.length() - 1))) {
+            probe = probe.substring(0, probe.length() - 1);
+        }
+        // Walk the probe down progressively so we still find SOMETHING when the prefix
+        // also drifted (e.g. the model's old_string had a typo at char 30).
+        int[] hits = null;
+        while (probe.length() >= 8) {
+            hits = findAllOccurrences(content, probe);
+            if (hits.length > 0) break;
+            // Cut the probe at the last word boundary to retry.
+            int cut = lastWordBoundary(probe);
+            if (cut <= 8) break;
+            probe = probe.substring(0, cut);
+        }
+        if (hits == null || hits.length == 0) return "";
+        StringBuilder sb = new StringBuilder();
+        sb.append("\nClosest matches by prefix (").append(hits.length).append(" hit")
+            .append(hits.length == 1 ? "" : "s").append(", showing up to ")
+            .append(MAX_PREFIX_HITS).append(" with ±5 surrounding lines):\n");
+        int shown = 0;
+        for (int pos : hits) {
+            if (shown++ >= MAX_PREFIX_HITS) break;
+            String snippet = surroundingLines(content, pos, 5);
+            sb.append(snippet);
+            if (sb.length() > CONTEXT_BUDGET_CHARS) {
+                sb.setLength(CONTEXT_BUDGET_CHARS);
+                sb.append("\n... (context truncated)\n");
+                break;
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Builds a snippet for the multiple-occurrence error path: shows ±3 lines around each
+     * of the first {@link #MAX_AMBIGUOUS_HITS} occurrences so the model can pick which
+     * site it meant and append disambiguating text to its retry.
+     */
+    private static String multipleMatchesContext(String content, String oldStr) {
+        int[] hits = findAllOccurrences(content, oldStr);
+        if (hits.length == 0) return "";
+        StringBuilder sb = new StringBuilder();
+        sb.append("\nMatch sites (showing up to ").append(MAX_AMBIGUOUS_HITS)
+            .append(" with ±3 surrounding lines each):\n");
+        int shown = 0;
+        for (int pos : hits) {
+            if (shown++ >= MAX_AMBIGUOUS_HITS) break;
+            String snippet = surroundingLines(content, pos, 3);
+            sb.append(snippet);
+            if (sb.length() > CONTEXT_BUDGET_CHARS) {
+                sb.setLength(CONTEXT_BUDGET_CHARS);
+                sb.append("\n... (context truncated)\n");
+                break;
+            }
+        }
+        return sb.toString();
+    }
+
+    /** Returns all start positions of {@code needle} in {@code haystack}. */
+    private static int[] findAllOccurrences(String haystack, String needle) {
+        if (needle.isEmpty()) return new int[0];
+        java.util.ArrayList<Integer> out = new java.util.ArrayList<>();
+        int idx = 0;
+        while ((idx = haystack.indexOf(needle, idx)) != -1) {
+            out.add(idx);
+            idx += needle.length();
+        }
+        int[] arr = new int[out.size()];
+        for (int i = 0; i < out.size(); i++) arr[i] = out.get(i);
+        return arr;
+    }
+
+    /** Returns the last whitespace-delimited word-boundary index in {@code s}, or -1. */
+    private static int lastWordBoundary(String s) {
+        for (int i = s.length() - 1; i > 0; i--) {
+            if (Character.isWhitespace(s.charAt(i))) return i;
+        }
+        return -1;
+    }
+
+    /**
+     * Returns a snippet of {@code content} containing {@code linesBeforeAfter} lines on
+     * either side of the line containing {@code charPos}, with 1-indexed line numbers
+     * and a separator header. Format mirrors {@code cat -n}.
+     */
+    private static String surroundingLines(String content, int charPos, int linesBeforeAfter) {
+        // Pre-compute line offsets for the file.
+        int targetLine = 1;
+        for (int i = 0; i < charPos && i < content.length(); i++) {
+            if (content.charAt(i) == '\n') targetLine++;
+        }
+        int from = Math.max(1, targetLine - linesBeforeAfter);
+        int to = targetLine + linesBeforeAfter;
+        StringBuilder sb = new StringBuilder();
+        sb.append("--- around line ").append(targetLine).append(" ---\n");
+        int lineNum = 1;
+        int lineStart = 0;
+        for (int i = 0; i <= content.length(); i++) {
+            boolean eof = i == content.length();
+            if (eof || content.charAt(i) == '\n') {
+                if (lineNum >= from && lineNum <= to) {
+                    String line = content.substring(lineStart, i);
+                    sb.append(String.format("%6d\t%s%n", lineNum, line));
+                }
+                lineNum++;
+                lineStart = i + 1;
+                if (lineNum > to) break;
+            }
+        }
+        return sb.toString();
     }
 }

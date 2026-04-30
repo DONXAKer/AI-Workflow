@@ -142,11 +142,15 @@ export default function RunPage() {
           input: inputMap.get(blockId),
         }))
 
-      // Add current block if not already in completedBlocks
+      // Add current block if not already in completedBlocks. The status mapping must
+      // cover FAILED — without it, a failed run displayed after page refresh would show
+      // its failure block as "pending" (since there's no BlockOutput for an exception
+      // path), which renders as "Ожидание" instead of "Ошибка" — confusing for the user.
       if (data.currentBlock && !data.completedBlocks?.includes(data.currentBlock)) {
         const currentStatus: BlockStatus['status'] =
           data.status === 'PAUSED_FOR_APPROVAL' ? 'awaiting_approval' :
           data.status === 'RUNNING' ? 'running' :
+          data.status === 'FAILED' ? 'failed' :
           'pending'
         completedStatuses.push({ blockId: data.currentBlock, status: currentStatus })
       }

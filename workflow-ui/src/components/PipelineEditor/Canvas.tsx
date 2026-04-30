@@ -169,13 +169,14 @@ function buildGraph(
     // verify.on_fail.target — dashed orange loopback
     const vfTarget = b.verify?.on_fail?.target
     if (vfTarget && b.verify?.on_fail?.action === 'loopback') {
+      const maxIter = b.verify?.on_fail?.max_iterations
       edges.push({
         id: `vf:${b.id}->${vfTarget}`,
         source: b.id,
         target: vfTarget,
         type: 'smoothstep',
         animated: true,
-        label: 'verify failed',
+        label: maxIter ? `verify не прошёл · до ${maxIter} итер.` : 'verify не прошёл',
         labelStyle: { fill: '#fb923c', fontSize: 10 },
         style: { stroke: '#fb923c', strokeDasharray: '6 4' },
         data: { kind: 'verify_loopback', broken: !blockIdSet.has(vfTarget) },
@@ -184,13 +185,14 @@ function buildGraph(
     // on_failure.target — dashed red loopback
     const ofTarget = b.on_failure?.target
     if (ofTarget && b.on_failure?.action === 'loopback') {
+      const maxIter = b.on_failure?.max_iterations
       edges.push({
         id: `of:${b.id}->${ofTarget}`,
         source: b.id,
         target: ofTarget,
         type: 'smoothstep',
         animated: true,
-        label: 'on failure',
+        label: maxIter ? `при ошибке · до ${maxIter} итер.` : 'при ошибке',
         labelStyle: { fill: '#f87171', fontSize: 10 },
         style: { stroke: '#f87171', strokeDasharray: '6 4' },
         data: { kind: 'on_failure_loopback', broken: !blockIdSet.has(ofTarget) },

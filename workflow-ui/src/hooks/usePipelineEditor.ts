@@ -8,6 +8,11 @@ import { BlockConfigDto, PipelineConfigDto, ValidationError, ValidationResult } 
  *
  * <p>Persistence: dirty == JSON-string equality between current and original.
  * Save replaces original with whatever the backend returns from PUT.
+ *
+ * <p>History: every user-driven mutation pushes a deep-cloned snapshot of the prior
+ * state onto a bounded stack (current and history live in one state object so the
+ * push and the swap commit atomically — strict-mode double invocation stays safe).
+ * Undo pops one entry. The stack is cleared on reload, save, and pipeline switch.
  */
 export interface UsePipelineEditor {
   configPath: string | null
@@ -29,6 +34,11 @@ export interface UsePipelineEditor {
   reload: () => Promise<void>
   validate: () => Promise<ValidationResult | null>
   save: () => Promise<boolean>
+
+  /** Undo the most recent mutation. No-op when {@link canUndo} is false. */
+  undo: () => void
+  /** True iff there is at least one prior state to revert to. */
+  canUndo: boolean
 
   /** Update top-level (name, description, defaults, entry_points, knowledgeBase, triggers). */
   patchConfig: (patch: Partial<PipelineConfigDto>) => void
@@ -52,9 +62,23 @@ function eqJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
+const HISTORY_LIMIT = 50
+
+interface EditorCore {
+  current: PipelineConfigDto | null
+  history: PipelineConfigDto[]
+}
+
+const EMPTY_CORE: EditorCore = { current: null, history: [] }
+
+function pushHistory(history: PipelineConfigDto[], prev: PipelineConfigDto): PipelineConfigDto[] {
+  const nh = [...history, deepClone(prev)]
+  return nh.length > HISTORY_LIMIT ? nh.slice(nh.length - HISTORY_LIMIT) : nh
+}
+
 export function usePipelineEditor(): UsePipelineEditor {
-  const [configPath, setConfigPath] = useState<string | null>(null)
-  const [current, setCurrentRaw] = useState<PipelineConfigDto | null>(null)
+  const [configPath, setConfigPathRaw] = useState<string | null>(null)
+  const [core, setCore] = useState<EditorCore>(EMPTY_CORE)
   const [original, setOriginal] = useState<PipelineConfigDto | null>(null)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -64,12 +88,32 @@ export function usePipelineEditor(): UsePipelineEditor {
   const [errors, setErrors] = useState<ValidationError[]>([])
   const [validatedClean, setValidatedClean] = useState(false)
 
+  const current = core.current
+  const canUndo = core.history.length > 0
   const dirty = useMemo(() => !eqJson(current, original), [current, original])
 
-  const setCurrent = useCallback((next: PipelineConfigDto | null) => {
-    setCurrentRaw(next)
-    // Any edit invalidates the "validated clean" sticker.
+  /** Run an updater against the latest current; if it returns a new ref, push history + swap. */
+  const mutate = useCallback((updater: (prev: PipelineConfigDto) => PipelineConfigDto) => {
+    setCore(s => {
+      if (!s.current) return s
+      const next = updater(s.current)
+      if (next === s.current) return s
+      return { current: next, history: pushHistory(s.history, s.current) }
+    })
     setValidatedClean(false)
+  }, [])
+
+  const setCurrent = useCallback((next: PipelineConfigDto | null) => {
+    setCore(s => {
+      if (!s.current || !next) return { current: next, history: s.history }
+      return { current: next, history: pushHistory(s.history, s.current) }
+    })
+    setValidatedClean(false)
+  }, [])
+
+  const setConfigPath = useCallback((path: string | null) => {
+    setConfigPathRaw(path)
+    setCore(s => ({ current: s.current, history: [] }))
   }, [])
 
   const reload = useCallback(async () => {
@@ -79,7 +123,7 @@ export function usePipelineEditor(): UsePipelineEditor {
     try {
       const cfg = await api.getPipelineConfig(configPath)
       setOriginal(deepClone(cfg))
-      setCurrentRaw(cfg)
+      setCore({ current: cfg, history: [] })
       setErrors([])
       setSaveError(null)
       setValidatedClean(false)
@@ -119,8 +163,9 @@ export function usePipelineEditor(): UsePipelineEditor {
     try {
       const result = await api.savePipelineConfig(configPath, current)
       // Reset original to what the backend just persisted (post-validation, env-expanded).
-      setOriginal(deepClone(result.config ?? current))
-      setCurrentRaw(result.config ?? current)
+      const persisted = result.config ?? current
+      setOriginal(deepClone(persisted))
+      setCore({ current: persisted, history: [] })
       setErrors([])
       setValidatedClean(true)
       return true
@@ -139,28 +184,31 @@ export function usePipelineEditor(): UsePipelineEditor {
     }
   }, [configPath, current])
 
-  const patchConfig = useCallback((patch: Partial<PipelineConfigDto>) => {
-    setCurrentRaw(c => {
-      if (!c) return c
-      return { ...c, ...patch }
+  const undo = useCallback(() => {
+    setCore(s => {
+      if (s.history.length === 0) return s
+      const prev = s.history[s.history.length - 1]
+      return { current: prev, history: s.history.slice(0, s.history.length - 1) }
     })
     setValidatedClean(false)
   }, [])
 
+  const patchConfig = useCallback((patch: Partial<PipelineConfigDto>) => {
+    mutate(c => ({ ...c, ...patch }))
+  }, [mutate])
+
   const patchBlock = useCallback((blockId: string, patch: Partial<BlockConfigDto>) => {
-    setCurrentRaw(c => {
-      if (!c?.pipeline) return c
+    mutate(c => {
+      if (!c.pipeline) return c
       return {
         ...c,
         pipeline: c.pipeline.map(b => b.id === blockId ? { ...b, ...patch } : b),
       }
     })
-    setValidatedClean(false)
-  }, [])
+  }, [mutate])
 
   const addBlock = useCallback((block: BlockConfigDto, options?: { afterBlockId?: string }) => {
-    setCurrentRaw(c => {
-      if (!c) return c
+    mutate(c => {
       const list = c.pipeline ? [...c.pipeline] : []
       let insertAt = list.length
       if (options?.afterBlockId) {
@@ -180,12 +228,11 @@ export function usePipelineEditor(): UsePipelineEditor {
       list.splice(insertAt, 0, { ...block, id, depends_on: dependsOn })
       return { ...c, pipeline: list }
     })
-    setValidatedClean(false)
-  }, [])
+  }, [mutate])
 
   const removeBlock = useCallback((blockId: string) => {
-    setCurrentRaw(c => {
-      if (!c?.pipeline) return c
+    mutate(c => {
+      if (!c.pipeline) return c
       return {
         ...c,
         pipeline: c.pipeline
@@ -202,36 +249,35 @@ export function usePipelineEditor(): UsePipelineEditor {
         entry_points: (c.entry_points ?? []).filter(ep => ep.from_block !== blockId),
       }
     })
-    setValidatedClean(false)
-  }, [])
+  }, [mutate])
 
   const setDependsOn = useCallback((sourceId: string, targetId: string, present: boolean) => {
     if (sourceId === targetId) return
-    setCurrentRaw(c => {
-      if (!c?.pipeline) return c
-      return {
-        ...c,
-        pipeline: c.pipeline.map(b => {
-          if (b.id !== targetId) return b
-          const cur = b.depends_on ?? []
-          if (present && !cur.includes(sourceId)) {
-            return { ...b, depends_on: [...cur, sourceId] }
-          }
-          if (!present && cur.includes(sourceId)) {
-            return { ...b, depends_on: cur.filter(x => x !== sourceId) }
-          }
-          return b
-        }),
-      }
+    mutate(c => {
+      if (!c.pipeline) return c
+      let changed = false
+      const next = c.pipeline.map(b => {
+        if (b.id !== targetId) return b
+        const cur = b.depends_on ?? []
+        if (present && !cur.includes(sourceId)) {
+          changed = true
+          return { ...b, depends_on: [...cur, sourceId] }
+        }
+        if (!present && cur.includes(sourceId)) {
+          changed = true
+          return { ...b, depends_on: cur.filter(x => x !== sourceId) }
+        }
+        return b
+      })
+      return changed ? { ...c, pipeline: next } : c
     })
-    setValidatedClean(false)
-  }, [])
+  }, [mutate])
 
   const renameBlock = useCallback((oldId: string, newId: string): boolean => {
     if (!newId || oldId === newId) return false
     let success = false
-    setCurrentRaw(c => {
-      if (!c?.pipeline) return c
+    mutate(c => {
+      if (!c.pipeline) return c
       // Refuse if collision
       if (c.pipeline.some(b => b.id === newId)) return c
       success = true
@@ -262,9 +308,8 @@ export function usePipelineEditor(): UsePipelineEditor {
         })),
       }
     })
-    if (success) setValidatedClean(false)
     return success
-  }, [])
+  }, [mutate])
 
   return {
     configPath, setConfigPath,
@@ -272,6 +317,7 @@ export function usePipelineEditor(): UsePipelineEditor {
     loading, loadError, saving, saveError,
     validating, errors, validatedClean, dirty,
     reload, validate, save,
+    undo, canUndo,
     patchConfig, patchBlock, addBlock, removeBlock,
     setDependsOn, renameBlock,
   }

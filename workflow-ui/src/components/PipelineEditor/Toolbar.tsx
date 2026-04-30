@@ -1,4 +1,4 @@
-import { ArrowLeft, Save, ShieldCheck, Loader2, Settings, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Save, ShieldCheck, Loader2, Settings, AlertCircle, Undo2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import clsx from 'clsx'
 
@@ -13,6 +13,8 @@ interface Props {
   validating: boolean
   validatedClean: boolean
   errorCount: number
+  canUndo: boolean
+  onUndo: () => void
   onValidate: () => void
   onSave: () => void
   onOpenSettings: () => void
@@ -59,6 +61,18 @@ export function Toolbar(props: Props) {
           Валидно
         </span>
       )}
+
+      <button
+        type="button"
+        onClick={props.onUndo}
+        data-testid="toolbar-undo"
+        disabled={!props.canUndo}
+        title="Отменить последнюю правку (Ctrl+Z)"
+        className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 disabled:text-slate-600 text-slate-200 text-xs font-medium px-3 py-1.5 rounded-lg border border-slate-700 transition-colors"
+      >
+        <Undo2 className="w-3.5 h-3.5" />
+        Отменить
+      </button>
 
       <button
         type="button"

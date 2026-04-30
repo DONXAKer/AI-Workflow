@@ -226,6 +226,79 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
+/**
+ * Detects the verify-block output shape: {@code { passed: boolean, issues: string[],
+ * subject_block?, checks_failed?, recommendation?, iteration? }}. Used to inline a
+ * human-readable failure banner so the user doesn't have to expand JSON to see why.
+ */
+function asVerifyOutput(output: Record<string, unknown> | undefined): {
+  passed: boolean
+  issues: string[]
+  subject?: string
+  checksFailed?: number
+  checksPassed?: number
+  recommendation?: string
+  iteration?: number
+} | null {
+  if (!output) return null
+  if (typeof output.passed !== 'boolean') return null
+  if (!Array.isArray(output.issues)) return null
+  const issues = (output.issues as unknown[]).filter((x): x is string => typeof x === 'string')
+  return {
+    passed: output.passed,
+    issues,
+    subject: typeof output.subject_block === 'string' ? output.subject_block : undefined,
+    checksFailed: typeof output.checks_failed === 'number' ? output.checks_failed : undefined,
+    checksPassed: typeof output.checks_passed === 'number' ? output.checks_passed : undefined,
+    recommendation: typeof output.recommendation === 'string' && output.recommendation.trim()
+      ? output.recommendation : undefined,
+    iteration: typeof output.iteration === 'number' ? output.iteration : undefined,
+  }
+}
+
+function VerifyOutputBanner({ verify }: { verify: NonNullable<ReturnType<typeof asVerifyOutput>> }) {
+  if (verify.passed) {
+    return (
+      <div className="flex items-center gap-1.5 text-xs text-emerald-300 bg-emerald-950/30 border border-emerald-800/60 rounded-md px-2 py-1 mb-2">
+        <CheckCircle className="w-3.5 h-3.5 flex-shrink-0" />
+        <span>
+          Verify OK
+          {verify.subject && <span className="text-emerald-400/70"> · subject: <span className="font-mono">{verify.subject}</span></span>}
+          {typeof verify.checksPassed === 'number' && (
+            <span className="text-emerald-400/70"> · {verify.checksPassed} check{verify.checksPassed === 1 ? '' : 's'}</span>
+          )}
+        </span>
+      </div>
+    )
+  }
+  return (
+    <div className="text-xs bg-red-950/30 border border-red-800/60 rounded-md px-2 py-1.5 mb-2 space-y-1">
+      <div className="flex items-center gap-1.5 text-red-300 font-medium">
+        <XCircle className="w-3.5 h-3.5 flex-shrink-0" />
+        <span>
+          Verify не прошёл
+          {verify.subject && <span className="text-red-400/70 font-normal"> · subject: <span className="font-mono">{verify.subject}</span></span>}
+          {typeof verify.iteration === 'number' && verify.iteration > 1 && (
+            <span className="text-red-400/70 font-normal"> · итер. {verify.iteration}</span>
+          )}
+        </span>
+      </div>
+      {verify.issues.length > 0 && (
+        <ul className="list-disc pl-5 space-y-0.5 text-red-200/90">
+          {verify.issues.map((issue, i) => (
+            <li key={i} className="break-words">{issue}</li>
+          ))}
+        </ul>
+      )}
+      {verify.recommendation && (
+        <div className="text-[11px] text-red-300/80 italic mt-1 pl-5">
+          {verify.recommendation}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function OutputCell({ output }: { output?: Record<string, unknown> }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -235,9 +308,11 @@ function OutputCell({ output }: { output?: Record<string, unknown> }) {
   const preview = keys.slice(0, 2).join(', ')
   const jsonStr = JSON.stringify(output, null, 2)
   const ChevronIcon = expanded ? ChevronDown : ChevronRight
+  const verify = asVerifyOutput(output)
 
   return (
     <div>
+      {verify && <VerifyOutputBanner verify={verify} />}
       <div className="flex items-center gap-1">
         <button
           type="button"

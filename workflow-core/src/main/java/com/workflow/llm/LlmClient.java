@@ -237,10 +237,34 @@ public class LlmClient {
         log.info("Starting tool-use loop: model={} tools={} maxIterations={} budget=${}",
             resolvedModel, toolsJson.size(), request.maxIterations(), request.budgetUsdCap());
 
+        // Whether we've already injected the "wrap up" reminder. The reminder is a
+        // synthetic user message appended once near the end of the loop so the model
+        // knows to emit a final answer instead of continuing to explore. Role:user
+        // (NOT system) — the system message must stay stable for future prompt-cache
+        // compatibility; mutating it would invalidate the cached prefix.
+        boolean softCapReminderSent = false;
+
         while (iterations < request.maxIterations()) {
             iterations++;
 
             pruneContextIfNeeded(messages);
+
+            // Inject the soft-cap reminder at iter == max - 3 so the model has 3 more
+            // round-trips to wrap up. Skip if max is too small for this to help.
+            if (!softCapReminderSent
+                && request.maxIterations() >= 6
+                && iterations == request.maxIterations() - 3) {
+                ObjectNode reminder = messages.addObject();
+                reminder.put("role", "user");
+                reminder.put("content", String.format(
+                    "REMINDER: 3 iterations remaining ($%.2f of $%.2f budget used). "
+                        + "If you have enough information, emit the final answer (JSON/end_turn) now — "
+                        + "further exploration risks running out without producing a result.",
+                    totalCostUsd, request.budgetUsdCap()));
+                softCapReminderSent = true;
+                log.info("orchestrator soft-cap reminder injected at iter {}/{}",
+                    iterations, request.maxIterations());
+            }
 
             if (request.progressCallback() != null) {
                 request.progressCallback().accept(

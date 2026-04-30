@@ -5,6 +5,7 @@ import GenericBlockForm from './forms/GenericBlockForm'
 import AgentWithToolsForm from './forms/AgentWithToolsForm'
 import VerifyForm from './forms/VerifyForm'
 import RawJsonFallback from './forms/RawJsonFallback'
+import { HelpPopover, ExpressionHelpBody } from './HelpPopover'
 
 interface Props {
   block: BlockConfigDto
@@ -157,7 +158,12 @@ function CommonFields({ block, otherBlockIds, onPatch }: {
         />
       </div>
       <div>
-        <label className="block text-xs font-medium text-slate-300 mb-1">Condition</label>
+        <label className="text-xs font-medium text-slate-300 mb-1 flex items-center gap-1.5">
+          Condition
+          <HelpPopover testId="block-condition" title="Синтаксис condition / on_failure">
+            <ExpressionHelpBody />
+          </HelpPopover>
+        </label>
         <input
           type="text"
           value={block.condition ?? ''}

@@ -1,5 +1,6 @@
 package com.workflow.config;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -104,8 +105,10 @@ public class BlockConfig {
     /**
      * Canonical approval decision: prefers explicit {@code approval_mode} when set,
      * otherwise derives from the legacy boolean {@code approval} flag
-     * ({@code true} → MANUAL, {@code false} → AUTO).
+     * ({@code true} → MANUAL, {@code false} → AUTO). Not serialised — derived from
+     * {@link #approvalMode} and {@link #approval}.
      */
+    @JsonIgnore
     public ApprovalMode getEffectiveApprovalMode() {
         if (approvalMode != null) return approvalMode;
         return approval ? ApprovalMode.MANUAL : ApprovalMode.AUTO;

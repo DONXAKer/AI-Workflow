@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
 import clsx from 'clsx'
 import { BlockRegistryEntry } from '../../types'
+import { blockTypeLabel, blockTypeLabelWithCode } from '../../utils/blockLabels'
 
 interface BlockPaletteProps {
   registry: BlockRegistryEntry[]
@@ -29,6 +30,7 @@ export function BlockPalette({ registry, onAdd }: BlockPaletteProps) {
       ? registry.filter(e =>
           e.type.toLowerCase().includes(ql) ||
           e.metadata.label.toLowerCase().includes(ql) ||
+          (blockTypeLabel(e.type)?.toLowerCase().includes(ql) ?? false) ||
           (e.description ?? '').toLowerCase().includes(ql))
       : registry
     const out: Record<string, BlockRegistryEntry[]> = {}
@@ -79,9 +81,9 @@ export function BlockPalette({ registry, onAdd }: BlockPaletteProps) {
                     )}
                     title={item.description}
                   >
-                    <div className="font-medium leading-tight">{item.metadata.label}</div>
+                    <div className="font-medium leading-tight">{blockTypeLabelWithCode(item.type)}</div>
                     <div className="font-mono text-[10px] text-slate-500 mt-0.5 truncate">
-                      {item.type}
+                      {item.metadata.label}
                     </div>
                   </button>
                 ))}

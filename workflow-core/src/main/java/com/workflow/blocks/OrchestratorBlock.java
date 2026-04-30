@@ -16,6 +16,7 @@ import com.workflow.project.Project;
 import com.workflow.project.ProjectContext;
 import com.workflow.project.ProjectRepository;
 import com.workflow.tools.DefaultToolExecutor;
+import com.workflow.tools.ProjectTreeSummary;
 import com.workflow.tools.Tool;
 import com.workflow.tools.ToolCallAuditRepository;
 import com.workflow.tools.ToolContext;
@@ -167,16 +168,48 @@ public class OrchestratorBlock implements Block {
     private Map<String, Object> runPlan(Map<String, Object> cfg, Map<String, Object> input,
             BlockConfig blockConfig, PipelineRun run, Path workingDir, String extra, String agentSystemPrompt) throws Exception {
 
-        StringBuilder userMsg = new StringBuilder("Analyze the task and produce an implementation plan.\n\n");
+        StringBuilder userMsg = new StringBuilder();
+        boolean anyContext = false;
 
-        // Inject context blocks
+        // Inject context blocks. Resolve via {@link #resolveContextBlock} so this works
+        // even when the referenced block isn't in {@code depends_on} (PipelineRunner only
+        // injects deps into {@code input}; context_blocks may legitimately reference any
+        // earlier block in the run, e.g. task_md when plan_impl depends_on=[create_branch]).
         for (String ctxId : asStringList(cfg, "context_blocks")) {
-            Object blockOut = input.get(ctxId);
-            if (blockOut instanceof Map<?, ?> bMap) {
+            Map<String, Object> bMap = resolveContextBlock(input, run, ctxId);
+            if (bMap != null) {
+                anyContext = true;
                 userMsg.append("## Context from block: ").append(ctxId).append('\n');
-                bMap.forEach((k, v) -> userMsg.append(k).append(": ").append(v).append('\n'));
+                bMap.forEach((k, v) -> {
+                    String s = String.valueOf(v);
+                    if (s.contains("\n")) {
+                        // Multiline values (e.g. task_md.body, task_md.to_be) — render as a
+                        // sub-section so the structure stays readable instead of one huge
+                        // colon-separated line that the model glosses over.
+                        userMsg.append("\n### ").append(k).append('\n').append(s).append('\n');
+                    } else {
+                        userMsg.append(k).append(": ").append(s).append('\n');
+                    }
+                });
                 userMsg.append('\n');
             }
+        }
+
+        if (anyContext) {
+            String tree = ProjectTreeSummary.summarise(workingDir);
+            if (!tree.isEmpty()) {
+                userMsg.append("## Codebase layout (working_dir: ").append(workingDir).append(")\n")
+                    .append("```\n").append(tree).append("```\n\n")
+                    .append("Use this layout to pick real file paths for `files_to_touch`. Read specific ")
+                    .append("files with `Read` only when their content matters — do not re-Glob this tree.\n\n");
+            }
+            userMsg.append("---\n")
+                .append("Plan the implementation of the task described above. Base the plan on the ")
+                .append("content provided — do NOT search the filesystem for the task itself. Use ")
+                .append("Read/Grep/Glob only to find existing source files the plan will modify.\n");
+        } else {
+            userMsg.append("No task context was provided. Return goal=\"missing task context\" ")
+                .append("and stop — do not invent a task.\n");
         }
 
         return runLoop(blockConfig, run, workingDir, userMsg.toString(),
@@ -193,7 +226,7 @@ public class OrchestratorBlock implements Block {
 
         String planBlockId = asString(cfg, "plan_block", "");
         Map<String, Object> planOut = planBlockId.isBlank() ? Map.of()
-            : input.get(planBlockId) instanceof Map<?, ?> m ? (Map<String, Object>) m : Map.of();
+            : firstNonNull(resolveContextBlock(input, run, planBlockId), Map.of());
 
         StringBuilder userMsg = new StringBuilder("Review the implementation and verify it meets the definition of done.\n\n");
 
@@ -206,8 +239,8 @@ public class OrchestratorBlock implements Block {
 
         // Inject context blocks (e.g. build_test results, run_tests output)
         for (String ctxId : asStringList(cfg, "context_blocks")) {
-            Object blockOut = input.get(ctxId);
-            if (blockOut instanceof Map<?, ?> bMap) {
+            Map<String, Object> bMap = resolveContextBlock(input, run, ctxId);
+            if (bMap != null) {
                 userMsg.append("## Context from block: ").append(ctxId).append('\n');
                 bMap.forEach((k, v) -> userMsg.append(k).append(": ").append(v).append('\n'));
                 userMsg.append('\n');
@@ -223,11 +256,48 @@ public class OrchestratorBlock implements Block {
             }
         }
 
+        // Pre-inject codebase layout so the reviewer doesn't burn iterations re-Glob'ing.
+        String tree = ProjectTreeSummary.summarise(workingDir);
+        if (!tree.isEmpty()) {
+            userMsg.append("## Codebase layout (working_dir: ").append(workingDir).append(")\n")
+                .append("```\n").append(tree).append("```\n\n");
+        }
+
         return runLoop(blockConfig, run, workingDir, userMsg.toString(),
             buildReviewSystemPrompt(extra, agentSystemPrompt), REVIEW_TOOLS, REVIEW_BASH,
             asInt(cfg, "max_iterations", DEFAULT_MAX_ITER_REVIEW),
             asDouble(cfg, "budget_usd_cap", DEFAULT_BUDGET_USD), "review");
     }
+
+    /**
+     * Resolves a {@code context_blocks} reference. Prefers the in-memory {@code input}
+     * map (current run's deps); falls back to {@link PipelineRun#getOutputs()} so that
+     * context_blocks can reference any earlier block in the run, not only those in
+     * {@code depends_on}. Returns {@code null} when the block hasn't run yet or its
+     * output isn't a JSON object.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> resolveContextBlock(Map<String, Object> input, PipelineRun run, String blockId) {
+        Object fromInput = input != null ? input.get(blockId) : null;
+        if (fromInput instanceof Map<?, ?> m) return (Map<String, Object>) m;
+        if (run == null) return null;
+        return run.getOutputs().stream()
+            .filter(o -> blockId.equals(o.getBlockId()))
+            .findFirst()
+            .map(o -> {
+                try {
+                    return objectMapper.readValue(o.getOutputJson(),
+                        new TypeReference<Map<String, Object>>() {});
+                } catch (Exception e) {
+                    log.warn("orchestrator: failed to deserialise context block '{}' output: {}",
+                        blockId, e.getMessage());
+                    return (Map<String, Object>) null;
+                }
+            })
+            .orElse(null);
+    }
+
+    private static <T> T firstNonNull(T a, T b) { return a != null ? a : b; }
 
     // ── Agent loop ─────────────────────────────────────────────────────────────
 
@@ -294,6 +364,23 @@ public class OrchestratorBlock implements Block {
                 + ": failed to extract valid JSON from LLM response after rescue attempt");
         }
 
+        // Detect "loop ran out of iterations / tokens before producing real JSON" — the
+        // model never wrote a final plan/review. Distinguish from a genuine escalation,
+        // which would carry actual {issues, retry_instruction} or {goal, approach} text.
+        // Without this guard, defaults below would fill action=escalate / passed=false
+        // and the pipeline would crash with a misleading "Orchestrator escalated:".
+        boolean hasRealOutput = "review".equals(mode)
+            ? !asString(out, "issues", "").isBlank() || !asString(out, "carry_forward", "").isBlank()
+            : !asString(out, "goal", "").isBlank() || !asString(out, "approach", "").isBlank();
+        if (!hasRealOutput) {
+            throw new IllegalStateException(
+                "orchestrator[" + blockConfig.getId() + "] mode=" + mode
+                + ": LLM did not produce any plan/review content"
+                + " (stopReason=" + response.stopReason()
+                + ", iterations=" + response.iterationsUsed()
+                + "). Increase max_iterations or maxTokens, or pick a stronger model.");
+        }
+
         // Ensure optional fields exist so pipeline interpolation never throws
         if ("review".equals(mode)) {
             out.putIfAbsent("passed", Boolean.FALSE);
@@ -307,6 +394,7 @@ public class OrchestratorBlock implements Block {
             out.putIfAbsent("approach", "");
             out.putIfAbsent("definition_of_done", "");
             out.putIfAbsent("tools_to_use", "Read, Edit");
+            out.putIfAbsent("requirements_coverage", List.of());
         }
         return out;
     }
@@ -318,20 +406,57 @@ public class OrchestratorBlock implements Block {
         if (!agentSystemPrompt.isBlank()) {
             sb.append(agentSystemPrompt).append("\n\n");
         }
-        sb.append("You are a technical architect. Explore the codebase and produce a detailed implementation plan.\n\n");
-        sb.append("Use Read, Grep, and Glob to explore. Do NOT write or modify any files.\n");
+        sb.append("""
+You are a technical architect. Plan the implementation of the task described in the user message.
+
+CRITICAL — task source of truth:
+- The user message contains one or more sections starting with `## Context from block: <block_id>`.
+  Those sections ARE the task spec (typically `task_md` carries `title`, `body`, `to_be`,
+  `acceptance`, etc. — read them carefully and base the plan on that exact content).
+- DO NOT search the filesystem for a task description, README, or other tickets — the task
+  is already given. Globbing for `task.md`, `**/*.md`, or similar to "find the task" is wrong
+  and produces hallucinated plans about unrelated tickets.
+- Use Read/Grep/Glob ONLY to discover EXISTING files in the codebase that the plan will need
+  to modify (e.g. find the package layout, locate the class to change). Do NOT modify files.
+- If the user message has no `## Context from block:` section, ask the user (return goal=
+  "missing task context") instead of inventing a task.
+
+EFFICIENCY:
+- The user message includes a `## Codebase layout` section listing real paths in the working
+  dir. Use those paths directly for `files_to_touch` — DO NOT Glob the tree again.
+- Each tool call burns one iteration. Iteration budget is shown in the user message — pace
+  yourself: spend 2-4 iterations exploring (Read of key files), then produce the final JSON.
+- Bash CWD does NOT persist between calls. Every Bash starts at the working_dir. Chain via
+  `&&` or use absolute paths — `cd subdir && ./gradlew build`, NOT `cd subdir` then later
+  `./gradlew build`.
+""");
         if (!extra.isBlank()) {
             sb.append("\n## Project context\n").append(extra).append("\n");
         }
         sb.append("""
 
+MANDATORY COVERAGE — before writing the JSON:
+1. Re-read the `## Context from block: task_md` section (or whichever task spec block was injected).
+2. Enumerate EVERY discrete requirement in it. For a typical task spec written in numbered
+   steps, headings, or bullets — every step / heading / bullet is one requirement.
+3. For EACH requirement, decide which file(s) it touches and how.
+4. Items in `requirements_coverage` MUST cover all of them. An empty or short list is a
+   bug — re-read the spec and try again. Do not produce a plan that addresses only a
+   subset of the task.
+
 When you have enough information, respond with a JSON object inside a ```json block:
 ```json
 {
-  "goal": "one-sentence description of what needs to be implemented",
-  "files_to_touch": "newline-separated list of files to modify or create",
-  "approach": "step-by-step technical approach",
-  "definition_of_done": "newline-separated verifiable completion checklist",
+  "goal": "one-sentence description of what needs to be implemented (derived from the task spec, not invented)",
+  "requirements_coverage": [
+    {"requirement": "verbatim or tightly-paraphrased line from the task spec",
+     "approach": "how this specific requirement is addressed",
+     "files": "newline-separated real paths"}
+    // one entry per requirement found in the spec — be exhaustive
+  ],
+  "files_to_touch": "newline-separated UNION of all paths in requirements_coverage[].files (deduplicated). Must reference real paths discovered via Glob/Grep or new files inside the existing package layout — no placeholders like 'Draft-related implementation files'.",
+  "approach": "step-by-step technical approach summarising the work across all requirements",
+  "definition_of_done": "newline-separated verifiable completion checklist (one item per requirement plus the mandatory categories below)",
   "tools_to_use": "comma-separated tool names the implementor should use"
 }
 ```
@@ -354,6 +479,18 @@ Respond with the JSON only. No text after the closing ```.
         }
         sb.append("You are a code reviewer. Verify that the implementation matches the definition of done.\n\n");
         sb.append("Use Read, Grep, Glob, and git diff (Bash) to examine the actual changes. Do NOT modify files.\n");
+        sb.append("""
+
+EFFICIENCY:
+- The user message includes a `## Codebase layout` section. Use it; do not re-Glob.
+- Start with `git diff` and `git status` to see WHAT actually changed — review the diff,
+  don't re-read the whole codebase.
+- Bash CWD does NOT persist between calls. Every Bash starts at working_dir. Chain via
+  `&&` or use absolute paths.
+- Aim to spend the first 1-2 iterations getting the diff, 2-3 iterations spot-checking
+  specific files, then write the final JSON. Don't keep exploring — the iteration budget
+  shown in the user message is a hard limit.
+""");
         sb.append("CRITICAL: After gathering evidence, you MUST end your response with ONLY a JSON block.\n");
         sb.append("Do NOT write any text after the closing ``` of the JSON block.\n");
         sb.append("Do NOT start your final response with 'Let me', 'I found', or any explanation text.\n");
@@ -395,7 +532,9 @@ Rules:
         String schema = "review".equals(mode)
             ? "{\"passed\": <boolean>, \"issues\": \"<string>\", \"action\": \"<continue|retry|escalate>\","
                 + " \"retry_instruction\": \"<string>\", \"carry_forward\": \"<string>\"}"
-            : "{\"goal\": \"<string>\", \"files_to_touch\": \"<string>\", \"approach\": \"<string>\","
+            : "{\"goal\": \"<string>\","
+                + " \"requirements_coverage\": [{\"requirement\": \"<string>\", \"approach\": \"<string>\", \"files\": \"<string>\"}],"
+                + " \"files_to_touch\": \"<string>\", \"approach\": \"<string>\","
                 + " \"definition_of_done\": \"<string>\", \"tools_to_use\": \"<string>\"}";
 
         String snippet = rawText != null && rawText.length() > 3000

@@ -13,6 +13,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.file.Paths;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -39,6 +41,15 @@ public class StartupRunRecovery {
     @Value("${workflow.config-dir:./config}")
     private String configDir;
 
+    /**
+     * Maximum age (since {@link PipelineRun#getStartedAt()}) of a run that's eligible for
+     * auto-resume on startup. Runs older than this are marked FAILED instead — assumes
+     * they've been abandoned (ops-driven cancel didn't propagate before container died,
+     * dev rebuild loop, etc.). Tunable via {@code workflow.recovery.max-age-minutes}.
+     */
+    @Value("${workflow.recovery.max-age-minutes:30}")
+    private long maxAgeMinutes;
+
     @EventListener(ApplicationReadyEvent.class)
     @Transactional
     public void recoverStuckRuns() {
@@ -50,7 +61,8 @@ public class StartupRunRecovery {
             return;
         }
 
-        log.info("StartupRunRecovery: found {} stuck run(s) — resuming", stuck.size());
+        log.info("StartupRunRecovery: found {} stuck run(s) — checking eligibility", stuck.size());
+        Instant cutoff = Instant.now().minus(Duration.ofMinutes(maxAgeMinutes));
 
         for (PipelineRun run : stuck) {
             try {
@@ -59,6 +71,18 @@ public class StartupRunRecovery {
                 run.getAutoApprove().size();
                 run.getLoopIterations().size();
                 run.getOutputs().forEach(o -> o.getBlockId());
+
+                Instant startedAt = run.getStartedAt();
+                if (startedAt != null && startedAt.isBefore(cutoff)) {
+                    log.info("StartupRunRecovery: run {} started at {} is older than {} min — marking FAILED instead of resuming",
+                        run.getId(), startedAt, maxAgeMinutes);
+                    run.setStatus(RunStatus.FAILED);
+                    run.setError("Auto-failed by recovery: run exceeded max-age-minutes (" + maxAgeMinutes
+                        + ") before container restart");
+                    run.setCompletedAt(Instant.now());
+                    runRepository.save(run);
+                    continue;
+                }
 
                 PipelineConfig config = resolveConfig(run);
                 if (config == null) {
