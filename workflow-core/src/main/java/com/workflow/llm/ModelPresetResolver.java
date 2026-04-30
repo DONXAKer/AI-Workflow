@@ -34,9 +34,12 @@ public class ModelPresetResolver {
 
     private static final Map<String, String> DEFAULTS = Map.ofEntries(
         // Tier presets — primary semantic abstraction. Use these as `tier:` in
-        // block AgentConfig: smart for analytical roles (analysis, verify),
-        // flash for executor roles (codegen, agent_with_tools).
-        Map.entry("smart",        "anthropic/claude-sonnet-4-6"),
+        // block AgentConfig: smart for analytical roles (analysis, verify, plan/review),
+        // flash for executor roles (codegen, agent_with_tools impl).
+        // Defaults match the model pair that performs best for the WarCard pipeline
+        // (operator-validated). Override per-tier in application.yaml under
+        // workflow.model-presets if your stack prefers different models.
+        Map.entry("smart",        "z-ai/glm-4.6"),
         Map.entry("flash",        "z-ai/glm-4.7-flash"),
         // Legacy / extended presets
         Map.entry("fast",         "anthropic/claude-haiku-4-5"),
