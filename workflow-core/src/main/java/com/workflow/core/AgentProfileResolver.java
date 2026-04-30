@@ -41,11 +41,18 @@ public class AgentProfileResolver {
         result.setMaxTokens(DEFAULT_MAX_TOKENS);
         result.setTemperature(DEFAULT_TEMPERATURE);
 
+        // Each layer can specify either `model` (concrete id or preset name) or
+        // `tier` (symbolic). Within a layer, `model` wins over `tier`
+        // (see AgentConfig#getEffectiveModel). Across layers, later layers
+        // (block > profile > pipeline defaults) override earlier ones — so
+        // a block-level `tier: smart` overrides a pipeline-level `model: foo`.
+
         // Layer 0.5: pipeline-level defaults (operator-configurable via UI)
         if (pipelineDefaults != null && pipelineDefaults.getAgent() != null) {
             AgentConfig defAgent = pipelineDefaults.getAgent();
-            if (defAgent.getModel() != null && !defAgent.getModel().isBlank()) {
-                result.setModel(defAgent.getModel());
+            String defEffective = defAgent.getEffectiveModel();
+            if (defEffective != null) {
+                result.setModel(defEffective);
             }
             if (defAgent.getMaxTokens() != null) {
                 result.setMaxTokens(defAgent.getMaxTokens());
@@ -81,8 +88,9 @@ public class AgentProfileResolver {
         // Layer 2: apply block-level agent overrides
         AgentConfig blockAgent = blockConfig.getAgent();
         if (blockAgent != null) {
-            if (blockAgent.getModel() != null && !blockAgent.getModel().isBlank()) {
-                result.setModel(blockAgent.getModel());
+            String blockEffective = blockAgent.getEffectiveModel();
+            if (blockEffective != null) {
+                result.setModel(blockEffective);
             }
             if (blockAgent.getMaxTokens() != null) {
                 result.setMaxTokens(blockAgent.getMaxTokens());

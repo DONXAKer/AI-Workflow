@@ -33,13 +33,17 @@ public class ModelPresetResolver {
     private static final Logger log = LoggerFactory.getLogger(ModelPresetResolver.class);
 
     private static final Map<String, String> DEFAULTS = Map.ofEntries(
-        Map.entry("fast",         "anthropic/claude-haiku-4-5"),
+        // Tier presets — primary semantic abstraction. Use these as `tier:` in
+        // block AgentConfig: smart for analytical roles (analysis, verify),
+        // flash for executor roles (codegen, agent_with_tools).
         Map.entry("smart",        "anthropic/claude-sonnet-4-6"),
+        Map.entry("flash",        "z-ai/glm-4.7-flash"),
+        // Legacy / extended presets
+        Map.entry("fast",         "anthropic/claude-haiku-4-5"),
         Map.entry("reasoning",    "anthropic/claude-opus-4-7"),
         Map.entry("cheap",        "openai/gpt-4o-mini"),
         Map.entry("deepseek",     "deepseek/deepseek-chat-v3-0324"),
         Map.entry("glm",          "z-ai/glm-5.1"),
-        // Extended presets
         Map.entry("gemini-pro",   "google/gemini-2.5-pro"),
         Map.entry("gemini-flash", "google/gemini-2.0-flash-001"),
         Map.entry("gpt4o",        "openai/gpt-4o"),

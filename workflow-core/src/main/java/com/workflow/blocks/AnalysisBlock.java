@@ -52,8 +52,31 @@ public class AnalysisBlock implements Block {
         - Includes at least one non-obvious risk
         - Has actionable open questions (none when the requirement is fully specified)
 
+        ## Acceptance Checklist Rules (CRITICAL)
+        The `acceptance_checklist` is the single source of truth for what "done" means.
+        - Each item must be a concrete, binary check (PASS/FAIL), not a vague goal.
+        - For every explicit acceptance criterion in the requirement, emit one item with \
+          `source: "requirement"`. Quote the original phrasing closely — do not paraphrase \
+          to the point of losing the requirement's intent.
+        - Add `source: "derived"` items for things the requirement implies but does not state \
+          (edge cases, error handling, tests for new code, security checks, migration safety). \
+          Soft cap: derived items ≤ 1.5× the count of requirement items. If the requirement \
+          is very thin (1-2 items only), emit only the 2-3 most critical derived items and \
+          set `needs_clarification: true`.
+        - Set `priority`:
+          - `critical` — feature unusable / data loss / security broken without it.
+          - `important` — should be done; missing it is a quality gap.
+          - `nice_to_have` — bonus polish, OK to skip on tight deadlines.
+        - Item ids: short kebab-case (`a1`, `auth-token-refresh`, `migration-rollback`).
+        - Set `needs_clarification: true` when fewer than 2 requirement-source items can be \
+          extracted, OR when complexity is `high` and key trade-offs are ambiguous. The \
+          downstream `clarification` block uses this flag to decide whether to ask the \
+          operator follow-up questions before locking the checklist.
+
         NEVER:
         - Return an analysis without specifying at least one affected component
+        - Return an empty acceptance_checklist
+        - Mark every item as critical (priority discrimination is mandatory)
         - Write "investigate further" as an open question — replace it with the specific thing to investigate
         - Skip complexity estimation""";
 
@@ -68,7 +91,16 @@ public class AnalysisBlock implements Block {
         "  \"technical_approach\": \"<детальное описание рекомендуемого технического подхода>\",\n" +
         "  \"estimated_complexity\": \"<low|medium|high>\",\n" +
         "  \"risks\": [\"<риск1>\", \"<риск2>\"],\n" +
-        "  \"open_questions\": [\"<вопрос1>\", \"<вопрос2>\"]\n" +
+        "  \"open_questions\": [\"<вопрос1>\", \"<вопрос2>\"],\n" +
+        "  \"acceptance_checklist\": [\n" +
+        "    {\n" +
+        "      \"id\": \"<короткий kebab-case id>\",\n" +
+        "      \"text\": \"<конкретный бинарный пункт приёмки>\",\n" +
+        "      \"source\": \"requirement|derived\",\n" +
+        "      \"priority\": \"critical|important|nice_to_have\"\n" +
+        "    }\n" +
+        "  ],\n" +
+        "  \"needs_clarification\": <true|false>\n" +
         "}\n\n" +
         "Не включай никакого текста за пределами JSON объекта.";
 
@@ -129,13 +161,15 @@ public class AnalysisBlock implements Block {
             }
         }
 
-        // Determine model
-        String model = "claude-opus-4-6";
+        // Determine model. Default tier is "smart" — analysis is an analytical role
+        // (per smart-checklist design); operator can override via agent.model or agent.tier.
+        String model = "smart";
         int maxTokens = 8192;
         double temperature = 1.0;
         if (config.getAgent() != null) {
-            if (config.getAgent().getModel() != null && !config.getAgent().getModel().isBlank()) {
-                model = config.getAgent().getModel();
+            String effective = config.getAgent().getEffectiveModel();
+            if (effective != null) {
+                model = effective;
             }
             maxTokens = config.getAgent().getMaxTokensOrDefault();
             temperature = config.getAgent().getTemperatureOrDefault();
@@ -191,7 +225,38 @@ public class AnalysisBlock implements Block {
         result.putIfAbsent("estimated_complexity", "medium");
         result.putIfAbsent("risks", new ArrayList<>());
         result.putIfAbsent("open_questions", new ArrayList<>());
+        result.putIfAbsent("acceptance_checklist", new ArrayList<>());
+        result.putIfAbsent("needs_clarification", false);
+
+        normalizeChecklist(result);
 
         return result;
+    }
+
+    /**
+     * Defends against malformed checklist items from the LLM: missing ids get
+     * synthesized (a1, a2, ...), missing source/priority get conservative defaults
+     * ("derived" / "important"). Items that aren't a Map at all are dropped.
+     */
+    @SuppressWarnings("unchecked")
+    private void normalizeChecklist(Map<String, Object> result) {
+        Object raw = result.get("acceptance_checklist");
+        if (!(raw instanceof List<?> rawList)) return;
+
+        List<Map<String, Object>> normalized = new ArrayList<>();
+        int autoId = 1;
+        for (Object o : rawList) {
+            if (!(o instanceof Map<?, ?> m)) continue;
+            Map<String, Object> item = new HashMap<>((Map<String, Object>) m);
+            Object id = item.get("id");
+            if (!(id instanceof String s) || s.isBlank()) {
+                item.put("id", "a" + autoId++);
+            }
+            item.putIfAbsent("source", "derived");
+            item.putIfAbsent("priority", "important");
+            if (item.get("text") == null) item.put("text", "");
+            normalized.add(item);
+        }
+        result.put("acceptance_checklist", normalized);
     }
 }

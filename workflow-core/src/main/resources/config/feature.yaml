@@ -1,14 +1,17 @@
 name: feature
 description: |
-  Generic feature pipeline (Phase 1).
+  Generic feature pipeline (Phase 1 + smart-checklist).
 
-  Flow: task.md → implementation via tool-use agent → build → tests →
-  squash commit. All cross-block wiring uses ${block.field} interpolation;
-  the agent sees auto-appended issues on verify loopback.
+  Flow: task.md → analysis (smart, structured acceptance_checklist) →
+  optional clarification → operator approves checklist →
+  implementation via flash tool-use agent → build → tests →
+  agent_verify (smart, item-by-item against the checklist) →
+  squash commit. Verify can ask for manual override of failed
+  items if it exhausts max_iterations on a false-positive.
 
   This file is the built-in example/template. Copy it to your project at
   <project>/.ai-workflow/pipelines/feature.yaml and adjust working_dir,
-  build/test commands, and model to match your stack.
+  build/test commands, and tier presets to match your stack.
 
   Start a run with entry point "implement". Pass the absolute path to the
   task.md file as the requirement (e.g. /myproject/tasks/active/FEAT-001_slug.md).
@@ -27,32 +30,58 @@ pipeline:
     config:
       file_path: "${input.requirement}"
 
+  # Smart-tier analyst: extracts acceptance_checklist from task.md +
+  # adds derived items (edge cases, tests, error handling) with
+  # priority labels. Sets needs_clarification=true on thin tasks.
+  - id: analysis
+    block: analysis
+    approval: true              # operator reviews and approves the checklist
+    depends_on: [task_md]
+    agent:
+      tier: smart
+      maxTokens: 8192
+      temperature: 0.3
+
+  # Conditional Q&A — only fires when analysis flagged the task as thin
+  # or high-complexity-ambiguous.
+  - id: clarification
+    block: clarification
+    approval: false
+    depends_on: [analysis]
+    condition: "$.analysis.needs_clarification == true"
+    agent:
+      tier: smart
+
+  # Flash-tier executor: implements the feature using the agreed checklist.
   - id: impl
     block: agent_with_tools
     approval: false
-    depends_on: [task_md]
+    depends_on: [analysis]
     agent:
-      model: deepseek/deepseek-chat-v3-0324
+      tier: flash
       maxTokens: 8192
       temperature: 0.2
       systemPrompt: |
         You implement feature tickets precisely. Use the provided tools to
         read the codebase, edit existing files, and write new ones. Stay
-        inside the working directory. When the task is done, end your turn
-        with one short confirmation sentence.
+        inside the working directory. The acceptance_checklist below is
+        your contract — every critical and important item must be done.
+        When the task is done, end your turn with one short confirmation
+        sentence.
     config:
-      working_dir: /project  # set to the Docker mount path of your repo
+      working_dir: /project    # set to the Docker mount path of your repo
       user_message: |
         Feature: ${task_md.title}
 
-        ## To be
+        ## Description
         ${task_md.to_be}
 
-        ## Acceptance criteria
-        ${task_md.acceptance}
+        ## Acceptance checklist (single source of truth)
+        ${analysis.acceptance_checklist}
 
-        Implement the feature above. Keep changes scoped — no unrelated
-        refactors. Prefer Edit over Write for existing files.
+        Implement every CRITICAL and IMPORTANT item above. Keep changes
+        scoped — no unrelated refactors. Prefer Edit over Write for
+        existing files.
       allowed_tools: [Read, Write, Edit, Glob, Grep, Bash]
       bash_allowlist:
         - Bash(git status)
@@ -67,7 +96,7 @@ pipeline:
     approval: false
     depends_on: [impl]
     config:
-      working_dir: /project  # set to the Docker mount path of your repo
+      working_dir: /project
       command: "echo BUILD_SKIPPED"   # replace with your actual build command
       timeout_sec: 120
       allow_nonzero_exit: true
@@ -93,7 +122,7 @@ pipeline:
     approval: false
     depends_on: [verify_build]
     config:
-      working_dir: /project  # set to the Docker mount path of your repo
+      working_dir: /project
       command: "echo TEST_SKIPPED"    # replace with your actual test command
       timeout_sec: 120
       allow_nonzero_exit: true
@@ -113,12 +142,44 @@ pipeline:
         inject_context:
           test_failures: "$.tests.stdout"
 
+  # Smart-tier acceptance verification: walks the checklist item-by-item,
+  # uses Read/Grep/Bash to find evidence in the repo. On exhausted
+  # max_iterations, raises an approval gate so the operator can override
+  # false-positive FAIL items (per H3 design).
+  - id: verify_acceptance
+    block: agent_verify
+    approval: false
+    depends_on: [analysis, verify_tests]
+    agent:
+      tier: smart
+      maxTokens: 8192
+    config:
+      subject: analysis
+      working_dir: /project
+      allowed_tools: [Read, Grep, Glob, Bash]
+      bash_allowlist:
+        - Bash(gradle test*)
+        - Bash(npm test*)
+        - Bash(cat *)
+        - Bash(ls*)
+      pass_threshold: critical_and_important
+      max_iterations: 12
+      budget_usd_cap: 1.5
+    on_failure:
+      action: loopback
+      target: impl
+      max_iterations: 2
+      inject_context:
+        failed_items: "$.verify_acceptance.failed_items"
+        passed_items: "$.verify_acceptance.passed_items"
+        _previous_verification_results: "$.verify_acceptance.verification_results"
+
   - id: commit
     block: shell_exec
     approval: false
-    depends_on: [verify_tests]
+    depends_on: [verify_acceptance]
     config:
-      working_dir: /project  # set to the Docker mount path of your repo
+      working_dir: /project
       command: |
         git add -A && \
         git commit -m "${task_md.feat_id}: ${task_md.title}

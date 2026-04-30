@@ -42,7 +42,8 @@ public class ClarificationBlock implements Block {
 
     @Override
     public String getDescription() {
-        return "Показывает открытые вопросы из анализа, собирает ответы пользователя и формирует уточнённое требование и согласованный подход.";
+        return "Показывает открытые вопросы из анализа, собирает ответы пользователя и формирует уточнённое требование и согласованный подход. "
+            + "Рекомендуется condition: \"$.analysis.needs_clarification == true\" для автоматического пропуска когда задача достаточно специфична.";
     }
 
     @Override
@@ -63,13 +64,15 @@ public class ClarificationBlock implements Block {
             }
         }
 
-        // Determine model
-        String model = "claude-sonnet-4-6";
+        // Determine model. Default tier is "smart" — clarification is an analytical role
+        // (question generation + synthesis); operator can override via agent.model or agent.tier.
+        String model = "smart";
         int maxTokens = 8192;
         double temperature = 1.0;
         if (config.getAgent() != null) {
-            if (config.getAgent().getModel() != null && !config.getAgent().getModel().isBlank()) {
-                model = config.getAgent().getModel();
+            String effective = config.getAgent().getEffectiveModel();
+            if (effective != null) {
+                model = effective;
             }
             maxTokens = config.getAgent().getMaxTokensOrDefault();
             temperature = config.getAgent().getTemperatureOrDefault();

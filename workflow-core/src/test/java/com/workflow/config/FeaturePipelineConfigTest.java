@@ -34,6 +34,7 @@ class FeaturePipelineConfigTest {
         "shell_exec",
         "claude_code_shell",
         "verify",
+        "agent_verify",
         "analysis",
         "code_generation",
         "clarification",

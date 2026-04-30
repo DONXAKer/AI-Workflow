@@ -34,6 +34,7 @@ class PipelineConfigValidatorAcceptanceTest {
     private static final List<String> ALL_BLOCK_TYPES = List.of(
         "analysis",
         "ai_review",
+        "agent_verify",
         "agent_with_tools",
         "build",
         "business_intake",

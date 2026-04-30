@@ -1,6 +1,7 @@
 package com.workflow.config;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -8,6 +9,15 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public class AgentConfig {
 
     private String model;
+
+    /**
+     * Symbolic tier (e.g. {@code smart}, {@code flash}) resolved through
+     * {@link com.workflow.llm.ModelPresetResolver} to a concrete model id.
+     * Used when {@link #model} is not set explicitly. Lets pipelines say
+     * "this block is an analyst" or "this block is an executor" without
+     * binding to a specific model — swap the global preset to upgrade everywhere.
+     */
+    private String tier;
 
     // Canonical key on both read and write is camelCase (matches existing
     // feature.yaml). Aliases accept snake_case and the legacy "*OrDefault" form
@@ -31,6 +41,27 @@ public class AgentConfig {
 
     public void setModel(String model) {
         this.model = model;
+    }
+
+    public String getTier() {
+        return tier;
+    }
+
+    public void setTier(String tier) {
+        this.tier = tier;
+    }
+
+    /**
+     * Effective model identifier: explicit {@link #model} wins, otherwise falls back
+     * to the symbolic {@link #tier}. Returns null if neither is set — caller is then
+     * responsible for applying its own default. Not serialised — derived from
+     * {@link #model} and {@link #tier}.
+     */
+    @JsonIgnore
+    public String getEffectiveModel() {
+        if (model != null && !model.isBlank()) return model;
+        if (tier != null && !tier.isBlank()) return tier;
+        return null;
     }
 
     public String getSystemPrompt() {
@@ -57,12 +88,14 @@ public class AgentConfig {
         this.temperature = temperature;
     }
 
-    /** Returns maxTokens with a fallback default. */
+    /** Returns maxTokens with a fallback default. Not serialised — derived from {@link #maxTokens}. */
+    @JsonIgnore
     public int getMaxTokensOrDefault() {
         return maxTokens != null ? maxTokens : 8192;
     }
 
-    /** Returns temperature with a fallback default. */
+    /** Returns temperature with a fallback default. Not serialised — derived from {@link #temperature}. */
+    @JsonIgnore
     public double getTemperatureOrDefault() {
         return temperature != null ? temperature : 1.0;
     }

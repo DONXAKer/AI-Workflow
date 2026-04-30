@@ -882,6 +882,72 @@ public class PipelineRunner {
                 }
             }
 
+            // --- agent_verify loopback + manual override gate (Phase E / H3) ---
+            // agent_verify uses block-level on_failure (not verify.on_fail). When the
+            // tool-using verifier exceeds max_iterations, instead of hard-failing the
+            // run we surface an approval gate so the operator can mark FAIL items as
+            // PASS overrides (per smart-checklist design). Records manual_overrides
+            // in the block output for audit.
+            if ("agent_verify".equals(blockConfig.getBlock())) {
+                Boolean verifyPassed = output.get("passed") instanceof Boolean b ? b : true;
+                if (!verifyPassed) {
+                    OnFailureConfig vFail = blockConfig.getOnFailure();
+                    if (vFail != null && "loopback".equals(vFail.getAction())) {
+                        String targetId = vFail.getTarget();
+                        int maxIter = vFail.getMaxIterations();
+                        String loopKey = "loopback:" + blockId + ":" + targetId;
+
+                        @SuppressWarnings("unchecked")
+                        List<String> issues = output.get("issues") instanceof List<?> l
+                            ? (List<String>) l : List.of();
+                        Map<String, Object> extraCtx = resolveInjectContext(vFail.getInjectContext(), run);
+
+                        runRepository.save(run);
+                        int newI = handleLoopback(loopKey, targetId, blockId, maxIter,
+                            issues, extraCtx, sortedBlocks, i, run);
+                        if (newI >= 0) {
+                            if (wsHandler != null) wsHandler.sendBlockComplete(run.getId(), blockId, output);
+                            i = newI;
+                            continue;
+                        }
+                        // Max iterations exceeded — H3 manual override gate.
+                        List<String> remainingIds = sortedBlocks.subList(i + 1, sortedBlocks.size())
+                            .stream().map(BlockConfig::getId).toList();
+                        String desc = "Agent verify '" + blockId + "' exceeded max iterations. "
+                            + "Approve to override failed items as PASS (records manual_overrides), "
+                            + "or reject to fail the run.";
+                        if (wsHandler != null) wsHandler.sendApprovalRequest(run.getId(), blockId, desc, output);
+                        try {
+                            ApprovalResult ar = approvalGate.request(blockId, "agent_verify", desc,
+                                inputs, output, remainingIds);
+                            if (ar != null && "APPROVED".equals(ar.getStatus())) {
+                                Map<String, Object> overrideOut = new LinkedHashMap<>(output);
+                                overrideOut.put("passed", true);
+                                Object overrides = ar.getOutput() != null
+                                    ? ar.getOutput().get("manual_overrides") : null;
+                                overrideOut.put("manual_overrides",
+                                    overrides != null ? overrides : "all_failed_items_overridden");
+                                overrideOut.put("override_reason",
+                                    ar.getOutput() != null ? ar.getOutput().get("reason") : null);
+                                saveBlockOutput(run, blockId, overrideOut);
+                                if (!run.getCompletedBlocks().contains(blockId)) {
+                                    run.getCompletedBlocks().add(blockId);
+                                }
+                                runRepository.save(run);
+                                if (wsHandler != null) wsHandler.sendBlockComplete(run.getId(), blockId, overrideOut);
+                                log.warn("agent_verify '{}' completed via manual override after max iterations", blockId);
+                                i++;
+                                continue;
+                            }
+                        } catch (Exception e) {
+                            log.warn("Manual override approval failed for '{}': {}", blockId, e.getMessage());
+                        }
+                        markFailed(run, "Agent verify '" + blockId + "' failed after max iterations and no manual override");
+                        throw new RuntimeException("Agent verify '" + blockId + "' exhausted iterations");
+                    }
+                }
+            }
+
             // --- on_failure loopback check for CI blocks ---
             OnFailureConfig onFailure = blockConfig.getOnFailure();
             if (onFailure != null && "loopback".equals(onFailure.getAction()) && isCiFailure(output, onFailure)) {

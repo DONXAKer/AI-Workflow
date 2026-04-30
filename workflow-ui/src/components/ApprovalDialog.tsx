@@ -1,9 +1,49 @@
-import { useState, useCallback } from 'react'
-import { CheckCircle, Edit3, XCircle, SkipForward, ArrowRight, AlertCircle, X } from 'lucide-react'
+import { useState, useCallback, useMemo } from 'react'
+import { CheckCircle, Edit3, XCircle, SkipForward, ArrowRight, AlertCircle, X, ShieldCheck } from 'lucide-react'
 import { WsMessage, ApprovalDecision, ApprovalDecisionType } from '../types'
 import clsx from 'clsx'
 import BlockOutputViewer from './BlockOutputViewer'
 import { blockIdLabel } from '../utils/blockLabels'
+
+interface VerifyFailedItem {
+  item_id: string
+  text?: string
+  priority?: string
+  evidence?: string
+}
+
+/**
+ * Detects the agent_verify "manual override" approval — raised by the backend
+ * when verify exhausted max_iterations and the operator must decide whether
+ * to override failing items as PASS or hard-fail the run.
+ */
+function detectVerifyOverride(output: Record<string, unknown> | undefined): VerifyFailedItem[] | null {
+  if (!output) return null
+  const failed = output.failed_items
+  if (!Array.isArray(failed) || failed.length === 0) return null
+  const passed = output.passed
+  if (passed === true) return null
+  const items: VerifyFailedItem[] = []
+  for (const f of failed) {
+    if (typeof f !== 'object' || f === null) continue
+    const obj = f as Record<string, unknown>
+    const id = obj.item_id
+    if (typeof id !== 'string' || !id) continue
+    items.push({
+      item_id: id,
+      text: typeof obj.text === 'string' ? obj.text : undefined,
+      priority: typeof obj.priority === 'string' ? obj.priority : undefined,
+      evidence: typeof obj.evidence === 'string' ? obj.evidence : undefined,
+    })
+  }
+  return items.length > 0 ? items : null
+}
+
+const PRIORITY_STYLES: Record<string, string> = {
+  critical: 'bg-red-900/40 border-red-700 text-red-200',
+  important: 'bg-amber-900/40 border-amber-700 text-amber-200',
+  nice_to_have: 'bg-slate-800 border-slate-700 text-slate-400',
+}
 
 interface Props {
   approval: WsMessage
@@ -54,6 +94,32 @@ export default function ApprovalDialog({ approval, remainingBlocks = [], onDecis
   // Require a second click to confirm Reject (irreversible — stops the run)
   const [confirmReject, setConfirmReject] = useState(false)
 
+  // agent_verify override mode: present when backend asks the operator
+  // to override failing items as PASS after max_iterations was exhausted.
+  const verifyFailedItems = useMemo(
+    () => detectVerifyOverride(approval.output as Record<string, unknown> | undefined),
+    [approval.output],
+  )
+  const [overrideIds, setOverrideIds] = useState<Set<string>>(new Set())
+  const [overrideReason, setOverrideReason] = useState('')
+
+  const toggleOverride = useCallback((id: string) => {
+    setOverrideIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }, [])
+  const overrideAll = useCallback(() => {
+    if (!verifyFailedItems) return
+    setOverrideIds(new Set(verifyFailedItems.map(i => i.item_id)))
+  }, [verifyFailedItems])
+  const overrideNone = useCallback(() => setOverrideIds(new Set()), [])
+
+  const allOverridesCovered = verifyFailedItems !== null
+    && verifyFailedItems.length > 0
+    && verifyFailedItems.every(i => overrideIds.has(i.item_id))
+
   const handleJsonChange = useCallback((value: string) => {
     setEditedOutput(value)
     const result = parseJsonSafe(value)
@@ -78,6 +144,15 @@ export default function ApprovalDialog({ approval, remainingBlocks = [], onDecis
       if (editMode) {
         const result = parseJsonSafe(editedOutput)
         if (result.ok) decision.output = result.value
+      }
+      // agent_verify override: encode operator-selected per-item overrides
+      // so the backend records them in manual_overrides for audit.
+      if (verifyFailedItems && overrideIds.size > 0) {
+        decision.output = {
+          ...(decision.output ?? {}),
+          manual_overrides: Array.from(overrideIds),
+          reason: overrideReason.trim() || null,
+        }
       }
       onDecision(decision)
       return
@@ -194,6 +269,102 @@ export default function ApprovalDialog({ approval, remainingBlocks = [], onDecis
             )}
           </div>
 
+          {/* agent_verify override panel — only when verify exhausted iterations */}
+          {verifyFailedItems && (
+            <div className="bg-amber-950/30 border border-amber-800/60 rounded-xl p-4 space-y-3">
+              <div className="flex items-start gap-2">
+                <ShieldCheck className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <h3 className="text-sm font-semibold text-amber-100">Override недопройденных пунктов</h3>
+                  <p className="text-xs text-amber-300/80 mt-0.5">
+                    Verify исчерпал лимит итераций. Отметьте пункты, которые считаете false-positive —
+                    они будут засчитаны как PASS, остальные останутся FAIL и run упадёт.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-slate-500">Выбрано: {overrideIds.size} из {verifyFailedItems.length}</span>
+                <button
+                  type="button"
+                  onClick={overrideAll}
+                  className="ml-auto px-2 py-1 rounded-md bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:border-slate-600"
+                >
+                  Все
+                </button>
+                <button
+                  type="button"
+                  onClick={overrideNone}
+                  className="px-2 py-1 rounded-md bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:border-slate-600"
+                >
+                  Сбросить
+                </button>
+              </div>
+
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {verifyFailedItems.map(item => {
+                  const checked = overrideIds.has(item.item_id)
+                  const priorityClass = PRIORITY_STYLES[item.priority ?? 'important'] ?? PRIORITY_STYLES.important
+                  return (
+                    <label
+                      key={item.item_id}
+                      className={clsx(
+                        'flex items-start gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-colors',
+                        checked
+                          ? 'bg-emerald-950/30 border-emerald-800/60'
+                          : 'bg-slate-900/40 border-slate-800 hover:border-slate-700'
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleOverride(item.item_id)}
+                        className="mt-1 w-4 h-4 rounded border-slate-600 bg-slate-900 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-mono text-xs text-slate-500">{item.item_id}</span>
+                          {item.priority && (
+                            <span className={clsx('text-[10px] px-1.5 py-0.5 rounded border uppercase tracking-wide', priorityClass)}>
+                              {item.priority}
+                            </span>
+                          )}
+                        </div>
+                        {item.text && (
+                          <p className="text-sm text-slate-200">{item.text}</p>
+                        )}
+                        {item.evidence && (
+                          <p className="text-xs text-slate-500 mt-1 italic">Evidence: {item.evidence}</p>
+                        )}
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">
+                  Причина (опционально)
+                </label>
+                <input
+                  type="text"
+                  value={overrideReason}
+                  onChange={e => setOverrideReason(e.target.value)}
+                  placeholder="Например: verify не понял что fixture лежит в другой папке"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              {!allOverridesCovered && overrideIds.size > 0 && (
+                <p className="text-xs text-amber-300 flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                  Оставшиеся {verifyFailedItems.length - overrideIds.size} пункта останутся FAIL — run упадёт.
+                  Если хотите override всё, нажмите «Все».
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Jump panel */}
           {jumpMode && (
             <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-3">
@@ -231,10 +402,16 @@ export default function ApprovalDialog({ approval, remainingBlocks = [], onDecis
             <button
               type="button"
               onClick={() => handleDecision('APPROVE')}
-              className="flex items-center gap-2 bg-green-700 hover:bg-green-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+              disabled={verifyFailedItems !== null && overrideIds.size === 0}
+              className="flex items-center gap-2 bg-green-700 hover:bg-green-600 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+              title={verifyFailedItems !== null && overrideIds.size === 0
+                ? 'Отметьте хотя бы один пункт для override (или нажмите «Все»), либо отклоните'
+                : undefined}
             >
               <CheckCircle className="w-4 h-4" />
-              Одобрить
+              {verifyFailedItems
+                ? (allOverridesCovered ? 'Применить override и продолжить' : `Override (${overrideIds.size}) и продолжить`)
+                : 'Одобрить'}
             </button>
 
             {editMode && (
