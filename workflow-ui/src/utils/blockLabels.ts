@@ -66,6 +66,21 @@ const BLOCK_ID_LABELS: Record<string, string> = {
   pr:               'Pull Request',
   ci:               'CI/CD',
 
+  // WarCard / feature pipeline
+  create_branch:    'Создание ветки',
+  plan_impl:        'Планирование',
+  impl_server:      'Реализация (сервер)',
+  impl:             'Реализация',
+  review_impl:      'Ревью реализации',
+  check_unreal:     'Проверка Unreal',
+  plan_bp:          'Планирование Blueprint',
+  impl_bp:          'Реализация Blueprint',
+  review_bp:        'Ревью Blueprint',
+  diff_review:      'Просмотр изменений',
+  commit:           'Коммит',
+  verify_build:     'Проверка сборки',
+  verify_tests:     'Проверка тестов',
+
   // generic aliases
   code_generation:  'Генерация кода',
   verify_code:      'Верификация кода',
@@ -90,7 +105,7 @@ export function blockIdLabel(blockId: string | undefined | null): string {
 
 /**
  * Curated model presets by capability tier.
- * Shown as suggestions in PipelineConfigTab.
+ * Shown as suggestions in PipelineEditor.
  */
 export const MODEL_TIERS = [
   {

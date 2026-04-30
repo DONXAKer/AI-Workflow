@@ -63,7 +63,7 @@ Message types: `BLOCK_STARTED`, `BLOCK_COMPLETE`, `BLOCK_PROGRESS`, `BLOCK_SKIPP
 
 `blockIdLabel(id)` returns a Russian display name. Lookup order: block-ID map → block-type map → raw ID. Use this everywhere a block ID appears in the UI — never render raw IDs.
 
-`BLOCK_TYPE_RECOMMENDED_PRESET` maps block types to model tiers (used in `PipelineConfigTab`).
+`BLOCK_TYPE_RECOMMENDED_PRESET` maps block types to model tiers (used in `PipelineEditor`).
 
 ### Approval flow
 
