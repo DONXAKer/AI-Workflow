@@ -5,5 +5,6 @@ public enum IntegrationType {
     GITLAB,
     GITHUB,
     OPENROUTER,
-    UNREAL
+    UNREAL,
+    CLAUDE_CODE_CLI
 }

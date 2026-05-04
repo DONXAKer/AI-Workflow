@@ -31,6 +31,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Agentic block: hands the LLM a set of native tools and runs {@link LlmClient#completeWithTools}
@@ -172,7 +173,7 @@ public class AgentWithToolsBlock implements Block {
         String expanded = stringInterpolator != null
             ? stringInterpolator.interpolate(userTemplate, run, input)
             : userTemplate;
-        String userMessage = appendLoopbackFeedback(interpolate(expanded, input), input);
+        String userMessage = prependLoopbackFeedback(interpolate(expanded, input), input);
         userMessage = prependCodebaseTree(userMessage, workingDir);
         userMessage = prependPreloadedFiles(userMessage, cfg, input, workingDir);
 
@@ -464,29 +465,50 @@ public class AgentWithToolsBlock implements Block {
     }
 
     @SuppressWarnings("unchecked")
-    private static String appendLoopbackFeedback(String userMessage, Map<String, Object> input) {
+    // Loopback context is prepended (not appended) so LLMs prioritise retry instructions
+    // over the main task description — they tend to weight the beginning of the prompt more.
+    private static String prependLoopbackFeedback(String userMessage, Map<String, Object> input) {
         Object raw = input.get("_loopback");
-        if (!(raw instanceof Map<?, ?> loopback)) return userMessage;
-        if (loopback.isEmpty()) return userMessage;
+        if (!(raw instanceof Map<?, ?> loopback) || loopback.isEmpty()) return userMessage;
 
-        StringBuilder sb = new StringBuilder(userMessage);
-        sb.append("\n\n---\n");
+        StringBuilder sb = new StringBuilder();
         Object iter = loopback.get("iteration");
-        sb.append("Previous attempt").append(iter != null ? " (iteration " + iter + ")" : "")
-            .append(" did not pass verification. Address the issues below before retrying:\n");
+        sb.append("## ВАЖНО: Повторная попытка (итерация ").append(iter != null ? iter : "?").append(")\n\n");
+        sb.append("Предыдущая реализация НЕ прошла проверку. ");
+        sb.append("Исправь все указанные проблемы ПЕРЕД выполнением основной задачи:\n\n");
+
+        Object ri = loopback.get("retry_instruction");
+        if (ri != null && !ri.toString().isBlank()) {
+            sb.append("### Инструкция от ревьюера\n").append(ri).append("\n\n");
+        }
+
         Object issues = loopback.get("issues");
         if (issues instanceof List<?> list && !list.isEmpty()) {
+            sb.append("### Проблемы для исправления\n");
             for (Object item : list) {
                 sb.append("- ").append(item).append('\n');
             }
-        } else {
-            sb.append("(no structured issues recorded)\n");
+            sb.append('\n');
         }
+
+        Object bo = loopback.get("build_output");
+        if (bo != null && !bo.toString().isBlank()) {
+            String boStr = bo.toString();
+            sb.append("### Вывод сборки\n```\n")
+              .append(boStr.length() > 2000 ? boStr.substring(boStr.length() - 2000) : boStr)
+              .append("\n```\n\n");
+        }
+
+        // Include any other keys from inject_context (e.g. carry_forward)
         for (Map.Entry<?, ?> e : ((Map<?, ?>) loopback).entrySet()) {
             String key = e.getKey().toString();
-            if ("iteration".equals(key) || "issues".equals(key)) continue;
-            sb.append(key).append(": ").append(e.getValue()).append('\n');
+            if (Set.of("iteration", "issues", "retry_instruction", "build_output").contains(key)) continue;
+            if (e.getValue() != null && !e.getValue().toString().isBlank()) {
+                sb.append("**").append(key).append(":** ").append(e.getValue()).append('\n');
+            }
         }
+
+        sb.append("\n---\n\n## Основная задача\n\n").append(userMessage);
         return sb.toString();
     }
 }

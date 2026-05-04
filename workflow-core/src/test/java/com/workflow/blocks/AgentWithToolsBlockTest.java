@@ -168,11 +168,16 @@ class AgentWithToolsBlockTest {
         verify(llmClient).completeWithTools(req.capture(), any());
         String msg = req.getValue().userMessage();
 
-        assertTrue(msg.startsWith("Do the thing"), "original message preserved at the top");
-        assertTrue(msg.contains("iteration 2"));
+        // Loopback header must appear BEFORE the main task so LLMs prioritise retry instructions.
+        assertTrue(msg.startsWith("## ВАЖНО"), "loopback header must be at the top");
+        assertTrue(msg.contains("итерация 2") || msg.contains("iteration 2"), "iteration number present");
         assertTrue(msg.contains("USTRUCT missing"));
         assertTrue(msg.contains("client test failed"));
-        assertTrue(msg.contains("verify_from: verify_contract_drift"),
+        assertTrue(msg.contains("## Основная задача"), "main task section present");
+        assertTrue(msg.contains("Do the thing"), "original message preserved");
+        assertTrue(msg.indexOf("ВАЖНО") < msg.indexOf("Do the thing"),
+            "loopback section must come before the main task");
+        assertTrue(msg.contains("verify_contract_drift"),
             "extra loopback keys carried through");
     }
 

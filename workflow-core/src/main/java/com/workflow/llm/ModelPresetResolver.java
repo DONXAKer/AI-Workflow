@@ -32,19 +32,23 @@ public class ModelPresetResolver {
 
     private static final Logger log = LoggerFactory.getLogger(ModelPresetResolver.class);
 
+    private static final Map<String, String> CLI_DEFAULTS = Map.of(
+        "smart",     "claude-sonnet-4-6",
+        "flash",     "claude-haiku-4-5",
+        "fast",      "claude-haiku-4-5",
+        "reasoning", "claude-opus-4-7",
+        "cheap",     "claude-haiku-4-5"
+    );
+
     private static final Map<String, String> DEFAULTS = Map.ofEntries(
-        // Tier presets — primary semantic abstraction. Use these as `tier:` in
-        // block AgentConfig: smart for analytical roles (analysis, verify, plan/review),
-        // flash for executor roles (codegen, agent_with_tools impl).
-        // Defaults match the model pair that performs best for the WarCard pipeline
-        // (operator-validated). Override per-tier in application.yaml under
-        // workflow.model-presets if your stack prefers different models.
-        Map.entry("smart",        "z-ai/glm-4.6"),
-        Map.entry("flash",        "z-ai/glm-4.7-flash"),
+        // Tier presets — Anthropic models routed through Claude Code CLI.
+        // Override per-tier in application.yaml under workflow.model-presets.
+        Map.entry("smart",        "google/gemini-2.5-pro"),
+        Map.entry("flash",        "google/gemini-2.5-flash-lite"),
         // Legacy / extended presets
-        Map.entry("fast",         "anthropic/claude-haiku-4-5"),
-        Map.entry("reasoning",    "anthropic/claude-opus-4-7"),
-        Map.entry("cheap",        "openai/gpt-4o-mini"),
+        Map.entry("fast",         "google/gemini-2.5-flash-lite"),
+        Map.entry("reasoning",    "google/gemini-2.5-pro"),
+        Map.entry("cheap",        "google/gemini-2.5-flash-lite"),
         Map.entry("deepseek",     "deepseek/deepseek-chat-v3-0324"),
         Map.entry("glm",          "z-ai/glm-5.1"),
         Map.entry("gemini-pro",   "google/gemini-2.5-pro"),
@@ -69,6 +73,24 @@ public class ModelPresetResolver {
 
         // Not a known preset — assume it's a raw Anthropic model name (backward compat).
         log.debug("Unknown preset '{}' — passing through as raw model name", presetOrModel);
+        return presetOrModel;
+    }
+
+    /**
+     * Resolves a preset or model name to a native Claude model identifier for use with the
+     * Claude CLI ({@code claude -p --model ...}). OpenRouter vendor-prefixed names like
+     * {@code anthropic/claude-sonnet-4-6} are stripped to {@code claude-sonnet-4-6}.
+     */
+    public String resolveCli(String presetOrModel) {
+        if (presetOrModel == null || presetOrModel.isBlank()) return CLI_DEFAULTS.get("smart");
+
+        if (presetOrModel.contains("/"))
+            return presetOrModel.substring(presetOrModel.lastIndexOf('/') + 1);
+
+        String lower = presetOrModel.toLowerCase();
+        if (CLI_DEFAULTS.containsKey(lower)) return CLI_DEFAULTS.get(lower);
+
+        log.debug("Unknown CLI preset '{}' — passing through as raw model name", presetOrModel);
         return presetOrModel;
     }
 

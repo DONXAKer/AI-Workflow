@@ -22,6 +22,7 @@ import java.util.Map;
  *   <li>{@code fail} — transitions the run to FAILED with a timeout error, releases the waiter.</li>
  *   <li>{@code notify} — emits a non-blocking WebSocket notification; the run stays paused.</li>
  *   <li>{@code escalate} — notify + annotate with target role (consumed by Epic 2.2 once roles land).</li>
+ *   <li>{@code approve} — automatically approves the paused block and resumes the pipeline.</li>
  * </ul>
  *
  * <p>Notify/escalate are idempotent — we mark the timeout as "fired" by clearing
@@ -74,6 +75,7 @@ public class ApprovalTimeoutScheduler {
 
         switch (action) {
             case "fail" -> applyFail(run, blockId, elapsed);
+            case "approve" -> applyApprove(run, blockId, elapsed);
             case "escalate" -> applyEscalate(run, blockId, elapsed);
             default -> applyNotify(run, blockId, elapsed);
         }
@@ -107,6 +109,21 @@ public class ApprovalTimeoutScheduler {
         // Mark as fired — prevent repeated notifications every 60s for the same stale run.
         run.setApprovalTimeoutSeconds(null);
         runRepository.save(run);
+    }
+
+    private void applyApprove(PipelineRun run, String blockId, Duration elapsed) {
+        log.info("Auto-approving block '{}' for run {} after timeout ({}s elapsed)",
+            blockId, run.getId(), elapsed.getSeconds());
+        run.setPausedAt(null);
+        run.setApprovalTimeoutSeconds(null);
+        run.setApprovalTimeoutAction(null);
+        runRepository.save(run);
+        if (webSocketApprovalGate != null && blockId != null) {
+            webSocketApprovalGate.resolveApproval(blockId,
+                ApprovalResult.builder().status("APPROVED").output(new HashMap<>()).skipFuture(false).build());
+        }
+        if (wsHandler != null) wsHandler.sendAutoNotify(run.getId(), blockId,
+            "Block auto-approved after timeout", Map.of("elapsedSeconds", elapsed.getSeconds()));
     }
 
     private void applyEscalate(PipelineRun run, String blockId, Duration elapsed) {

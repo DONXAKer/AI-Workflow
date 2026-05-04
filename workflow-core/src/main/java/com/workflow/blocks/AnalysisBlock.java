@@ -212,7 +212,15 @@ public class AnalysisBlock implements Block {
             }
             // Fix invalid JSON escapes produced by some models (e.g. \` is not valid JSON)
             json = json.replace("\\`", "`");
-            result = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
+            try {
+                result = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
+            } catch (Exception parseEx) {
+                // Some models embed raw control characters (newlines, tabs) inside JSON strings.
+                // Use a lenient ObjectMapper that accepts unescaped control chars as a fallback.
+                com.fasterxml.jackson.core.JsonFactory lf = new com.fasterxml.jackson.core.JsonFactory();
+                lf.configure(com.fasterxml.jackson.core.json.JsonReadFeature.ALLOW_UNESCAPED_CONTROL_CHARS.mappedFeature(), true);
+                result = new ObjectMapper(lf).readValue(json, new TypeReference<Map<String, Object>>() {});
+            }
         } catch (Exception e) {
             log.error("Failed to parse analysis JSON: {}", e.getMessage());
             throw new RuntimeException("Failed to parse analysis LLM response as JSON: " + e.getMessage(), e);

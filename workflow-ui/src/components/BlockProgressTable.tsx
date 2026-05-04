@@ -1,5 +1,5 @@
 import { Loader2, CheckCircle, XCircle, SkipForward, Clock, AlertCircle, Copy, Check, Bell, ChevronDown, ChevronRight, Hand, Zap, BellRing, RotateCcw } from 'lucide-react'
-import { BlockStatus, BlockSnapshot, ApprovalMode, ToolCallEntry } from '../types'
+import { BlockStatus, BlockSnapshot, ApprovalMode, ToolCallEntry, LlmCallEntry } from '../types'
 import { effectiveApprovalMode } from '../utils/configSnapshot'
 import { blockIdLabel } from '../utils/blockLabels'
 import clsx from 'clsx'
@@ -23,6 +23,15 @@ function ApprovalBadge({ mode }: { mode: ApprovalMode }) {
       {cfg.label}
     </span>
   )
+}
+
+function fmtDuration(ms: number): string {
+  const s = Math.floor(ms / 1000)
+  const m = Math.floor(s / 60)
+  const h = Math.floor(m / 60)
+  if (h > 0) return `${h}h ${m % 60}m`
+  if (m > 0) return `${m}m ${s % 60}s`
+  return `${s}s`
 }
 
 /** Live elapsed timer for running blocks */
@@ -51,6 +60,8 @@ interface Props {
   snapshots?: Map<string, BlockSnapshot>
   /** Tool call audit entries — when provided, enables per-block iteration expansion */
   toolCalls?: ToolCallEntry[]
+  /** LLM call records — provides model/token/cost info per iteration */
+  llmCalls?: LlmCallEntry[]
 }
 
 const TOOL_COLORS: Record<string, string> = {
@@ -84,10 +95,11 @@ function summarizeInput(toolName: string, inputJson: string): string {
   }
 }
 
-function IterationRow({ iteration, calls }: { iteration: number; calls: ToolCallEntry[] }) {
+function IterationRow({ iteration, calls, llmCall }: { iteration: number; calls: ToolCallEntry[]; llmCall?: LlmCallEntry }) {
   const [open, setOpen] = useState(false)
   const hasError = calls.some(c => c.isError)
   const totalMs = calls.reduce((s, c) => s + c.durationMs, 0)
+  const shortModel = llmCall ? llmCall.model.replace(/^[^/]+\//, '') : null
 
   return (
     <div className="border border-slate-800/60 rounded-lg overflow-hidden">
@@ -100,6 +112,17 @@ function IterationRow({ iteration, calls }: { iteration: number; calls: ToolCall
           ? <ChevronDown className="w-3 h-3 text-slate-500 flex-shrink-0" />
           : <ChevronRight className="w-3 h-3 text-slate-500 flex-shrink-0" />}
         <span className="text-xs text-slate-400 font-mono">Итерация {iteration}</span>
+        {shortModel && (
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-violet-950/50 border border-violet-800/50 text-violet-300 flex-shrink-0">
+            {shortModel}
+          </span>
+        )}
+        {llmCall && llmCall.tokensIn > 0 && (
+          <span className="text-[10px] text-slate-600 flex-shrink-0">
+            {(llmCall.tokensIn / 1000).toFixed(0)}K↑ {(llmCall.tokensOut / 1000).toFixed(0)}K↓
+            {llmCall.costUsd > 0 && <span className="ml-1">${llmCall.costUsd.toFixed(4)}</span>}
+          </span>
+        )}
         <span className="text-[10px] text-slate-600">
           {calls.length} {calls.length === 1 ? 'вызов' : calls.length < 5 ? 'вызова' : 'вызовов'}
         </span>
@@ -137,7 +160,7 @@ function IterationRow({ iteration, calls }: { iteration: number; calls: ToolCall
   )
 }
 
-function IterationsPanel({ calls }: { calls: ToolCallEntry[] }) {
+function IterationsPanel({ calls, llmCalls }: { calls: ToolCallEntry[]; llmCalls?: LlmCallEntry[] }) {
   const byIteration = new Map<number, ToolCallEntry[]>()
   for (const c of calls) {
     if (!byIteration.has(c.iteration)) byIteration.set(c.iteration, [])
@@ -145,10 +168,15 @@ function IterationsPanel({ calls }: { calls: ToolCallEntry[] }) {
   }
   const iterations = [...byIteration.entries()].sort((a, b) => a[0] - b[0])
 
+  const llmByIteration = new Map<number, LlmCallEntry>()
+  for (const lc of (llmCalls ?? [])) {
+    if (!llmByIteration.has(lc.iteration)) llmByIteration.set(lc.iteration, lc)
+  }
+
   return (
     <div className="space-y-1.5 px-4 py-3 bg-slate-950/60 border-t border-slate-800/60">
       {iterations.map(([iter, iterCalls]) => (
-        <IterationRow key={iter} iteration={iter} calls={iterCalls} />
+        <IterationRow key={iter} iteration={iter} calls={iterCalls} llmCall={llmByIteration.get(iter)} />
       ))}
     </div>
   )
@@ -342,7 +370,7 @@ function OutputCell({ output }: { output?: Record<string, unknown> }) {
   )
 }
 
-export default function BlockProgressTable({ blockStatuses, onReviewApproval, onRelaunchFromBlock, snapshots, toolCalls }: Props) {
+export default function BlockProgressTable({ blockStatuses, onReviewApproval, onRelaunchFromBlock, snapshots, toolCalls, llmCalls }: Props) {
   const [expandedBlocks, setExpandedBlocks] = useState<Set<string>>(new Set())
 
   const toggleBlock = useCallback((blockId: string) => {
@@ -484,6 +512,10 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                     <td className="px-5 py-3.5 whitespace-nowrap">
                       {block.status === 'running' && block.startedAt ? (
                         <LiveDuration startedAt={block.startedAt} />
+                      ) : block.startedAt && block.completedAt ? (
+                        <span className="font-mono text-xs text-slate-400">
+                          {fmtDuration(new Date(block.completedAt).getTime() - new Date(block.startedAt).getTime())}
+                        </span>
                       ) : (
                         <span className="text-xs text-slate-600">—</span>
                       )}
@@ -522,7 +554,10 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                   {isExpanded && blockCalls.length > 0 && (
                     <tr>
                       <td colSpan={colSpan} className="p-0">
-                        <IterationsPanel calls={blockCalls} />
+                        <IterationsPanel
+                          calls={blockCalls}
+                          llmCalls={llmCalls?.filter(lc => lc.blockId === block.blockId)}
+                        />
                       </td>
                     </tr>
                   )}

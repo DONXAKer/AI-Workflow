@@ -17,7 +17,7 @@ export interface EntryPoint {
 }
 
 export type RunStatus = 'PENDING' | 'RUNNING' | 'PAUSED_FOR_APPROVAL' | 'COMPLETED' | 'FAILED'
-export type IntegrationType = 'YOUTRACK' | 'GITLAB' | 'GITHUB' | 'OPENROUTER' | 'UNREAL'
+export type IntegrationType = 'YOUTRACK' | 'GITLAB' | 'GITHUB' | 'OPENROUTER' | 'UNREAL' | 'CLAUDE_CODE_CLI'
 
 export interface ToolCallEntry {
   blockId: string
@@ -27,6 +27,16 @@ export interface ToolCallEntry {
   isError: boolean
   durationMs: number
   outputText?: string
+}
+
+export interface LlmCallEntry {
+  blockId: string
+  iteration: number
+  model: string
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  durationMs: number
 }
 
 export interface StoredBlockOutput {
@@ -539,6 +549,8 @@ export interface BlockStatus {
   input?: Record<string, unknown>
   /** ISO timestamp set when BLOCK_STARTED is received — used for per-step duration display */
   startedAt?: string
+  /** ISO timestamp set when BLOCK_COMPLETE is received — used to compute per-step duration */
+  completedAt?: string
   /** Latest progress detail from BLOCK_PROGRESS WS events */
   progressDetail?: string
 }

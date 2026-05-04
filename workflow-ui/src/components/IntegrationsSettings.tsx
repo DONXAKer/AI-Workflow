@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Plus, Trash2, Edit3, Eye, EyeOff, CheckCircle, XCircle,
-  Loader2, AlertCircle, Save, X, TicketCheck, GitBranch, Github, Cpu, ChevronRight, Layers,
+  Loader2, AlertCircle, Save, X, TicketCheck, GitBranch, Github, Cpu, ChevronRight, Layers, Terminal,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { IntegrationConfig, IntegrationType } from '../types'
@@ -10,30 +10,33 @@ import clsx from 'clsx'
 import IntegrationSlideOver from './integrations/IntegrationSlideOver'
 import PageHeader from './layout/PageHeader'
 
-const INTEGRATION_TYPES: IntegrationType[] = ['YOUTRACK', 'GITLAB', 'GITHUB', 'OPENROUTER', 'UNREAL']
+const INTEGRATION_TYPES: IntegrationType[] = ['YOUTRACK', 'GITLAB', 'GITHUB', 'OPENROUTER', 'UNREAL', 'CLAUDE_CODE_CLI']
 
 const TYPE_LABELS: Record<IntegrationType, string> = {
-  YOUTRACK:   'YouTrack',
-  GITLAB:     'GitLab',
-  GITHUB:     'GitHub',
-  OPENROUTER: 'OpenRouter',
-  UNREAL:     'Unreal Engine',
+  YOUTRACK:        'YouTrack',
+  GITLAB:          'GitLab',
+  GITHUB:          'GitHub',
+  OPENROUTER:      'OpenRouter',
+  UNREAL:          'Unreal Engine',
+  CLAUDE_CODE_CLI: 'Claude Agent',
 }
 
 const TYPE_BADGE: Record<IntegrationType, string> = {
-  YOUTRACK:   'bg-violet-900/50 text-violet-300 border-violet-800/50',
-  GITLAB:     'bg-orange-900/50 text-orange-300 border-orange-800/50',
-  GITHUB:     'bg-slate-700/60 text-slate-300 border-slate-600/50',
-  OPENROUTER: 'bg-blue-900/50 text-blue-300 border-blue-800/50',
-  UNREAL:     'bg-emerald-900/50 text-emerald-300 border-emerald-800/50',
+  YOUTRACK:        'bg-violet-900/50 text-violet-300 border-violet-800/50',
+  GITLAB:          'bg-orange-900/50 text-orange-300 border-orange-800/50',
+  GITHUB:          'bg-slate-700/60 text-slate-300 border-slate-600/50',
+  OPENROUTER:      'bg-blue-900/50 text-blue-300 border-blue-800/50',
+  UNREAL:          'bg-emerald-900/50 text-emerald-300 border-emerald-800/50',
+  CLAUDE_CODE_CLI: 'bg-amber-900/50 text-amber-300 border-amber-800/50',
 }
 
 const TYPE_META: Record<IntegrationType, { description: string; icon: LucideIcon; accent: string }> = {
-  YOUTRACK:   { description: 'Трекер задач JetBrains',    icon: TicketCheck, accent: 'text-violet-400' },
-  GITLAB:     { description: 'Репозитории и CI/CD',        icon: GitBranch,   accent: 'text-orange-400' },
-  GITHUB:     { description: 'Репозитории и PR',           icon: Github,      accent: 'text-slate-300'  },
-  OPENROUTER: { description: 'Маршрутизация AI-моделей',   icon: Cpu,         accent: 'text-blue-400'   },
-  UNREAL:     { description: 'Unreal MCP + Blueprint роутинг', icon: Layers,  accent: 'text-emerald-400' },
+  YOUTRACK:        { description: 'Трекер задач JetBrains',        icon: TicketCheck, accent: 'text-violet-400' },
+  GITLAB:          { description: 'Репозитории и CI/CD',            icon: GitBranch,   accent: 'text-orange-400' },
+  GITHUB:          { description: 'Репозитории и PR',               icon: Github,      accent: 'text-slate-300'  },
+  OPENROUTER:      { description: 'Маршрутизация AI-моделей',       icon: Cpu,         accent: 'text-blue-400'   },
+  UNREAL:          { description: 'Unreal MCP + Blueprint роутинг', icon: Layers,      accent: 'text-emerald-400' },
+  CLAUDE_CODE_CLI: { description: 'Claude CLI — подписка Max/API',  icon: Terminal,    accent: 'text-amber-400'  },
 }
 
 const DEFAULT_UNREAL_EXTRA = JSON.stringify({
@@ -72,6 +75,10 @@ function typeHasField(type: IntegrationType, field: 'baseUrl' | 'project' | 'own
     case 'owner': return type === 'GITHUB'
     case 'repo': return type === 'GITHUB'
   }
+}
+
+function typeRequiresToken(type: IntegrationType): boolean {
+  return type !== 'UNREAL' && type !== 'CLAUDE_CODE_CLI'
 }
 
 function TokenCell({ token }: { token: string }) {
@@ -176,7 +183,7 @@ function IntegrationForm({ initial, lockedType = false, onSave, onCancel }: Form
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    const tokenRequired = form.type !== 'UNREAL'
+    const tokenRequired = typeRequiresToken(form.type)
     if (!form.name.trim() || (tokenRequired && !form.token.trim())) {
       setError(tokenRequired ? 'Имя и Токен обязательны.' : 'Имя обязательно.')
       return
@@ -219,19 +226,40 @@ function IntegrationForm({ initial, lockedType = false, onSave, onCancel }: Form
             </select>
           )}
         </div>
-        <div>
-          <label className={labelCls}>
-            Токен {form.type !== 'UNREAL' && <span className="text-red-400">*</span>}
-            {form.type === 'UNREAL' && <span className="text-slate-500">(необязательно)</span>}
-          </label>
-          <input type="password" value={form.token} onChange={e => set('token', e.target.value)} placeholder={form.type === 'UNREAL' ? 'MCP auth token (если нужен)' : 'API-токен или ключ...'} autoComplete="new-password" className={inputCls} />
-        </div>
+        {form.type !== 'CLAUDE_CODE_CLI' && (
+          <div>
+            <label className={labelCls}>
+              Токен {typeRequiresToken(form.type) && <span className="text-red-400">*</span>}
+              {!typeRequiresToken(form.type) && <span className="text-slate-500">(необязательно)</span>}
+            </label>
+            <input type="password" value={form.token} onChange={e => set('token', e.target.value)} placeholder={form.type === 'UNREAL' ? 'MCP auth token (если нужен)' : 'API-токен или ключ...'} autoComplete="new-password" className={inputCls} />
+          </div>
+        )}
+        {form.type === 'CLAUDE_CODE_CLI' && (
+          <div className="sm:col-span-2 rounded-lg bg-amber-950/30 border border-amber-800/40 px-3 py-2.5 text-xs text-amber-300/80">
+            Использует локальный Claude CLI (<code>claude -p</code>) с вашей подпиской. Токен API не нужен.
+            Убедитесь, что <code>claude</code> доступен в PATH или укажите путь в поле Base URL ниже.
+          </div>
+        )}
         {typeHasField(form.type, 'baseUrl') && (
-          <div className={clsx(form.type === 'OPENROUTER' ? 'sm:col-span-2' : '')}>
-            <label className={labelCls}>Base URL {form.type === 'OPENROUTER' && <span className="text-slate-500">(необязательно)</span>}</label>
-            <input type="url" value={form.baseUrl} onChange={e => set('baseUrl', e.target.value)}
-              placeholder={form.type === 'YOUTRACK' ? 'https://youtrack.example.com' : form.type === 'GITLAB' ? 'https://gitlab.com' : form.type === 'OPENROUTER' ? 'https://openrouter.ai/api/v1' : 'https://api.github.com'}
-              className={inputCls} />
+          <div className={clsx((form.type === 'OPENROUTER' || form.type === 'CLAUDE_CODE_CLI') ? 'sm:col-span-2' : '')}>
+            <label className={labelCls}>
+              {form.type === 'CLAUDE_CODE_CLI' ? 'Путь к claude' : 'Base URL'}
+              {' '}<span className="text-slate-500">(необязательно)</span>
+            </label>
+            <input
+              type={form.type === 'CLAUDE_CODE_CLI' ? 'text' : 'url'}
+              value={form.baseUrl}
+              onChange={e => set('baseUrl', e.target.value)}
+              placeholder={
+                form.type === 'YOUTRACK' ? 'https://youtrack.example.com' :
+                form.type === 'GITLAB' ? 'https://gitlab.com' :
+                form.type === 'OPENROUTER' ? 'https://openrouter.ai/api/v1' :
+                form.type === 'CLAUDE_CODE_CLI' ? '/usr/local/bin/claude (по умолчанию: claude из PATH)' :
+                'https://api.github.com'
+              }
+              className={inputCls}
+            />
           </div>
         )}
         {typeHasField(form.type, 'project') && (

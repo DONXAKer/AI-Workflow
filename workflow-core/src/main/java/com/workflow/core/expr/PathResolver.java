@@ -84,8 +84,9 @@ public class PathResolver {
             .filter(o -> blockId.equals(o.getBlockId()))
             .findFirst();
         BlockOutput output = hit.orElseThrow(() -> new PathNotFoundException(
-            "no output for block '" + blockId + "' — completed blocks: "
-                + outs.stream().map(BlockOutput::getBlockId).toList()));
+            "no output for block '" + blockId + "' — outputs in DB: "
+                + outs.stream().map(BlockOutput::getBlockId).toList()
+                + " (hint: entry-point inject must cover all blocks before fromBlock)"));
         try {
             return objectMapper.readValue(output.getOutputJson(), MAP_TYPE);
         } catch (Exception e) {

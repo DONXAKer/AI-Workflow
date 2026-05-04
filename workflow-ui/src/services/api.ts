@@ -1,4 +1,4 @@
-import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry, McpServer, ValidationResult, PipelineConfigDto, BlockRegistryEntry } from '../types'
+import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry, LlmCallEntry, McpServer, ValidationResult, PipelineConfigDto, BlockRegistryEntry } from '../types'
 import { currentProjectSlug } from './projectContext'
 
 const BASE = '/api'
@@ -107,6 +107,9 @@ export const api = {
 
   getRunToolCalls: (runId: string): Promise<ToolCallEntry[]> =>
     request<ToolCallEntry[]>(`${BASE}/runs/${runId}/tool-calls`),
+
+  getRunLlmCalls: (runId: string): Promise<LlmCallEntry[]> =>
+    request<LlmCallEntry[]>(`${BASE}/runs/${runId}/llm-calls`),
 
   listRuns: (filters?: RunFilters): Promise<PaginatedResponse<PipelineRunSummary>> => {
     const params = new URLSearchParams()

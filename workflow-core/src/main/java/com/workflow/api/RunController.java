@@ -83,6 +83,9 @@ public class RunController {
     private ToolCallAuditRepository toolCallAuditRepository;
 
     @Autowired(required = false)
+    private com.workflow.llm.LlmCallRepository llmCallRepository;
+
+    @Autowired(required = false)
     private com.workflow.tools.BashApprovalGate bashApprovalGate;
 
     @Autowired(required = false)
@@ -125,11 +128,14 @@ public class RunController {
 
         String entryPointId = (String) request.get("entryPointId");
         boolean dryRun = Boolean.TRUE.equals(request.get("dryRun"));
+        boolean autoApproveAll = Boolean.TRUE.equals(request.get("autoApproveAll"));
         UUID runId = runIdStr != null ? UUID.fromString(runIdStr) : UUID.randomUUID();
 
         // Capture named run inputs (e.g. task_file, build_command) for ${input.key} interpolation.
         @SuppressWarnings("unchecked")
         Map<String, Object> namedInputs = (Map<String, Object>) request.getOrDefault("inputs", new HashMap<>());
+        // Signal PipelineRunner to add "*" to autoApprove — skips all manual approval gates.
+        if (autoApproveAll) namedInputs.put("_autoApproveAll", true);
 
         try {
             PipelineConfig config = pipelineConfigLoader.load(Paths.get(configPath));
@@ -904,6 +910,27 @@ public class RunController {
             if (c.getOutputText() != null && !c.getOutputText().isBlank()) {
                 m.put("outputText", c.getOutputText());
             }
+            return m;
+        }).toList();
+        return ResponseEntity.ok(result);
+    }
+
+    @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
+    @GetMapping("/runs/{runId}/llm-calls")
+    public ResponseEntity<?> getLlmCalls(@PathVariable UUID runId) {
+        if (llmCallRepository == null) {
+            return ResponseEntity.ok(List.of());
+        }
+        List<com.workflow.llm.LlmCall> calls = llmCallRepository.findByRunIdOrderByTimestampAsc(runId);
+        List<Map<String, Object>> result = calls.stream().map(c -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("blockId", c.getBlockId());
+            m.put("iteration", c.getIteration());
+            m.put("model", c.getModel());
+            m.put("tokensIn", c.getTokensIn());
+            m.put("tokensOut", c.getTokensOut());
+            m.put("costUsd", c.getCostUsd());
+            m.put("durationMs", c.getDurationMs());
             return m;
         }).toList();
         return ResponseEntity.ok(result);

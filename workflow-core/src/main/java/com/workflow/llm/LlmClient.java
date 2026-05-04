@@ -23,10 +23,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Service
 public class LlmClient {
@@ -63,6 +68,9 @@ public class LlmClient {
     private LlmCallRepository llmCallRepository;
 
     public String complete(String model, String system, String user, int maxTokens, double temperature) {
+        if (shouldUseCli(model)) {
+            return completeViaCli(resolveCliModel(model), system, user);
+        }
         String resolvedModel = resolveModel(model);
         WebClient client = buildOpenRouterClient();
 
@@ -212,6 +220,10 @@ public class LlmClient {
         if (request == null) throw new IllegalArgumentException("request required");
         if (executor == null) throw new IllegalArgumentException("executor required");
 
+        if (shouldUseCli(request.model())) {
+            return completeWithToolsViaCli(request);
+        }
+
         String resolvedModel = resolveModel(request.model());
         WebClient client = buildOpenRouterClient();
 
@@ -268,7 +280,7 @@ public class LlmClient {
 
             if (request.progressCallback() != null) {
                 request.progressCallback().accept(
-                    "Итерация " + iterations + " / " + request.maxIterations());
+                    "[" + resolvedModel + "] Итерация " + iterations + "/" + request.maxIterations());
             }
 
             ObjectNode body = objectMapper.createObjectNode();
@@ -460,6 +472,161 @@ public class LlmClient {
         return new ToolUseResponse(stripCodeFences(finalText.strip()),
             StopReason.MAX_ITERATIONS, history,
             iterations, totalTokensIn, totalTokensOut, totalCostUsd);
+    }
+
+    // ── Claude CLI provider ───────────────────────────────────────────────────
+
+    private static final int CLI_TIMEOUT_SEC = 600;
+    private static final int CLI_MAX_OUTPUT_BYTES = 1024 * 1024;
+
+    /** Returns true if CLAUDE_CODE_CLI integration is active AND the given model should route through it.
+     *  Explicit non-Anthropic models (e.g. google/gemini-*, deepseek/*) always go through OpenRouter.
+     *  Presets (smart, flash, reasoning) and anthropic/* or bare claude-* names go through CLI. */
+    private boolean shouldUseCli(String model) {
+        try {
+            boolean cliAvailable = integrationConfigRepository
+                .findByTypeAndIsDefaultTrue(IntegrationType.CLAUDE_CODE_CLI)
+                .isPresent();
+            if (!cliAvailable) return false;
+            if (model == null || model.isBlank()) return true;
+            // Explicit non-Anthropic model (google/, deepseek/, openai/, etc.) → OpenRouter
+            if (model.contains("/") && !model.startsWith("anthropic/")) return false;
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean isClaudeCliProvider() {
+        return shouldUseCli("smart");
+    }
+
+    private String getCliBin() {
+        try {
+            return integrationConfigRepository
+                .findByTypeAndIsDefaultTrue(IntegrationType.CLAUDE_CODE_CLI)
+                .map(IntegrationConfig::getBaseUrl)
+                .filter(s -> s != null && !s.isBlank())
+                .orElse("claude");
+        } catch (Exception e) {
+            return "claude";
+        }
+    }
+
+    private String resolveCliModel(String model) {
+        return presetResolver != null ? presetResolver.resolveCli(model) : (model != null ? model : "claude-sonnet-4-6");
+    }
+
+    private String completeViaCli(String model, String system, String user) {
+        String prompt = (system != null && !system.isBlank()) ? system + "\n\n" + user : user;
+        List<String> argv = new ArrayList<>(List.of(getCliBin(), "-p", prompt));
+        if (model != null && !model.isBlank()) { argv.add("--model"); argv.add(model); }
+
+        log.info("Calling Claude CLI: model={}", model);
+        long startedAt = System.currentTimeMillis();
+        try {
+            String stdout = runClaudeSubprocess(argv);
+            recordCliUsage("cli/" + model, (int)(System.currentTimeMillis() - startedAt));
+            return stripCodeFences(stdout.strip());
+        } catch (Exception e) {
+            log.error("Claude CLI call failed: {}", e.getMessage(), e);
+            throw new RuntimeException("Claude CLI call failed: " + e.getMessage(), e);
+        }
+    }
+
+    private ToolUseResponse completeWithToolsViaCli(ToolUseRequest request) {
+        String model = resolveCliModel(request.model());
+        String prompt = (request.systemPrompt() != null && !request.systemPrompt().isBlank())
+            ? request.systemPrompt() + "\n\n" + request.userMessage()
+            : request.userMessage();
+
+        List<String> argv = new ArrayList<>(List.of(getCliBin(), "-p", prompt));
+        if (model != null && !model.isBlank()) { argv.add("--model"); argv.add(model); }
+        argv.addAll(List.of("--allowed-tools", "Read,Write,Edit,Bash,Glob,Grep",
+                            "--permission-mode", "bypassPermissions"));
+
+        log.info("Calling Claude CLI (tool-use): model={}", model);
+        long startedAt = System.currentTimeMillis();
+        try {
+            String stdout = runClaudeSubprocess(argv);
+            recordCliUsage("cli/" + model, (int)(System.currentTimeMillis() - startedAt));
+            return new ToolUseResponse(stripCodeFences(stdout.strip()), StopReason.END_TURN,
+                List.of(), 1, 0, 0, 0.0);
+        } catch (Exception e) {
+            log.error("Claude CLI tool-use failed: {}", e.getMessage(), e);
+            throw new RuntimeException("Claude CLI tool-use failed: " + e.getMessage(), e);
+        }
+    }
+
+    private String runClaudeSubprocess(List<String> argv) throws Exception {
+        ProcessBuilder pb = new ProcessBuilder(argv);
+        pb.redirectErrorStream(false);
+        pb.redirectInput(ProcessBuilder.Redirect.from(new java.io.File("/dev/null")));
+        Process proc = pb.start();
+
+        AtomicReference<String> stdoutRef = new AtomicReference<>("");
+        AtomicReference<String> stderrRef = new AtomicReference<>("");
+        Thread outReader = drainStream(proc.getInputStream(), stdoutRef, CLI_MAX_OUTPUT_BYTES);
+        Thread errReader = drainStream(proc.getErrorStream(), stderrRef, 32 * 1024);
+
+        boolean finished = proc.waitFor(CLI_TIMEOUT_SEC, TimeUnit.SECONDS);
+        if (!finished) {
+            proc.destroyForcibly();
+            outReader.interrupt();
+            errReader.interrupt();
+            throw new RuntimeException("Claude CLI timed out after " + CLI_TIMEOUT_SEC + "s");
+        }
+        outReader.join(5_000);
+        errReader.join(5_000);
+
+        int exit = proc.exitValue();
+        if (exit != 0) {
+            String stderr = stderrRef.get();
+            String msg = stderr.isBlank() ? "" : ": " + (stderr.length() > 1000 ? stderr.substring(0, 1000) + "..." : stderr);
+            throw new RuntimeException("Claude CLI exited " + exit + msg);
+        }
+        return stdoutRef.get();
+    }
+
+    private Thread drainStream(InputStream in, AtomicReference<String> ref, int maxBytes) {
+        Thread t = new Thread(() -> {
+            try {
+                byte[] buf = new byte[8192];
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                int total = 0, n;
+                while ((n = in.read(buf)) != -1) {
+                    int take = Math.min(n, maxBytes - total);
+                    if (take <= 0) break;
+                    baos.write(buf, 0, take);
+                    total += take;
+                }
+                ref.set(baos.toString(StandardCharsets.UTF_8));
+            } catch (Exception ignored) {}
+        });
+        t.setDaemon(true);
+        t.start();
+        return t;
+    }
+
+    private void recordCliUsage(String model, int durationMs) {
+        if (llmCallRepository == null) return;
+        try {
+            LlmCall call = new LlmCall();
+            call.setTimestamp(java.time.Instant.now());
+            call.setModel(model);
+            call.setTokensIn(0);
+            call.setTokensOut(0);
+            call.setCostUsd(0.0);
+            call.setDurationMs(durationMs);
+            call.setProjectSlug(com.workflow.project.ProjectContext.get());
+            LlmCallContext.current().ifPresent(ctx -> {
+                call.setRunId(ctx.runId());
+                call.setBlockId(ctx.blockId());
+            });
+            llmCallRepository.save(call);
+        } catch (Exception e) {
+            log.debug("LlmCall persist failed (CLI): {}", e.getMessage());
+        }
     }
 
     /**

@@ -1,5 +1,5 @@
 name: skill-marketplace
-description: AI-pipeline для разработки skill_marketplace (Java 21 Spring Boot + Next.js 16)
+description: AI-pipeline для разработки skill_marketplace
 
 # =============================================================================
 # Entry Points
@@ -10,24 +10,12 @@ entry_points:
     description: "Читает задачу из .md файла в проекте → план → код → тесты → review"
     from_block: task_md
     requires_input: task_file
-    inject:
-      - block_id: youtrack_input
-        source: empty
 
   - id: from_requirement
     name: "Новая задача с нуля"
     description: "Анализ → декомпозиция → план → код → тесты"
     from_block: analysis
     requires_input: requirement
-    inject:
-      - block_id: youtrack_input
-        source: empty
-
-  - id: from_youtrack
-    name: "Задача из YouTrack"
-    description: "Загрузить задачу из YouTrack и сгенерировать код"
-    from_block: youtrack_input
-    requires_input: youtrack_issue
 
   - id: code_only
     name: "Только генерация кода"
@@ -35,19 +23,15 @@ entry_points:
     from_block: codegen
     requires_input: requirement
     inject:
-      - block_id: youtrack_input
-        source: empty
       - block_id: analysis
         source: empty
       - block_id: plan
         source: empty
 
-
 # =============================================================================
 # Integrations
 # =============================================================================
 integrations:
-  youtrack: youtrack-default
   # github: github-skill-marketplace  # раскомментировать когда репозиторий создан
 
 # =============================================================================
@@ -68,17 +52,7 @@ knowledge_base:
 pipeline:
 
   # ---------------------------------------------------------------------------
-  # 0a. YouTrack Input (entry point: from_youtrack)
-  # ---------------------------------------------------------------------------
-  - id: youtrack_input
-    block: youtrack_input
-    config:
-      issue_id: ""
-      task_mode: decompose
-    approval: true
-
-  # ---------------------------------------------------------------------------
-  # 0b. Task file input (entry point: from_task_file)
+  # 0. Task file input (entry point: from_task_file)
   # ---------------------------------------------------------------------------
   - id: task_md
     block: task_md_input
@@ -87,28 +61,19 @@ pipeline:
       file_path: "${input.task_file}"
 
   # ---------------------------------------------------------------------------
-  # 1. Analysis (fast first pass — determines complexity for clarification gate)
+  # 1. Analysis
   # ---------------------------------------------------------------------------
   - id: analysis
     block: analysis
     depends_on:
-      - youtrack_input
       - task_md
     agent:
-      model: google/gemini-2.5-pro-preview
+      model: smart
       system_prompt: |
         Всегда отвечай на русском языке.
 
         Ты senior software architect с 15+ годами опыта в enterprise-разработке и design of distributed systems.
         Проект — маркетплейс AI-навыков (skills/plugins для LLM-ассистентов).
-
-        Стек:
-        - Backend: Java 21, Spring Boot 3.5, Gradle, PostgreSQL 16 (Flyway), Redis, MinIO/S3
-        - Frontend: Next.js 16, React 19, TypeScript, Tailwind CSS
-        - Auth: JWT (24ч access token), отдельный sub=download для download tokens
-        - Модерация: async pipeline (AntiVirus → ForbiddenContent → LlmScanner → DuplicateArtifact)
-        - API: REST, пакеты: auth, catalog, moderation, install, review, compatibility, creator, takedown, admin, storage
-        - DB схемы: JSONB для манифестов навыков, PostgreSQL arrays для тегов
 
         Рабочая директория: /projects/skill_marketplace
         Миграции: api/src/main/resources/db/migration/
@@ -124,7 +89,7 @@ pipeline:
 
         Обязательно верни: affected_components, technical_approach, complexity (low/medium/high), risks.
       max_tokens: 8192
-    approval: true
+    approval_mode: auto_notify
 
   # ---------------------------------------------------------------------------
   # 2. Clarification (пропускается для низкой сложности)
@@ -133,9 +98,9 @@ pipeline:
     block: clarification
     depends_on:
       - analysis
-    condition: "$.analysis.estimated_complexity != 'low'"
+    condition: "$.analysis.needs_clarification == true"
     agent:
-      model: google/gemini-2.5-pro-preview
+      model: flash
       system_prompt: |
         Всегда отвечай на русском языке.
 
@@ -149,7 +114,7 @@ pipeline:
         - Формулируй вопросы конкретно, с вариантами ответа если возможно
         - Максимум 5 вопросов за итерацию
       max_tokens: 4096
-    approval: true
+    approval_mode: auto_notify
 
   # ---------------------------------------------------------------------------
   # 3. Plan (orchestrator: explores codebase, produces implementation plan + DoD)
@@ -161,22 +126,20 @@ pipeline:
       - analysis
       - task_md
     agent:
-      model: google/gemini-2.5-pro-preview
+      model: reasoning
       temperature: 0.1
       max_tokens: 8192
       system_prompt: |
         Всегда отвечай на русском языке.
 
-        Ты principal software architect с глубокой экспертизой в Java/Spring Boot и Next.js.
+        Ты principal software architect.
         Твоя задача — создать детальный, исполняемый план реализации.
 
         Best practices для планирования:
         - Изучи реальный код (Read/Grep/Glob) перед составлением плана — не угадывай структуру
-        - Укажи точные пути файлов для изменения/создания (не пакеты, а конкретные .java/.ts)
-        - Flyway-миграции: пронумеруй в правильном порядке, проверь последний V-номер в db/migration/
+        - Укажи точные пути файлов для изменения/создания (не пакеты, а конкретные файлы)
         - Definition of Done должен быть ВЕРИФИЦИРУЕМЫМ: тесты, компиляция, конкретные API endpoints
         - Учитывай зависимости между файлами: entity → repository → service → controller
-        - Для фронтенда: проверь существующие компоненты в web/components/ перед созданием новых
     config:
       mode: plan
       context_blocks:
@@ -186,65 +149,62 @@ pipeline:
       working_dir: /projects/skill_marketplace
       max_iterations: 12
       system_prompt_extra: |
-        Java 21 Spring Boot 3.5 + Next.js 16 monorepo.
-        Backend: api/ (Gradle, Flyway migrations in api/src/main/resources/db/migration/)
-        Frontend: web/ (Next.js, TypeScript, Tailwind)
+        Backend: api/ (Gradle Kotlin DSL, Flyway migrations in api/src/main/resources/db/migration/)
+        Frontend: web/ (TypeScript, Tailwind)
         Tests: api/src/test/java (JUnit 5, Testcontainers for integration tests)
-        OpenAPI: Springdoc annotations (@Operation, @ApiResponse, @Schema) on all controllers.
         CLAUDE.md in project root must be updated when architecture changes.
     approval: true
 
   # ---------------------------------------------------------------------------
-  # 4. Code Generation (agent_with_tools — работает с локальным кодом)
+  # 4. Git branch (создаёт feature-ветку перед кодогенерацией)
+  # ---------------------------------------------------------------------------
+  - id: git_setup
+    block: shell_exec
+    depends_on:
+      - plan
+    config:
+      working_dir: /projects/skill_marketplace
+      command: |
+        set -e
+        BRANCH="feature/${task_md.feat_id}-${task_md.slug}"
+        echo "=== Creating branch: $BRANCH ==="
+        git stash --include-untracked 2>/dev/null || true
+        git checkout main
+        git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
+        echo "=== On branch: $(git branch --show-current) ==="
+      timeout_seconds: 30
+    approval: false
+
+  # ---------------------------------------------------------------------------
+  # 5. Code Generation (agent_with_tools)
   # ---------------------------------------------------------------------------
   - id: codegen
     block: agent_with_tools
     depends_on:
-      - plan
+      - git_setup
     agent:
-      model: google/gemini-2.5-pro-preview
+      model: smart
       system_prompt: |
         Всегда отвечай на русском языке.
 
-        Ты senior full-stack разработчик с экспертизой в Java 21 / Spring Boot 3.5 и Next.js 16.
-        Генерируй production-ready код для skill_marketplace.
+        Ты senior full-stack разработчик. Генерируй production-ready код.
 
         Рабочая директория проекта: /projects/skill_marketplace
-
-        Структура проекта (рабочая директория /projects/skill_marketplace):
         - Backend: api/ (Gradle Kotlin DSL — файлы api/build.gradle.kts и api/settings.gradle.kts)
-        - Frontend: web/ (Next.js, TypeScript)
+        - Frontend: web/
         - Gradlew находится в api/: запускай через `cd api && ./gradlew <задача>`
         - Миграции: api/src/main/resources/db/migration/
         - НЕ ищи build.gradle — файл называется build.gradle.kts (Kotlin DSL)
 
-        Разрешённые Bash-команды (строго этот список, других не используй):
-        - `cd api && ./gradlew compileJava` — проверить компиляцию бэкенда
-        - `cd api && ./gradlew compileTestJava` — скомпилировать тесты
-        - `cd api && ./gradlew test` — запустить unit-тесты
-        - `cd web && npm run build` — собрать фронтенд
-        - `cd web && npm run type-check` — проверить типы
-        - `ls <путь>` — посмотреть содержимое директории
-        - `find <путь> -name "*.java"` или `find <путь> -name "*.ts"` — найти файлы
-        - `grep <паттерн> <файл>` — поиск в файлах
-        - `cat <файл>` — вывести файл (используй Read вместо cat когда возможно)
-
-        Best practices для написания кода:
+        Best practices:
         - ВСЕГДА читай соседние файлы (Read) перед написанием нового кода — соблюдай стиль и паттерны
-        - Java: используй record-классы для DTO, @Validated + @NotNull/@NotBlank для валидации
-        - Spring Security: проверяй @PreAuthorize на новых endpoints, не забывай про роли
-        - Flyway: проверь последний V-номер (ls api/src/main/resources/db/migration/), используй следующий
-        - Тесты: unit-тест на сервисный слой, интеграционный (Testcontainers) для репозитория
-        - TypeScript: строгие типы, никаких `any`; компоненты — React Server Components если нет клиентского состояния
-        - API-клиент фронтенда: используй существующие функции из web/lib/api.ts, не дублируй fetch-логику
-        - Springdoc: @Operation(summary=...) + @ApiResponse на каждый новый endpoint
-        - Не создавай новые Controller-классы без необходимости — добавляй в существующий
         - После написания кода — запусти `cd api && ./gradlew compileJava` для проверки компиляции
       max_tokens: 16384
       temperature: 0.2
       max_iterations: 10
     config:
       working_dir: /projects/skill_marketplace
+      max_iterations: 20
       allowed_tools:
         - Read
         - Write
@@ -256,16 +216,16 @@ pipeline:
         Реализуй задачу согласно плану.
 
         ## Цель
-        {plan.goal}
+        ${plan.goal}
 
         ## Файлы для изменения
-        {plan.files_to_touch}
+        ${plan.files_to_touch}
 
         ## Подход
-        {plan.approach}
+        ${plan.approach}
 
         ## Definition of Done
-        {plan.definition_of_done}
+        ${plan.definition_of_done}
 
         После реализации запусти `cd api && ./gradlew compileJava` чтобы убедиться в отсутствии ошибок компиляции.
       bash_allowlist:
@@ -277,7 +237,7 @@ pipeline:
         - "Bash(ls*)"
         - "Bash(grep *)"
         - "Bash(cat *)"
-    approval: true
+    approval_mode: auto_notify
 
   # ---------------------------------------------------------------------------
   # 5. Build & Test
@@ -289,39 +249,49 @@ pipeline:
     config:
       working_dir: /projects/skill_marketplace
       command: |
-        echo "=== API build ===" &&
-        cd /projects/skill_marketplace/api && ./gradlew compileJava compileTestJava --no-daemon -q 2>&1 | tail -20 &&
-        echo "=== API tests (unit only) ===" &&
-        ./gradlew test --no-daemon -q 2>&1 | tail -30 &&
-        echo "=== Frontend type check ===" &&
-        cd /projects/skill_marketplace/web && npm run build 2>&1 | tail -20 &&
+        set -e
+        echo "=== API compilation ==="
+        cd /projects/skill_marketplace/api
+        ./gradlew compileJava compileTestJava --no-daemon -q 2>&1 | tail -20
+        echo "=== Frontend install ==="
+        cd /projects/skill_marketplace/web
+        npm install --frozen-lockfile 2>&1 | tail -5
+        echo "=== Frontend build ==="
+        npm run build 2>&1 | tail -30
         echo "=== DONE ==="
       timeout_seconds: 600
     approval: false
+    on_failure:
+      action: loopback
+      target: codegen
+      max_iterations: 2
+      inject_context:
+        build_error: "$.build_test.stderr"
+        build_output: "$.build_test.output"
 
   # ---------------------------------------------------------------------------
-  # 6. Review (orchestrator: verifies code, tests, docs against plan's DoD)
+  # 6. Review (orchestrator: verifies code against plan's DoD)
   # ---------------------------------------------------------------------------
   - id: review
     block: orchestrator
     depends_on:
       - build_test
     agent:
-      model: google/gemini-2.5-pro-preview
+      model: reasoning
       max_tokens: 8192
       system_prompt: |
         Всегда отвечай на русском языке.
 
-        Ты senior code reviewer с экспертизой в Java/Spring Boot, Next.js и security-аудите.
+        Ты senior code reviewer.
         Твоя цель — проверить реализацию по критериям Definition of Done, не придираясь к стилю.
 
         Best practices для code review:
         - Проверяй ФАКТЫ (читай реальные файлы через Read/Grep), а не предполагай
-        - Тесты: убедись что тест реально запускается и покрывает новую логику (не просто существует файл)
-        - Security: broken access control (@PreAuthorize), SQL injection (нативные запросы без параметров)
-        - Производительность: N+1 в JPA (fetch lazy без @EntityGraph где нужен join), отсутствие индексов на FK
+        - Тесты: убедись что тест реально запускается и покрывает новую логику
+        - Security: broken access control, SQL injection в нативных запросах
+        - Производительность: N+1 в JPA, отсутствие индексов на FK
         - Не требуй Javadoc — он не используется в проекте
-        - Не блокируй на стилистических замечаниях (форматирование, именование) — только функциональные проблемы
+        - Не блокируй на стилистических замечаниях — только функциональные проблемы
         - action=retry только если проблема исправима в рамках следующей итерации codegen
         - action=escalate если проблема архитектурная или требует изменения требований
     config:
@@ -332,23 +302,20 @@ pipeline:
       working_dir: /projects/skill_marketplace
       max_iterations: 10
       system_prompt_extra: |
-        Java 21 Spring Boot 3.5 + Next.js 16 monorepo.
         Working directory: /projects/skill_marketplace
 
         IMPORTANT: This project has NO git history — do NOT use git diff or git log.
         Instead, use Read/Grep/Glob tools to check the actual files listed in the plan.
-        Use `find /projects/skill_marketplace -name "*.java" -newer /tmp/.review_start` if you need to find recently modified files.
 
         MANDATORY documentation checks:
         - OpenAPI/Springdoc annotations (@Operation, @ApiResponse, @Schema) present on all new/changed REST endpoints
         - CLAUDE.md updated if architecture or major component changed
-        - README.md updated if external API behavior changed
         DO NOT require Javadoc — it is not used in this project.
     verify:
       on_fail:
         action: loopback
         target: codegen
-        max_iterations: 2
+        max_iterations: 3
         inject_context:
           retry_instruction: "$.review.retry_instruction"
           issues: "$.review.issues"
@@ -357,7 +324,30 @@ pipeline:
     approval: false
 
   # ---------------------------------------------------------------------------
-  # 7. GitHub PR (раскомментировать когда GitHub репозиторий настроен)
+  # 7. Git commit (коммитит результат в feature-ветку)
+  # ---------------------------------------------------------------------------
+  - id: git_commit
+    block: shell_exec
+    depends_on:
+      - review
+    config:
+      working_dir: /projects/skill_marketplace
+      command: |
+        set -e
+        echo "=== Branch: $(git branch --show-current) ==="
+        git add -A
+        if git diff --cached --quiet; then
+          echo "Nothing to commit"
+        else
+          git commit -m "feat(${task_md.feat_id}): ${task_md.title}"
+          echo "=== Committed ==="
+          git log --oneline -3
+        fi
+      timeout_seconds: 30
+    approval: false
+
+  # ---------------------------------------------------------------------------
+  # 8. GitHub PR (раскомментировать когда GitHub репозиторий настроен)
   # ---------------------------------------------------------------------------
   # - id: pr
   #   block: github_pr

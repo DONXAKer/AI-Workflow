@@ -24,7 +24,8 @@ public class TimeoutConfig {
     public enum Action {
         FAIL("fail"),
         NOTIFY("notify"),
-        ESCALATE("escalate");
+        ESCALATE("escalate"),
+        APPROVE("approve");
 
         private final String value;
 

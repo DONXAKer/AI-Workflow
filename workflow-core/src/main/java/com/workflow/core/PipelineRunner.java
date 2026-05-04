@@ -112,6 +112,10 @@ public class PipelineRunner {
         if (runInputs != null && !runInputs.isEmpty()) {
             try { pipelineRun.setRunInputsJson(objectMapper.writeValueAsString(runInputs)); }
             catch (Exception e) { log.warn("Failed to serialize runInputs: {}", e.getMessage()); }
+            if (Boolean.TRUE.equals(runInputs.get("_autoApproveAll"))) {
+                pipelineRun.getAutoApprove().add("*");
+                log.info("Auto-approve-all enabled for run {}", runId);
+            }
         }
         techStackPromptEnricher.enrich(config, pipelineRun.getProjectSlug());
         captureConfigSnapshot(pipelineRun, config);
@@ -162,6 +166,10 @@ public class PipelineRunner {
         if (runInputs != null && !runInputs.isEmpty()) {
             try { pipelineRun.setRunInputsJson(objectMapper.writeValueAsString(runInputs)); }
             catch (Exception e) { log.warn("Failed to serialize runInputs: {}", e.getMessage()); }
+            if (Boolean.TRUE.equals(runInputs.get("_autoApproveAll"))) {
+                pipelineRun.getAutoApprove().add("*");
+                log.info("Auto-approve-all enabled for run {}", runId);
+            }
         }
         techStackPromptEnricher.enrich(config, pipelineRun.getProjectSlug());
         captureConfigSnapshot(pipelineRun, config);
@@ -170,20 +178,19 @@ public class PipelineRunner {
         for (BlockConfig blockConfig : sorted) {
             if (blockConfig.getId().equals(fromBlockId)) break;
             pipelineRun.getCompletedBlocks().add(blockConfig.getId());
-            // Only persist a BlockOutput when the entry point actually injects real data.
-            // Empty pre-entry blocks must NOT appear in the UI as completed.
+            // Always persist a BlockOutput for every pre-entry block, even when the injection is
+            // empty (source=empty). This ensures PathResolver can find the block in run.getOutputs()
+            // and ${block.field} interpolations resolve to "" instead of throwing PathNotFoundException.
             Map<String, Object> injected = injectedOutputs != null
                 ? injectedOutputs.getOrDefault(blockConfig.getId(), new HashMap<>())
                 : new HashMap<>();
-            if (!injected.isEmpty()) {
-                try {
-                    String outputJson = objectMapper.writeValueAsString(injected);
-                    BlockOutput blockOutput = BlockOutput.builder()
-                        .run(pipelineRun).blockId(blockConfig.getId()).outputJson(outputJson).build();
-                    pipelineRun.getOutputs().add(blockOutput);
-                } catch (Exception e) {
-                    log.warn("Failed to serialize injected output for block {}: {}", blockConfig.getId(), e.getMessage());
-                }
+            try {
+                String outputJson = objectMapper.writeValueAsString(injected);
+                BlockOutput blockOutput = BlockOutput.builder()
+                    .run(pipelineRun).blockId(blockConfig.getId()).outputJson(outputJson).build();
+                pipelineRun.getOutputs().add(blockOutput);
+            } catch (Exception e) {
+                log.warn("Failed to serialize injected output for block {}: {}", blockConfig.getId(), e.getMessage());
             }
         }
 

@@ -233,7 +233,22 @@
       "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\JetBrains\\\\IntelliJ IDEA 2026\\\\jbr\"; Push-Location W:\\\\workflow-core; try { .\\\\gradlew.bat test --tests com.workflow.config.FeaturePipelineConfigTest --tests com.workflow.core.TierResolutionTest --tests com.workflow.config.PipelineConfigValidatorTest --tests com.workflow.config.PipelineConfigValidatorAcceptanceTest --console=plain 2>&1 | Select-Object -Last 20 } finally { Pop-Location })",
       "PowerShell(Get-Content *)",
       "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\JetBrains\\\\IntelliJ IDEA 2026\\\\jbr\"; Push-Location W:\\\\workflow-core; try { .\\\\gradlew.bat test --tests com.workflow.config.FeaturePipelineConfigTest --tests com.workflow.core.TierResolutionTest --tests com.workflow.config.PipelineConfigValidatorTest --tests com.workflow.config.PipelineConfigValidatorAcceptanceTest --console=plain 2>&1 | Select-Object -Last 15 } finally { Pop-Location })",
-      "PowerShell(Test-Path *)"
+      "PowerShell(Test-Path *)",
+      "Read(//Users/home/Code/skill_marketplace/tasks/**)",
+      "Read(//Users/home/Code/skill_marketplace/docs/**)",
+      "Bash(kill %1)",
+      "Bash(/usr/libexec/java_home)",
+      "Bash(JAVA_HOME=$\\(/usr/libexec/java_home \\) ./gradlew compileJava --no-daemon)",
+      "Bash(java -version)",
+      "Bash(/usr/libexec/java_home -V)",
+      "Bash(ls /projects)",
+      "Bash(sudo ln *)",
+      "Bash(java *)",
+      "Bash(pkill -f \"workflow-core\")",
+      "Bash(pkill -f \"com.workflow\")",
+      "Bash(claude auth *)",
+      "Bash(claude setup-token *)",
+      "Bash(security find-generic-password *)"
     ]
   }
 }

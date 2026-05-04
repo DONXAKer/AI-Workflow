@@ -172,6 +172,7 @@ public class ClarificationBlock implements Block {
         Map<String, Object> refined;
         try {
             refined = objectMapper.readValue(refineResponse, new TypeReference<Map<String, Object>>() {});
+            if (refined == null) refined = new HashMap<>();
         } catch (Exception e) {
             log.error("Failed to parse refined requirement JSON: {}", e.getMessage());
             refined = new HashMap<>();

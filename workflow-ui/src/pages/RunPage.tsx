@@ -4,7 +4,7 @@ import { AlertCircle, Loader2, RotateCcw, Undo2, FileEdit, FilePlus, Sparkles, D
 import { useToast } from '../context/ToastContext'
 import { api } from '../services/api'
 import { connectToRun } from '../services/websocket'
-import { PipelineRun, BlockStatus, WsMessage, ApprovalDecision, ToolCallEntry } from '../types'
+import { PipelineRun, BlockStatus, WsMessage, ApprovalDecision, ToolCallEntry, LlmCallEntry } from '../types'
 import BlockProgressTable from '../components/BlockProgressTable'
 import ApprovalDialog from '../components/ApprovalDialog'
 import ReturnDialog from '../components/ReturnDialog'
@@ -74,6 +74,7 @@ export default function RunPage() {
   const [wsConnected, setWsConnected] = useState(false)
   const [activeTab, setActiveTab] = useState<'blocks' | 'timeline' | 'logs' | 'summary'>('blocks')
   const [toolCalls, setToolCalls] = useState<ToolCallEntry[]>([])
+  const [llmCalls, setLlmCalls] = useState<LlmCallEntry[]>([])
   const [showReturnDialog, setShowReturnDialog] = useState(false)
   const [requirementExpanded, setRequirementExpanded] = useState(false)
   const [relaunchBlock, setRelaunchBlock] = useState<string | null>(null)
@@ -135,12 +136,16 @@ export default function RunPage() {
       // Pre-entry blocks added by runFrom() with no real injection are excluded.
       const completedStatuses: BlockStatus[] = (data.completedBlocks ?? [])
         .filter(blockId => outputMap.has(blockId))
-        .map(blockId => ({
-          blockId,
-          status: 'complete' as const,
-          output: outputMap.get(blockId),
-          input: inputMap.get(blockId),
-        }))
+        .map(blockId => {
+          const output = outputMap.get(blockId)
+          const isSkipped = output?._skipped === true
+          return {
+            blockId,
+            status: (isSkipped ? 'skipped' : 'complete') as BlockStatus['status'],
+            output,
+            input: inputMap.get(blockId),
+          }
+        })
 
       // Add current block if not already in completedBlocks. The status mapping must
       // cover FAILED — without it, a failed run displayed after page refresh would show
@@ -196,15 +201,19 @@ export default function RunPage() {
     } else if (msg.type === 'BLOCK_COMPLETE') {
       const blockId = msg.blockId ?? 'unknown'
       addLog(`Блок завершён: ${blockIdLabel(blockId)} — ${msg.status ?? 'done'}`)
+      const completedAt = new Date().toISOString()
       setBlockStatuses(prev =>
         prev.map(b =>
           b.blockId === blockId
-            ? { ...b, status: msg.status === 'SKIPPED' ? 'skipped' : 'complete', output: msg.output }
+            ? { ...b, status: msg.status === 'SKIPPED' ? 'skipped' : 'complete', output: msg.output, completedAt }
             : b
         )
       )
       // Refresh tool calls immediately so iteration expand buttons appear without waiting for polling
-      if (runId) api.getRunToolCalls(runId).then(setToolCalls).catch(() => {})
+      if (runId) {
+        api.getRunToolCalls(runId).then(setToolCalls).catch(() => {})
+        api.getRunLlmCalls(runId).then(setLlmCalls).catch(() => {})
+      }
     } else if (msg.type === 'APPROVAL_REQUEST') {
       const blockId = msg.blockId ?? 'unknown'
       addLog(`Требуется одобрение: ${blockIdLabel(blockId)}`)
@@ -489,6 +498,7 @@ export default function RunPage() {
   useEffect(() => {
     if (!runId) return
     api.getRunToolCalls(runId).then(setToolCalls).catch(() => {/* ignore */})
+    api.getRunLlmCalls(runId).then(setLlmCalls).catch(() => {/* ignore */})
   }, [runId])
 
   // Poll tool calls every 5s while run is active so in-progress iterations are visible
@@ -496,6 +506,7 @@ export default function RunPage() {
     if (isHistorical || !runId) return
     const id = setInterval(() => {
       api.getRunToolCalls(runId).then(setToolCalls).catch(() => {/* ignore */})
+      api.getRunLlmCalls(runId).then(setLlmCalls).catch(() => {/* ignore */})
     }, 5000)
     return () => clearInterval(id)
   }, [isHistorical, runId])
@@ -1009,6 +1020,7 @@ export default function RunPage() {
           blockStatuses={blockStatuses}
           snapshots={blockSnapshots}
           toolCalls={toolCalls}
+          llmCalls={llmCalls}
           onReviewApproval={!isHistorical && pendingApproval ? (blockId) => {
             if (pendingApproval.blockId === blockId) setShowApprovalDialog(true)
           } : undefined}
