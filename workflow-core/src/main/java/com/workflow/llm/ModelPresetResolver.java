@@ -41,14 +41,20 @@ public class ModelPresetResolver {
     );
 
     private static final Map<String, String> DEFAULTS = Map.ofEntries(
-        // Tier presets — Anthropic models routed through Claude Code CLI.
-        // Override per-tier in application.yaml under workflow.model-presets.
-        Map.entry("smart",        "google/gemini-2.5-pro"),
-        Map.entry("flash",        "google/gemini-2.5-flash-lite"),
+        // Tier presets — primary semantic abstraction. Use these as `tier:` in
+        // block AgentConfig: smart for analytical roles (analysis, verify, plan/review),
+        // flash for executor roles (codegen, agent_with_tools impl).
+        // Defaults match the model pair that performs best for the WarCard pipeline
+        // (operator-validated, commit 836f307). Override per-tier in application.yaml
+        // under workflow.model-presets if your stack prefers different models.
+        // NOTE: Anthropic models are reserved for the CLI path (CLI_DEFAULTS) — they
+        // never appear here, so OpenRouter routing always picks an Anthropic-free model.
+        Map.entry("smart",        "z-ai/glm-4.6"),
+        Map.entry("flash",        "z-ai/glm-4.7-flash"),
         // Legacy / extended presets
         Map.entry("fast",         "google/gemini-2.5-flash-lite"),
         Map.entry("reasoning",    "google/gemini-2.5-pro"),
-        Map.entry("cheap",        "google/gemini-2.5-flash-lite"),
+        Map.entry("cheap",        "openai/gpt-4o-mini"),
         Map.entry("deepseek",     "deepseek/deepseek-chat-v3-0324"),
         Map.entry("glm",          "z-ai/glm-5.1"),
         Map.entry("gemini-pro",   "google/gemini-2.5-pro"),

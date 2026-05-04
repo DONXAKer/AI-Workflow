@@ -248,7 +248,12 @@
       "Bash(pkill -f \"com.workflow\")",
       "Bash(claude auth *)",
       "Bash(claude setup-token *)",
-      "Bash(security find-generic-password *)"
+      "Bash(security find-generic-password *)",
+      "Bash(/Users/home/Code/AI-Workflow/workflow-core/gradlew --project-dir /Users/home/Code/AI-Workflow/workflow-core compileTestJava --no-daemon -q)",
+      "Bash(/Users/home/Code/AI-Workflow/workflow-core/gradlew --project-dir /Users/home/Code/AI-Workflow/workflow-core compileJava compileTestJava --no-daemon -q)",
+      "Bash(/Users/home/Code/AI-Workflow/workflow-core/gradlew --project-dir /Users/home/Code/AI-Workflow/workflow-core test --no-daemon -q --tests '*ModelPresetResolver*' --tests '*LlmClient*' --tests '*AnalysisBlock*' --tests '*OrchestratorBlock*' --tests '*VerifyBlock*')",
+      "Bash(/Users/home/Code/AI-Workflow/workflow-core/gradlew --project-dir /Users/home/Code/AI-Workflow/workflow-core test --no-daemon -q)",
+      "Bash(/Users/home/Code/AI-Workflow/workflow-core/gradlew --project-dir /Users/home/Code/AI-Workflow/workflow-core test --no-daemon -q --rerun)"
     ]
   }
 }

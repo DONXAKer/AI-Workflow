@@ -11,6 +11,7 @@ import com.workflow.llm.tooluse.ToolDefinition;
 import com.workflow.llm.tooluse.ToolUseRequest;
 import com.workflow.llm.tooluse.ToolUseResponse;
 import com.workflow.project.Project;
+import com.workflow.project.ProjectClaudeMd;
 import com.workflow.project.ProjectContext;
 import com.workflow.project.ProjectRepository;
 import com.workflow.tools.DefaultToolExecutor;
@@ -175,6 +176,7 @@ public class AgentWithToolsBlock implements Block {
             : userTemplate;
         String userMessage = prependLoopbackFeedback(interpolate(expanded, input), input);
         userMessage = prependCodebaseTree(userMessage, workingDir);
+        userMessage = prependClaudeMd(userMessage, workingDir);
         userMessage = prependPreloadedFiles(userMessage, cfg, input, workingDir);
 
         List<String> allowedTools = asStringList(cfg, "allowed_tools");
@@ -325,6 +327,12 @@ public class AgentWithToolsBlock implements Block {
         return "## Working directory\n" + workingDir + "\n\n"
             + "## Codebase layout\n```\n" + tree + "```\n\n---\n\n"
             + userMessage;
+    }
+
+    private static String prependClaudeMd(String userMessage, Path workingDir) {
+        String claudeMd = ProjectClaudeMd.readForPrompt(workingDir);
+        if (claudeMd.isEmpty()) return userMessage;
+        return claudeMd + "\n---\n\n" + userMessage;
     }
 
     /** Hard cap on number of files we'll inline from a plan handoff. */

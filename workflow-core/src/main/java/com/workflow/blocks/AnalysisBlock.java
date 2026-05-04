@@ -7,6 +7,8 @@ import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
 import com.workflow.knowledge.KnowledgeBase;
 import com.workflow.llm.LlmClient;
+import com.workflow.project.ProjectClaudeMd;
+import com.workflow.project.ProjectRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -113,6 +115,9 @@ public class AnalysisBlock implements Block {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired(required = false)
+    private ProjectRepository projectRepository;
+
     @Override
     public String getName() {
         return "analysis";
@@ -159,6 +164,14 @@ public class AnalysisBlock implements Block {
             } catch (Exception e) {
                 log.warn("Knowledge base query failed: {}", e.getMessage());
             }
+        }
+
+        // Prepend CLAUDE.md from the target project so analysis sees the
+        // codebase's own conventions (build quirks, package layout, etc.)
+        // without the operator hardcoding them into system_prompt.
+        String claudeMd = ProjectClaudeMd.readForCurrentProject(projectRepository);
+        if (!claudeMd.isEmpty()) {
+            context = claudeMd + "\n---\n\n" + context;
         }
 
         // Determine model. Default tier is "smart" — analysis is an analytical role

@@ -51,7 +51,7 @@ pipeline:
     approval_mode: auto_notify
     depends_on: [intake]
     agent:
-      model: claude-opus-4-6
+      model: smart
       temperature: 1.0
 
   # 3. Clarifying Q&A — skipped for low-complexity work
@@ -105,7 +105,7 @@ pipeline:
     enabled: true
     depends_on: [codegen, verify_code]
     agent:
-      model: claude-sonnet-4-6
+      model: smart
       temperature: 0.3
 
   # 9. Open MR/PR

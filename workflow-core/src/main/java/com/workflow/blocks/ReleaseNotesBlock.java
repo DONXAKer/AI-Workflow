@@ -65,7 +65,7 @@ public class ReleaseNotesBlock implements Block {
         String changes = extract(input, new String[]{"code_generation", "codegen"}, "commit_message");
         String version = extract(input, new String[]{"build"}, "artifact_version");
 
-        String model = "claude-sonnet-4-6";
+        String model = "smart";
         int maxTokens = 4096;
         double temperature = 0.7;
         if (config.getAgent() != null) {

@@ -7,6 +7,8 @@ import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
 import com.workflow.knowledge.KnowledgeBase;
 import com.workflow.llm.LlmClient;
+import com.workflow.project.ProjectClaudeMd;
+import com.workflow.project.ProjectRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -83,6 +85,9 @@ public class CodeGenerationBlock implements Block {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired(required = false)
+    private ProjectRepository projectRepository;
+
     @Override
     public String getName() {
         return "code_generation";
@@ -154,7 +159,7 @@ public class CodeGenerationBlock implements Block {
         }
 
         // Determine model
-        String model = "claude-sonnet-4-6";
+        String model = "smart";
         int maxTokens = 8192;
         double temperature = 1.0;
         if (config.getAgent() != null) {
@@ -172,6 +177,9 @@ public class CodeGenerationBlock implements Block {
             otherTasksBuilder.append("- ").append(ts).append("\n");
         }
         String otherTasksText = otherTasksBuilder.toString().trim();
+
+        // Read CLAUDE.md from the target project once — same conventions apply to every task.
+        String claudeMdPreamble = ProjectClaudeMd.readForCurrentProject(projectRepository);
 
         // Merged output maps: file_path -> change (last writer wins)
         Map<String, Map<String, Object>> mergedChanges = new LinkedHashMap<>();
@@ -198,10 +206,13 @@ public class CodeGenerationBlock implements Block {
                 }
             }
 
+            String contextForTask = claudeMdPreamble.isEmpty()
+                ? context
+                : claudeMdPreamble + "\n---\n\n" + context;
             String userMessage = USER_TEMPLATE
                 .replace("{task_summary}", taskSummary)
                 .replace("{task_description}", taskDescription != null ? taskDescription : "")
-                .replace("{context}", context)
+                .replace("{context}", contextForTask)
                 .replace("{other_tasks}", otherTasksText.isBlank() ? "(нет других задач)" : otherTasksText)
                 .replace("{approved_approach}", approvedApproach.isBlank() ? "(не указан)" : approvedApproach)
                 + loopbackSection;

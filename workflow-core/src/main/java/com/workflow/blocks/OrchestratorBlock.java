@@ -93,7 +93,7 @@ public class OrchestratorBlock implements Block {
     private static final int DEFAULT_MAX_ITER_REVIEW = 8;
     private static final double DEFAULT_BUDGET_USD   = 3.0;
 
-    @Value("${workflow.orchestrator.default-model:anthropic/claude-sonnet-4-6}")
+    @Value("${workflow.orchestrator.default-model:smart}")
     private String defaultModel;
 
     private static final List<String> PLAN_TOOLS   = List.of("Read", "Grep", "Glob");

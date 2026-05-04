@@ -149,7 +149,7 @@ public class RunReturnService {
             .replace("{comment}", comment != null ? comment : "");
 
         try {
-            String response = llmClient.complete("claude-sonnet-4-6", SYSTEM_PROMPT, userMessage, 2048, 0.3);
+            String response = llmClient.complete("smart", SYSTEM_PROMPT, userMessage, 2048, 0.3);
             Map<String, Object> parsed = objectMapper.readValue(
                 response, new TypeReference<Map<String, Object>>() {});
             parsed.putIfAbsent("issues", new ArrayList<>());

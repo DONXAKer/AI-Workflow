@@ -129,7 +129,7 @@ public class YouTrackTaskCreationBlock implements Block {
         }
 
         // Determine model
-        String model = "claude-sonnet-4-6";
+        String model = "smart";
         int maxTokens = 8192;
         double temperature = 1.0;
         if (config.getAgent() != null) {

@@ -66,7 +66,7 @@ public class BusinessIntakeBlock implements Block {
         }
         String attachments = stringOr(cfg.get("attachments"), "(none)");
 
-        String model = "claude-sonnet-4-6";
+        String model = "smart";
         int maxTokens = 4096;
         double temperature = 0.7;
         if (config.getAgent() != null) {

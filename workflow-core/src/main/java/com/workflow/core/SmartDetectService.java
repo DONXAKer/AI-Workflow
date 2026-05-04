@@ -52,7 +52,7 @@ public class SmartDetectService {
     @Autowired private PipelineConfigLoader pipelineConfigLoader;
     @Autowired private ObjectMapper objectMapper;
 
-    @Value("${workflow.smart-detect.model:google/gemini-flash-1.5}")
+    @Value("${workflow.smart-detect.model:google/gemini-2.0-flash-001}")
     private String detectModel;
 
     @Value("${workflow.smart-detect.confidence-threshold:0.7}")

@@ -93,7 +93,7 @@ public class VerifyBlock implements Block {
 
         LLMCheckConfig llmCheck = verifyConfig.getLlmCheck();
         if (llmCheck != null && llmCheck.isEnabled()) {
-            String model = llmCheck.getModel() != null ? llmCheck.getModel() : "claude-sonnet-4-6";
+            String model = llmCheck.getModel() != null ? llmCheck.getModel() : "smart";
             if (config.getAgent() != null && config.getAgent().getModel() != null) {
                 model = config.getAgent().getModel();
             }

@@ -19,9 +19,11 @@ workflow:
   config-dir: ./config
   state-dir: ./.workflow/state
   orchestrator:
-    default-model: anthropic/claude-sonnet-4-6
+    # Tier name — ModelPresetResolver picks the concrete model per provider:
+    # OpenRouter route → z-ai/glm-4.6, CLI route → claude-sonnet-4-6.
+    default-model: smart
   smart-detect:
-    model: google/gemini-flash-1.5
+    model: google/gemini-2.0-flash-001
     confidence-threshold: 0.7
   encryption:
     # 32 bytes (AES-256), Base64-encoded. Override via WORKFLOW_ENCRYPTION_KEY in prod.

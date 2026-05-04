@@ -8,15 +8,16 @@ services:
       - workflow-state:/app/.workflow
       - ${PROJECTS_ROOT}:/projects:rw
       - gradle-cache:/root/.gradle
-      - ${HOME}/.local/share/claude:/root/.local/share/claude:ro
-      - ${HOME}/.claude:/root/.claude:ro
-      - ${HOME}/.claude.json:/root/.claude.json:rw
+      - ${HOME}/.local/share/claude:/home/claude/.local/share/claude:ro
+      - ${HOME}/.claude:/home/claude/.claude:ro
+      - ${HOME}/.claude.json:/home/claude/.claude.json:rw
     environment:
       WORKFLOW_MODE: gui
       BROWSE_ROOT_PATH: /projects
       WORKFLOW_BOOTSTRAP_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       ANTHROPIC_API_KEY: ${CLAUDE_OAUTH_TOKEN}
+      CLAUDE_BIN: claude-safe
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       YOUTRACK_URL: ${YOUTRACK_URL}
       YOUTRACK_TOKEN: ${YOUTRACK_TOKEN}

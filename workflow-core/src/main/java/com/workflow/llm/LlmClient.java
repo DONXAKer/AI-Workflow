@@ -129,8 +129,20 @@ public class LlmClient {
 
     private String resolveModel(String model) {
         String resolved = presetResolver != null ? presetResolver.resolve(model) : model;
-        if (resolved != null && !resolved.contains("/")) {
-            resolved = "anthropic/" + resolved;
+        if (resolved == null) return null;
+        // OpenRouter route reached with a bare Claude-style name (e.g. "claude-sonnet-4-6") —
+        // that is a CLI identifier that ended up here because CLI is not active. Anthropic
+        // models are reserved for the CLI path; fall back to the smart tier so a missing CLI
+        // integration does not silently bill the OpenRouter Anthropic endpoint.
+        if (!resolved.contains("/")) {
+            String n = resolved.toLowerCase();
+            if (n.startsWith("claude") || n.equals("sonnet") || n.equals("opus") || n.equals("haiku")) {
+                String fallback = presetResolver != null ? presetResolver.resolve("smart") : "z-ai/glm-4.6";
+                log.warn("OpenRouter route received bare CLI name '{}' — Anthropic is CLI-only, "
+                    + "falling back to smart tier '{}'", resolved, fallback);
+                return fallback;
+            }
+            // Unknown bare identifier — pass through; OpenRouter will reject it loudly.
         }
         return resolved;
     }
@@ -529,6 +541,8 @@ public class LlmClient {
     }
 
     private String getCliBin() {
+        String envBin = System.getenv("CLAUDE_BIN");
+        if (envBin != null && !envBin.isBlank()) return envBin;
         try {
             return integrationConfigRepository
                 .findByTypeAndIsDefaultTrue(IntegrationType.CLAUDE_CODE_CLI)
@@ -545,9 +559,9 @@ public class LlmClient {
     }
 
     private String completeViaCli(String model, String system, String user) {
-        String prompt = (system != null && !system.isBlank()) ? system + "\n\n" + user : user;
-        List<String> argv = new ArrayList<>(List.of(getCliBin(), "-p", prompt));
+        List<String> argv = new ArrayList<>(List.of(getCliBin(), "-p", user != null ? user : ""));
         if (model != null && !model.isBlank()) { argv.add("--model"); argv.add(model); }
+        if (system != null && !system.isBlank()) { argv.add("--system-prompt"); argv.add(system); }
 
         log.info("Calling Claude CLI: model={}", model);
         long startedAt = System.currentTimeMillis();

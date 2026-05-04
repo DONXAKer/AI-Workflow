@@ -62,7 +62,7 @@ public class AiReviewBlock implements Block {
         String requirement = (String) input.getOrDefault("requirement", "");
         String changes = resolveChanges(input);
 
-        String model = "claude-sonnet-4-6";
+        String model = "smart";
         int maxTokens = 8192;
         double temperature = 0.3;
         if (config.getAgent() != null) {

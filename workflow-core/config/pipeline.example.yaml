@@ -91,7 +91,7 @@ pipeline:
     depends_on:
       - youtrack_input
     agent:
-      model: claude-sonnet-4-6
+      model: smart
       maxTokens: 8192
       temperature: 1.0
 
@@ -116,7 +116,7 @@ pipeline:
       - tasks
       - analysis
     agent:
-      model: claude-sonnet-4-6
+      model: smart
       maxTokens: 8192
       temperature: 1.0
 

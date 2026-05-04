@@ -21,7 +21,7 @@ Copy `.env.example` to `.env` and fill in API keys (OpenRouter, YouTrack, GitHub
 ```bash
 cd workflow-core
 gradle bootRun       # starts on port 8020
-gradle build         # 118 tests across 21 classes, including 3 live-OpenRouter ITs
+gradle build         # unit + integration tests; *IT classes are live-OpenRouter
 gradle test --tests 'com.workflow.SomeTest'  # run a single test class
 gradle test --tests '*IT'                     # just integration tests (need OPENROUTER_API_KEY)
 ```
@@ -41,7 +41,7 @@ Integration tests (`*IT`) are gated by `@EnabledIfEnvironmentVariable(OPENROUTER
 
 H2 console available at `http://localhost:8020/h2-console` (JDBC URL: `jdbc:h2:file:./workflow-db`). Database uses `ddl-auto: update` — schema auto-migrates from entities.
 
-Spring Boot 3.4.4 / Java 21. Key packages: `api/` (REST + WebSocket), `blocks/`, `core/` (PipelineRunner, JPA entities), `core/expr/` (PathResolver + StringInterpolator for `${block.field}` templates), `integrations/`, `knowledge/`, `llm/` (OpenRouter client + tool-use loop), `llm/tooluse/` (ToolDefinition/Call/Result + request/response records), `tools/` (native Tool impls + PathScope + Deny/Allow lists + DefaultToolExecutor + ToolCallAudit), `config/`, `skills/` (legacy AgentProfile-bound layer — distinct from `tools/`), `model/` (IntegrationConfig + AgentProfile JPA entities), `cli/` (Spring Shell commands), `project/` (Project entity with `workingDir` as PathScope root).
+Spring Boot 3.4.4 / Java 21. Key packages: `api/` (REST + WebSocket), `blocks/`, `core/` (PipelineRunner, JPA entities), `core/expr/` (PathResolver + StringInterpolator for `${block.field}` templates), `integrations/`, `knowledge/`, `llm/` (OpenRouter client + tool-use loop + `ModelPresetResolver`), `llm/tooluse/` (ToolDefinition/Call/Result + request/response records), `tools/` (native Tool impls + PathScope + Deny/Allow lists + DefaultToolExecutor + ToolCallAudit), `config/` (POJOs + `PipelineConfigValidator`), `skills/` (legacy AgentProfile-bound layer — distinct from `tools/`), `model/` (IntegrationConfig + AgentProfile JPA entities), `cli/` (Spring Shell commands), `project/` (Project entity with `workingDir` as PathScope root + `ProjectClaudeMd` reader), `mcp/` (MCP server registry), `notifications/` (Email/Slack/Telegram/UI channels via `NotificationChannelRegistry`), `observability/` (`PipelineMetrics` → Prometheus), `security/`. Repo root also has `tools/wf-cli/` (`wf.sh`/`wf.cmd`/Dockerfile — CLI wrapper for the backend).
 
 Dual approval gate modes: `WebSocketApprovalGate` (real-time via `/ws`) or `CliApprovalGate` — controlled by `workflow.mode: cli|gui` in `application.yaml`.
 
@@ -57,7 +57,7 @@ Dual approval gate modes: `WebSocketApprovalGate` (real-time via `/ws`) or `CliA
 - `core/ApprovalGate.java` — interface with WebSocket and CLI implementations
 - `config/` — POJO config classes deserialized from pipeline YAML
 
-**Blocks (29 total).** Legacy blocks (the original 13):
+**Blocks (31 total).** Legacy blocks (the original 13):
 - `analysis` — analyses requirements, returns affected_components, technical_approach, complexity
 - `clarification` — interactive Q&A to refine requirements (conditional: skipped if complexity=low)
 - `code_generation` — generates file changes per task, branch name, commit message
@@ -75,6 +75,44 @@ Phase 1 additions (see `docs/phase1-plan.md`):
 - `shell_exec` — runs a shell command as a pipeline step, no LLM (M3.4)
 - `claude_code_shell` — shells out to local `claude -p` (Layer 3 / MCP / Max-subscription flows) (M3.5)
 - `http_get` — HTTP GET with optional JSON parse (M5)
+
+Smart-tier additions (commit `f2e9882`):
+- `agent_verify` — LLM-driven verification against the analysis acceptance checklist
+- `orchestrator` — plan/review/handoff coordinator over downstream impl blocks
+
+### LLM routing & model presets
+
+LLM calls take one of two routes — OpenRouter (default) or the Claude Code CLI when `CLAUDE_CODE_CLI` integration is the project's default provider (memory `project_llm_routing.md`). Block configs reference **named tiers**, not raw model IDs, so swapping a model is a single-place change. `ModelPresetResolver` keeps two maps so each route picks a route-appropriate model:
+
+**OpenRouter route — `DEFAULTS` (no Anthropic models, by design):**
+
+| Tier | Default | Role |
+|---|---|---|
+| `smart` | `z-ai/glm-4.6` | analytical (analysis, verify, plan/review) |
+| `flash` | `z-ai/glm-4.7-flash` | executor (codegen, agent_with_tools impl) |
+| `fast` | `google/gemini-2.5-flash-lite` | quick / cheap |
+| `reasoning` | `google/gemini-2.5-pro` | hard cases |
+| `cheap` | `openai/gpt-4o-mini` | bulk / non-critical |
+
+`smart`/`flash` are operator-validated for the WarCard pipeline (commit `836f307`). Anthropic models are **reserved for the CLI route** — they never appear in `DEFAULTS`. Extended presets (`deepseek`, `glm`, `gemini-pro`, `gemini-flash`, `gpt4o`, `mistral`, `qwen`) also live in this map.
+
+**CLI route — `CLI_DEFAULTS` (Anthropic-native):** `smart=claude-sonnet-4-6`, `flash=claude-haiku-4-5`, `reasoning=claude-opus-4-7`, `fast=claude-haiku-4-5`, `cheap=claude-haiku-4-5`. `resolveCli()` strips vendor prefixes from `anthropic/claude-*` and falls back to `claude-sonnet-4-6` for non-Anthropic models (commit `91bb66c`) — the CLI rejects unknown names.
+
+**Anthropic-only-under-CLI guard:** if a bare `claude-*` name reaches the OpenRouter route (because CLI is not active), `LlmClient.resolveModel` falls back to the `smart` tier with a warn log instead of silently calling `anthropic/claude-*` through OpenRouter. Practical consequence: blocks should pass tiers (`smart`, `flash`, `reasoning`, ...) — never bare `claude-sonnet-4-6` — so the same YAML works under both routes.
+
+Override per-tier via `application.yaml` (applies to OpenRouter route only):
+```yaml
+workflow:
+  model-presets:
+    smart: deepseek/deepseek-chat-v3-0324
+```
+Strings already containing `/` (e.g. `google/gemini-2.5-pro`) are passed through unchanged.
+
+In Docker, `CLAUDE_BIN: claude-safe` makes `LlmClient.completeViaCli` invoke a `su-exec`-wrapped CLI under a non-root `claude` user (Dockerfile + docker-compose mount `~/.claude` under `/home/claude/`).
+
+### Project conventions auto-injected
+
+`AnalysisBlock`, `CodeGenerationBlock` and `AgentWithToolsBlock` automatically read `<workingDir>/CLAUDE.md` from the **target** project (via `ProjectClaudeMd`) and prepend it to the user message. Any operator-facing conventions (build quirks, package layout, "do not touch" lists) that belong in the target repo's CLAUDE.md need not be duplicated into per-block `system_prompt` — putting them in the project CLAUDE.md is enough. Hard cap 16K chars per file.
 
 ### Tool-use (Phase 1)
 
@@ -201,10 +239,14 @@ Run state is persisted in a Docker volume (`workflow-state`).
 ## Wiki
 При любом упоминании изменений в этом проекте — обновлять /Users/home/Wiki/projects/AI-Workflow.md
 
-## Phase 1 (branch `feat/warcard-pipeline-phase1`)
+## Status
 
-Design doc: `docs/phase1-plan.md` (locked grill session 2026-04-20).
-Operator runbook for the bundled `config/feature.yaml`: `docs/running-feature-pipeline.md`.
-GUI quickstart: `docs/gui-quickstart.md`.
+All earlier phases are merged into `main`:
+- **Phase 1** (`feat/warcard-pipeline-phase1`) — tool-use core (M1) → `http_get` self-feature (M5). Design: `docs/phase1-plan.md` (grill session 2026-04-20).
+- **Pipeline config validator** (`cb2b0c7`) — Level 1/2/3 checks via `PipelineConfigValidator`; pre-run gate on `POST /api/runs`, on-save gate in `PipelineConfigWriter`, explicit endpoint `POST /api/pipelines/validate`.
+- **Pipeline editor UI** (Phase 2, `0cd2ff3` + `e2e26db`) — visual editor in `workflow-ui`.
+- **Smart-tier checklist + agent_verify** (`f2e9882`) — `acceptance_checklist` from `analysis` is the single source of truth for "done"; `agent_verify` block enforces it.
 
-Milestones M1 (tool-use core) → M5 (http_get self-feature) all merged on the branch. Acceptance tests (real-repo run producing a git commit) are user-driven — the pipeline is ready but the operator picks the target repo and task. Tasks live in `tasks/active/` + `tasks/done/` at repo root, `<FEAT-ID>_<slug>.md` convention.
+Operator runbook for `config/feature.yaml`: `docs/running-feature-pipeline.md`. Other ops docs in `docs/`: `gui-quickstart.md`, `provider-switching.md`, `release-checklist.md`, `task-template.md`, `workflow.md`. Per-task plans live under `docs/plans/`.
+
+Acceptance tests (real-repo run producing a git commit) are user-driven — the pipeline is ready but the operator picks the target repo and task. Tasks live in `tasks/active/` + `tasks/done/` at repo root, `<FEAT-ID>_<slug>.md` convention.

@@ -60,7 +60,7 @@ public class TestGenerationBlock implements Block {
         String analysis = extract(input, new String[]{"analysis"}, "technical_approach");
         String tasks = extract(input, new String[]{"tasks", "youtrack_tasks"}, "tasks");
 
-        String model = "claude-sonnet-4-6";
+        String model = "smart";
         int maxTokens = 8192;
         double temperature = 0.7;
         if (config.getAgent() != null) {
