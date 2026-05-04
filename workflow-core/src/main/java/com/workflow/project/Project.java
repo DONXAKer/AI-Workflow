@@ -1,5 +1,6 @@
 package com.workflow.project;
 
+import com.workflow.llm.LlmProvider;
 import jakarta.persistence.*;
 
 import java.time.Instant;
@@ -63,6 +64,15 @@ public class Project {
     @Column(name = "tech_stack_json", columnDefinition = "TEXT")
     private String techStackJson;
 
+    /**
+     * Default LLM provider used when a run is started without an explicit
+     * {@code inputs.provider}. Pipeline blocks gated with
+     * {@code condition: "$.input.provider == 'CLAUDE_CODE_CLI'"} switch on this.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "default_provider")
+    private LlmProvider defaultProvider;
+
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -94,6 +104,12 @@ public class Project {
     public void setOrchestratorSystemPromptExtra(String orchestratorSystemPromptExtra) { this.orchestratorSystemPromptExtra = orchestratorSystemPromptExtra; }
     public String getTechStackJson() { return techStackJson; }
     public void setTechStackJson(String techStackJson) { this.techStackJson = techStackJson; }
+    public LlmProvider getDefaultProvider() { return defaultProvider; }
+    public void setDefaultProvider(LlmProvider defaultProvider) { this.defaultProvider = defaultProvider; }
+    /** Returns the configured provider or {@link LlmProvider#OPENROUTER} when unset. */
+    public LlmProvider getEffectiveDefaultProvider() {
+        return defaultProvider == null ? LlmProvider.OPENROUTER : defaultProvider;
+    }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 }

@@ -80,18 +80,36 @@ public class ModelPresetResolver {
      * Resolves a preset or model name to a native Claude model identifier for use with the
      * Claude CLI ({@code claude -p --model ...}). OpenRouter vendor-prefixed names like
      * {@code anthropic/claude-sonnet-4-6} are stripped to {@code claude-sonnet-4-6}.
+     *
+     * <p>When a run pins provider=CLAUDE_CODE_CLI, blocks with a YAML-pinned non-Anthropic
+     * model (e.g. {@code z-ai/glm-4.6}) would otherwise be sent to the CLI as a literal
+     * unknown name — which the CLI rejects. To make the project-level provider switcher
+     * actually usable, we fall back to {@link #CLI_DEFAULTS} {@code smart} in that case
+     * (sonnet) with a warning, so analysis/orchestrator blocks keep working when switched
+     * to CLI without per-block YAML edits.
      */
     public String resolveCli(String presetOrModel) {
         if (presetOrModel == null || presetOrModel.isBlank()) return CLI_DEFAULTS.get("smart");
 
-        if (presetOrModel.contains("/"))
-            return presetOrModel.substring(presetOrModel.lastIndexOf('/') + 1);
+        if (presetOrModel.contains("/")) {
+            String stripped = presetOrModel.substring(presetOrModel.lastIndexOf('/') + 1);
+            if (looksLikeClaudeModel(stripped)) return stripped;
+            log.warn("Non-Anthropic model '{}' requested under CLI routing — falling back to '{}'",
+                presetOrModel, CLI_DEFAULTS.get("smart"));
+            return CLI_DEFAULTS.get("smart");
+        }
 
         String lower = presetOrModel.toLowerCase();
         if (CLI_DEFAULTS.containsKey(lower)) return CLI_DEFAULTS.get(lower);
 
         log.debug("Unknown CLI preset '{}' — passing through as raw model name", presetOrModel);
         return presetOrModel;
+    }
+
+    private static boolean looksLikeClaudeModel(String name) {
+        if (name == null) return false;
+        String n = name.toLowerCase();
+        return n.startsWith("claude") || n.equals("sonnet") || n.equals("opus") || n.equals("haiku");
     }
 
     public Map<String, String> allPresets() {

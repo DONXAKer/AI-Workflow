@@ -9,6 +9,7 @@ import BlockProgressTable from '../components/BlockProgressTable'
 import ApprovalDialog from '../components/ApprovalDialog'
 import ReturnDialog from '../components/ReturnDialog'
 import LoopbackTimeline from '../components/LoopbackTimeline'
+import AllIterationsTable from '../components/AllIterationsTable'
 import LogPanel from '../components/LogPanel'
 import { parseConfigSnapshot } from '../utils/configSnapshot'
 import { blockIdLabel } from '../utils/blockLabels'
@@ -72,7 +73,7 @@ export default function RunPage() {
   const [showApprovalDialog, setShowApprovalDialog] = useState(false)
   const [logs, setLogs] = useState<string[]>([])
   const [wsConnected, setWsConnected] = useState(false)
-  const [activeTab, setActiveTab] = useState<'blocks' | 'timeline' | 'logs' | 'summary'>('blocks')
+  const [activeTab, setActiveTab] = useState<'blocks' | 'timeline' | 'iterations' | 'logs' | 'summary'>('blocks')
   const [toolCalls, setToolCalls] = useState<ToolCallEntry[]>([])
   const [llmCalls, setLlmCalls] = useState<LlmCallEntry[]>([])
   const [showReturnDialog, setShowReturnDialog] = useState(false)
@@ -850,6 +851,24 @@ export default function RunPage() {
         >
           История итераций
         </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('iterations')}
+          aria-selected={activeTab === 'iterations'}
+          role="tab"
+          className={clsx(
+            'px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-slate-950',
+            activeTab === 'iterations'
+              ? 'border-blue-500 text-blue-400'
+              : 'border-transparent text-slate-500 hover:text-slate-300'
+          )}
+        >
+          Итерации (таблица)
+          {llmCalls.length > 0 && (
+            <span className="ml-2 text-[10px] text-slate-500 font-mono">{llmCalls.length}</span>
+          )}
+        </button>
         {/* Event Log tab only available for active runs */}
         {!isHistorical && (
           <button
@@ -1029,6 +1048,9 @@ export default function RunPage() {
       </div>
       <div className={activeTab === 'timeline' ? undefined : 'hidden'}>
         <LoopbackTimeline loopHistoryJson={run?.loopHistoryJson} />
+      </div>
+      <div className={activeTab === 'iterations' ? undefined : 'hidden'}>
+        <AllIterationsTable llmCalls={llmCalls} toolCalls={toolCalls} />
       </div>
       {!isHistorical && (
         <div className={activeTab === 'logs' ? undefined : 'hidden'}>

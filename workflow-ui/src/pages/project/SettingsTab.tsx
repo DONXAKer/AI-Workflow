@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { Save, Loader2, AlertCircle, Trash2, Plug, FileCode, FolderOpen, Brain } from 'lucide-react'
+import { Save, Loader2, AlertCircle, Trash2, Plug, FileCode, FolderOpen, Brain, Globe, Terminal } from 'lucide-react'
 import { api } from '../../services/api'
-import { ProjectInfo, IntegrationConfig } from '../../types'
+import { ProjectInfo, IntegrationConfig, LlmProvider } from '../../types'
 import PathInput from '../../components/PathInput'
 import { PipelineEditor } from '../../components/PipelineEditor'
 
@@ -28,6 +28,7 @@ export default function SettingsTab() {
   const [orchEnabled, setOrchEnabled] = useState(true)
   const [orchModel, setOrchModel] = useState('')
   const [orchExtra, setOrchExtra] = useState('')
+  const [defaultProvider, setDefaultProvider] = useState<LlmProvider>('OPENROUTER')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
@@ -51,6 +52,7 @@ export default function SettingsTab() {
         setOrchEnabled(found.orchestratorEnabled ?? true)
         setOrchModel(found.orchestratorModel ?? '')
         setOrchExtra(found.orchestratorSystemPromptExtra ?? '')
+        setDefaultProvider(found.defaultProvider ?? 'OPENROUTER')
       }
       setIntegrations(integs)
     } catch (e) {
@@ -76,6 +78,7 @@ export default function SettingsTab() {
         orchestratorEnabled: orchEnabled,
         orchestratorModel: orchModel.trim() || null,
         orchestratorSystemPromptExtra: orchExtra.trim() || null,
+        defaultProvider,
       })
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
@@ -200,6 +203,43 @@ export default function SettingsTab() {
           />
           <p className="text-xs text-slate-600 mt-1">
             Папка с YAML-файлами пайплайнов. Используется вкладкой «Запуск».
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">
+            LLM-провайдер по умолчанию
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            {([
+              ['OPENROUTER', 'OpenRouter', 'Платный API, оплачивается по токенам', Globe, 'emerald'],
+              ['CLAUDE_CODE_CLI', 'Claude Code CLI', 'Локальный claude -p, ваша Max-подписка', Terminal, 'orange'],
+            ] as const).map(([value, title, hint, Icon, accent]) => {
+              const active = defaultProvider === value
+              const accentBorder = accent === 'emerald'
+                ? (active ? 'border-emerald-600 bg-emerald-950/40' : 'border-slate-700 hover:border-emerald-800/60')
+                : (active ? 'border-orange-600 bg-orange-950/40' : 'border-slate-700 hover:border-orange-800/60')
+              const iconColor = accent === 'emerald' ? 'text-emerald-400' : 'text-orange-400'
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setDefaultProvider(value)}
+                  disabled={saving}
+                  className={`text-left rounded-lg border px-3 py-2.5 transition-colors ${accentBorder}`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Icon className={`w-4 h-4 ${iconColor}`} />
+                    <span className="text-sm font-medium text-slate-100">{title}</span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">{hint}</p>
+                </button>
+              )
+            })}
+          </div>
+          <p className="text-xs text-slate-600 mt-1">
+            Используется когда run стартует без явного <code className="font-mono bg-slate-800 px-1 rounded">inputs.provider</code>.
+            Pipeline блоки могут гейтиться на <code className="font-mono bg-slate-800 px-1 rounded">$.input.provider == 'CLAUDE_CODE_CLI'</code>.
           </p>
         </div>
 

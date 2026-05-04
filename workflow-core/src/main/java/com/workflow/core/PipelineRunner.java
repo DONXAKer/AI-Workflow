@@ -461,10 +461,46 @@ public class PipelineRunner {
 
     /**
      * Evaluates a simple condition expression: $.block_id.field [| length] OPERATOR value
+     * Multiple clauses can be AND-joined with {@code &&} (no precedence, no {@code ||}, no parens).
+     * The reserved {@code input} namespace resolves against {@code PipelineRun.runInputsJson}
+     * (set at run start), so {@code $.input.provider == 'CLAUDE_CODE_CLI'} works for routing
+     * decisions taken before any block has run.
      * Supported operators: ==, !=, >, <, >=, <=
      */
+    /**
+     * Reads {@code provider} from the run's named inputs and converts it to the
+     * {@link com.workflow.llm.LlmProvider} enum. Null when the value is missing or
+     * unparseable — in that case {@link com.workflow.llm.LlmClient} falls back to
+     * its existing model-name-based routing.
+     */
     @SuppressWarnings("unchecked")
+    private com.workflow.llm.LlmProvider resolveRunProvider(PipelineRun run) {
+        String inputsJson = run.getRunInputsJson();
+        if (inputsJson == null || inputsJson.isBlank()) return null;
+        try {
+            Map<String, Object> inputs = objectMapper.readValue(
+                inputsJson, new TypeReference<Map<String, Object>>() {});
+            Object raw = inputs.get("provider");
+            if (raw == null) return null;
+            return com.workflow.llm.LlmProvider.valueOf(raw.toString().trim().toUpperCase());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private boolean evaluateCondition(String expr, PipelineRun run) {
+        if (expr == null || expr.isBlank()) return true;
+        if (expr.contains("&&")) {
+            for (String clause : expr.split("&&")) {
+                if (!evaluateClause(clause.trim(), run)) return false;
+            }
+            return true;
+        }
+        return evaluateClause(expr.trim(), run);
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean evaluateClause(String expr, PipelineRun run) {
         if (expr == null || expr.isBlank()) return true;
         try {
             // Pattern: $.block_id.field [| length] OP value
@@ -482,13 +518,22 @@ public class PipelineRunner {
             String op = m.group(4);
             String rawValue = m.group(5).trim().replaceAll("^['\"]|['\"]$", "");
 
-            Optional<BlockOutput> outputOpt = run.getOutputs().stream()
-                .filter(o -> o.getBlockId().equals(blockId)).findFirst();
-            if (outputOpt.isEmpty()) return true;
+            Object fieldVal;
+            if ("input".equals(blockId)) {
+                String inputsJson = run.getRunInputsJson();
+                if (inputsJson == null || inputsJson.isBlank()) return false;
+                Map<String, Object> inputs = objectMapper.readValue(
+                    inputsJson, new TypeReference<Map<String, Object>>() {});
+                fieldVal = inputs.get(field);
+            } else {
+                Optional<BlockOutput> outputOpt = run.getOutputs().stream()
+                    .filter(o -> o.getBlockId().equals(blockId)).findFirst();
+                if (outputOpt.isEmpty()) return true;
 
-            Map<String, Object> blockOutput = objectMapper.readValue(
-                outputOpt.get().getOutputJson(), new TypeReference<Map<String, Object>>() {});
-            Object fieldVal = blockOutput.get(field);
+                Map<String, Object> blockOutput = objectMapper.readValue(
+                    outputOpt.get().getOutputJson(), new TypeReference<Map<String, Object>>() {});
+                fieldVal = blockOutput.get(field);
+            }
 
             if (useLength) {
                 int len = fieldVal instanceof List<?> l ? l.size()
@@ -759,7 +804,7 @@ public class PipelineRunner {
             try {
                 log.info("Running block: {} ({})", blockId, blockConfig.getBlock());
                 if (prodDeploy) prodDeployMutex.acquire(run.getId());
-                com.workflow.llm.LlmCallContext.set(run.getId(), blockId);
+                com.workflow.llm.LlmCallContext.set(run.getId(), blockId, resolveRunProvider(run));
                 try {
                     output = runWithRetry(block, inputs, effectiveBlockConfig, run);
                 } finally {

@@ -49,6 +49,7 @@ public class ProjectController {
             if (body.getOrchestratorModel() != null) existing.setOrchestratorModel(body.getOrchestratorModel());
             if (body.getOrchestratorSystemPromptExtra() != null) existing.setOrchestratorSystemPromptExtra(body.getOrchestratorSystemPromptExtra());
             if (body.getTechStackJson() != null) existing.setTechStackJson(body.getTechStackJson());
+            if (body.getDefaultProvider() != null) existing.setDefaultProvider(body.getDefaultProvider());
             existing.setOrchestratorEnabled(body.isOrchestratorEnabled());
             return ResponseEntity.ok(repository.save(existing));
         }).orElse(ResponseEntity.notFound().build());

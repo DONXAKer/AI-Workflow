@@ -1,5 +1,5 @@
-import { Loader2, CheckCircle, XCircle, SkipForward, Clock, AlertCircle, Copy, Check, Bell, ChevronDown, ChevronRight, Hand, Zap, BellRing, RotateCcw } from 'lucide-react'
-import { BlockStatus, BlockSnapshot, ApprovalMode, ToolCallEntry, LlmCallEntry } from '../types'
+import { Loader2, CheckCircle, XCircle, SkipForward, Clock, AlertCircle, Copy, Check, Bell, ChevronDown, ChevronRight, Hand, Zap, BellRing, RotateCcw, Globe, Terminal } from 'lucide-react'
+import { BlockStatus, BlockSnapshot, ApprovalMode, ToolCallEntry, LlmCallEntry, LlmProvider } from '../types'
 import { effectiveApprovalMode } from '../utils/configSnapshot'
 import { blockIdLabel } from '../utils/blockLabels'
 import clsx from 'clsx'
@@ -64,7 +64,7 @@ interface Props {
   llmCalls?: LlmCallEntry[]
 }
 
-const TOOL_COLORS: Record<string, string> = {
+export const TOOL_COLORS: Record<string, string> = {
   Read:  'text-blue-300 bg-blue-950/50 border-blue-800/60',
   Write: 'text-green-300 bg-green-950/50 border-green-800/60',
   Edit:  'text-amber-300 bg-amber-950/50 border-amber-800/60',
@@ -73,7 +73,56 @@ const TOOL_COLORS: Record<string, string> = {
   Bash:  'text-orange-300 bg-orange-950/50 border-orange-800/60',
 }
 
-function summarizeInput(toolName: string, inputJson: string): string {
+const PROVIDER_BADGE: Record<LlmProvider, { label: string; Icon: React.ComponentType<{ className?: string }>; cls: string; tooltip: string }> = {
+  OPENROUTER: {
+    label: 'OpenRouter',
+    Icon: Globe,
+    cls: 'bg-emerald-950/50 border-emerald-800/50 text-emerald-300',
+    tooltip: 'Платный API через OpenRouter',
+  },
+  CLAUDE_CODE_CLI: {
+    label: 'Claude CLI',
+    Icon: Terminal,
+    cls: 'bg-orange-950/50 border-orange-800/50 text-orange-300',
+    tooltip: 'Локальный claude -p, ваша Max-подписка',
+  },
+}
+
+export function ProviderBadge({ provider }: { provider?: LlmProvider }) {
+  if (!provider) return null
+  const cfg = PROVIDER_BADGE[provider]
+  if (!cfg) return null
+  const Icon = cfg.Icon
+  return (
+    <span
+      className={clsx('inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border flex-shrink-0', cfg.cls)}
+      title={cfg.tooltip}
+    >
+      <Icon className="w-2.5 h-2.5" />
+      {cfg.label}
+    </span>
+  )
+}
+
+export function FinishReasonChip({ reason }: { reason?: string }) {
+  if (!reason) return null
+  const r = reason.toUpperCase()
+  let cls = 'bg-slate-800 border-slate-700 text-slate-400'
+  if (r === 'STOP' || r === 'END_TURN') cls = 'bg-green-950/40 border-green-800/50 text-green-400'
+  else if (r === 'TOOL_CALLS') cls = 'bg-blue-950/40 border-blue-800/50 text-blue-400'
+  else if (r === 'LENGTH' || r === 'MAX_TOKENS') cls = 'bg-amber-950/40 border-amber-800/50 text-amber-400'
+  else if (r === 'MAX_ITERATIONS' || r === 'BUDGET_EXCEEDED' || r === 'ERROR') cls = 'bg-red-950/40 border-red-800/50 text-red-400'
+  return (
+    <span
+      className={clsx('inline-flex items-center text-[10px] font-mono px-1.5 py-0.5 rounded border flex-shrink-0', cls)}
+      title={`finish_reason: ${reason}`}
+    >
+      {r}
+    </span>
+  )
+}
+
+export function summarizeInput(toolName: string, inputJson: string): string {
   try {
     const inp = JSON.parse(inputJson) as Record<string, unknown>
     if (toolName === 'Bash') {
@@ -112,6 +161,7 @@ function IterationRow({ iteration, calls, llmCall }: { iteration: number; calls:
           ? <ChevronDown className="w-3 h-3 text-slate-500 flex-shrink-0" />
           : <ChevronRight className="w-3 h-3 text-slate-500 flex-shrink-0" />}
         <span className="text-xs text-slate-400 font-mono">Итерация {iteration}</span>
+        <ProviderBadge provider={llmCall?.provider} />
         {shortModel && (
           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-violet-950/50 border border-violet-800/50 text-violet-300 flex-shrink-0">
             {shortModel}
@@ -126,6 +176,7 @@ function IterationRow({ iteration, calls, llmCall }: { iteration: number; calls:
         <span className="text-[10px] text-slate-600">
           {calls.length} {calls.length === 1 ? 'вызов' : calls.length < 5 ? 'вызова' : 'вызовов'}
         </span>
+        <FinishReasonChip reason={llmCall?.finishReason} />
         <span className="text-[10px] text-slate-700 ml-auto">{totalMs}ms</span>
         {hasError && <span className="text-[10px] text-red-400">ошибка</span>}
       </button>

@@ -29,6 +29,8 @@ export interface ToolCallEntry {
   outputText?: string
 }
 
+export type LlmProvider = 'OPENROUTER' | 'CLAUDE_CODE_CLI'
+
 export interface LlmCallEntry {
   blockId: string
   iteration: number
@@ -37,6 +39,10 @@ export interface LlmCallEntry {
   tokensOut: number
   costUsd: number
   durationMs: number
+  /** Where the call physically went. Null on legacy rows written before this column existed. */
+  provider?: LlmProvider
+  /** Stop reason: end_turn / tool_calls / length / MAX_ITERATIONS / BUDGET_EXCEEDED / ERROR. */
+  finishReason?: string
 }
 
 export interface StoredBlockOutput {
@@ -500,6 +506,8 @@ export interface ProjectInfo {
   orchestratorEnabled?: boolean
   orchestratorModel?: string | null
   orchestratorSystemPromptExtra?: string | null
+  /** Default LLM provider for runs that don't pin one in inputs.provider. */
+  defaultProvider?: LlmProvider | null
   createdAt: string
   updatedAt: string
 }

@@ -179,6 +179,7 @@ public class LlmClient {
             // OpenRouter returns cost in its "usage" block when the user is on OpenRouter credits;
             // fall back to 0 otherwise — real rate cards can be applied server-side later.
             double cost = usage.path("cost").asDouble(0.0);
+            String finishReason = responseJson.path("choices").path(0).path("finish_reason").asText("");
 
             LlmCall call = new LlmCall();
             call.setTimestamp(java.time.Instant.now());
@@ -188,6 +189,8 @@ public class LlmClient {
             call.setCostUsd(cost);
             call.setDurationMs(durationMs);
             call.setProjectSlug(com.workflow.project.ProjectContext.get());
+            call.setProvider(LlmProvider.OPENROUTER);
+            if (!finishReason.isBlank()) call.setFinishReason(finishReason);
             LlmCallContext.current().ifPresent(ctx -> {
                 call.setRunId(ctx.runId());
                 call.setBlockId(ctx.blockId());
@@ -387,7 +390,7 @@ public class LlmClient {
             }
             recordToolUseUsage(resolvedModel, iterations,
                 (int) (System.currentTimeMillis() - startedAt),
-                tokensIn, tokensOut, cost, toolNames);
+                tokensIn, tokensOut, cost, toolNames, finishReason);
 
             // For reasoning models the content field includes <think>...</think> blocks;
             // strip them so callers (e.g. OrchestratorBlock) see only the actual output.
@@ -480,14 +483,38 @@ public class LlmClient {
     private static final int CLI_MAX_OUTPUT_BYTES = 1024 * 1024;
 
     /** Returns true if CLAUDE_CODE_CLI integration is active AND the given model should route through it.
-     *  Explicit non-Anthropic models (e.g. google/gemini-*, deepseek/*) always go through OpenRouter.
-     *  Presets (smart, flash, reasoning) and anthropic/* or bare claude-* names go through CLI. */
+     *
+     * <p>Run-level override (set via {@link com.workflow.llm.LlmCallContext}) wins over
+     * the auto-detection. When a run pins {@code provider=CLAUDE_CODE_CLI} via project
+     * default, every LLM call inside the run goes through the local CLI — even with a
+     * non-Anthropic preset name in the YAML — so the project switcher fully controls
+     * routing without YAML edits per-block.
+     *
+     * <p>Without an explicit override, fall back to model-name heuristics:
+     * explicit non-Anthropic models (e.g. {@code google/gemini-*}, {@code deepseek/*})
+     * go through OpenRouter; presets ({@code smart}, {@code flash}, {@code reasoning})
+     * and {@code anthropic/*} or bare {@code claude-*} names go through CLI when
+     * the integration is configured.
+     */
     private boolean shouldUseCli(String model) {
         try {
+            LlmProvider preferred = LlmCallContext.current()
+                .map(LlmCallContext.Context::preferredProvider)
+                .orElse(null);
+            if (preferred == LlmProvider.OPENROUTER) return false;
+
+            // Explicit run-level CLI preference (from Project.defaultProvider) bypasses
+            // the integration check — the operator picked CLI in project settings, that's
+            // a stronger signal than the optional CLAUDE_CODE_CLI integration row, which
+            // only carries a custom binary path. Without integration we fall back to the
+            // {@code claude} binary on $PATH (see {@link #getCliBin()}).
+            if (preferred == LlmProvider.CLAUDE_CODE_CLI) return true;
+
             boolean cliAvailable = integrationConfigRepository
                 .findByTypeAndIsDefaultTrue(IntegrationType.CLAUDE_CODE_CLI)
                 .isPresent();
             if (!cliAvailable) return false;
+
             if (model == null || model.isBlank()) return true;
             // Explicit non-Anthropic model (google/, deepseek/, openai/, etc.) → OpenRouter
             if (model.contains("/") && !model.startsWith("anthropic/")) return false;
@@ -542,8 +569,11 @@ public class LlmClient {
 
         List<String> argv = new ArrayList<>(List.of(getCliBin(), "-p", prompt));
         if (model != null && !model.isBlank()) { argv.add("--model"); argv.add(model); }
+        // bypassPermissions is rejected when Claude CLI runs as root (security guard);
+        // acceptEdits with an explicit --allowed-tools list works under root and matches
+        // what the claude_code_shell block uses successfully.
         argv.addAll(List.of("--allowed-tools", "Read,Write,Edit,Bash,Glob,Grep",
-                            "--permission-mode", "bypassPermissions"));
+                            "--permission-mode", "acceptEdits"));
 
         log.info("Calling Claude CLI (tool-use): model={}", model);
         long startedAt = System.currentTimeMillis();
@@ -619,6 +649,7 @@ public class LlmClient {
             call.setCostUsd(0.0);
             call.setDurationMs(durationMs);
             call.setProjectSlug(com.workflow.project.ProjectContext.get());
+            call.setProvider(LlmProvider.CLAUDE_CODE_CLI);
             LlmCallContext.current().ifPresent(ctx -> {
                 call.setRunId(ctx.runId());
                 call.setBlockId(ctx.blockId());
@@ -691,7 +722,7 @@ public class LlmClient {
 
     private void recordToolUseUsage(String model, int iteration, int durationMs,
                                     int tokensIn, int tokensOut, double cost,
-                                    List<String> toolNames) {
+                                    List<String> toolNames, String finishReason) {
         if (llmCallRepository == null) return;
         try {
             LlmCall call = new LlmCall();
@@ -703,6 +734,8 @@ public class LlmClient {
             call.setDurationMs(durationMs);
             call.setIteration(iteration);
             call.setProjectSlug(com.workflow.project.ProjectContext.get());
+            call.setProvider(LlmProvider.OPENROUTER);
+            if (finishReason != null && !finishReason.isBlank()) call.setFinishReason(finishReason);
             LlmCallContext.current().ifPresent(ctx -> {
                 call.setRunId(ctx.runId());
                 call.setBlockId(ctx.blockId());

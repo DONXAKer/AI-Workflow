@@ -3,6 +3,10 @@ package com.workflow.blocks;
 import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
 import com.workflow.core.expr.StringInterpolator;
+import com.workflow.llm.LlmCall;
+import com.workflow.llm.LlmCallContext;
+import com.workflow.llm.LlmCallRepository;
+import com.workflow.llm.LlmProvider;
 import com.workflow.project.Project;
 import com.workflow.project.ProjectContext;
 import com.workflow.project.ProjectRepository;
@@ -61,6 +65,7 @@ public class ClaudeCodeShellBlock implements Block {
 
     @Autowired(required = false) private StringInterpolator stringInterpolator;
     @Autowired(required = false) private ProjectRepository projectRepository;
+    @Autowired(required = false) private LlmCallRepository llmCallRepository;
 
     @Override public String getName() { return "claude_code_shell"; }
 
@@ -143,11 +148,44 @@ public class ClaudeCodeShellBlock implements Block {
         out.put("stdout", stdout.get());
         out.put("stderr", stderr.get());
 
+        recordCliInvocation(model, durationMs, exit == 0);
+
         if (exit != 0) {
             throw new RuntimeException(
                 "claude_code_shell: CLI exited " + exit + "\nstderr: " + truncate(stderr.get(), 2000));
         }
         return out;
+    }
+
+    /**
+     * Emits one synthetic {@link LlmCall} row per block invocation so the iteration-history
+     * UI shows a marker even though the multi-iteration loop is opaque (it lives inside
+     * the local {@code claude} subprocess). {@code iteration=0} signals "single shot".
+     * Tokens/cost are zero because Claude Code CLI does not expose usage metrics in stdout
+     * — drilling per-turn data would require parsing {@code --output-format stream-json},
+     * which is intentionally out of scope here.
+     */
+    private void recordCliInvocation(String model, int durationMs, boolean success) {
+        if (llmCallRepository == null) return;
+        try {
+            LlmCall call = new LlmCall();
+            call.setTimestamp(java.time.Instant.now());
+            call.setModel(model != null && !model.isBlank() ? model : "claude/local");
+            call.setTokensIn(0);
+            call.setTokensOut(0);
+            call.setCostUsd(0.0);
+            call.setDurationMs(durationMs);
+            call.setProjectSlug(ProjectContext.get());
+            call.setProvider(LlmProvider.CLAUDE_CODE_CLI);
+            call.setFinishReason(success ? "END_TURN" : "ERROR");
+            LlmCallContext.current().ifPresent(ctx -> {
+                call.setRunId(ctx.runId());
+                call.setBlockId(ctx.blockId());
+            });
+            llmCallRepository.save(call);
+        } catch (Exception e) {
+            log.debug("claude_code_shell: LlmCall persist failed: {}", e.getMessage());
+        }
     }
 
     private Path resolveWorkingDir(Map<String, Object> cfg, Map<String, Object> input, PipelineRun run) {

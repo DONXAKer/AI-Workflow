@@ -63,6 +63,22 @@ public class LlmCall {
     @Column(columnDefinition = "TEXT")
     private String toolCallsMadeJson;
 
+    /**
+     * Where this call physically went. Null on legacy rows written before this column
+     * existed (UI renders no badge in that case).
+     */
+    @Enumerated(EnumType.STRING)
+    private LlmProvider provider;
+
+    /**
+     * Stop reason as reported by the API: {@code end_turn}, {@code tool_calls},
+     * {@code length}, or pipeline-level synthetic values like {@code MAX_ITERATIONS},
+     * {@code BUDGET_EXCEEDED}. Null on rows that don't have a meaningful stop reason
+     * (e.g. CLI subprocess records).
+     */
+    @Column(name = "finish_reason")
+    private String finishReason;
+
     public LlmCall() {}
 
     public Long getId() { return id; }
@@ -93,4 +109,10 @@ public class LlmCall {
 
     public String getToolCallsMadeJson() { return toolCallsMadeJson; }
     public void setToolCallsMadeJson(String toolCallsMadeJson) { this.toolCallsMadeJson = toolCallsMadeJson; }
+
+    public LlmProvider getProvider() { return provider; }
+    public void setProvider(LlmProvider provider) { this.provider = provider; }
+
+    public String getFinishReason() { return finishReason; }
+    public void setFinishReason(String finishReason) { this.finishReason = finishReason; }
 }

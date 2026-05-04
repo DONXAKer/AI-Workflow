@@ -137,6 +137,17 @@ public class RunController {
         // Signal PipelineRunner to add "*" to autoApprove — skips all manual approval gates.
         if (autoApproveAll) namedInputs.put("_autoApproveAll", true);
 
+        // Provider routing: if the operator did not pin a provider on the run, fall back to
+        // the project default. Pipeline blocks then gate on $.input.provider via condition.
+        if (!namedInputs.containsKey("provider")) {
+            String projectSlug = ProjectContext.get();
+            if (projectSlug != null && !projectSlug.isBlank()) {
+                projectRepository.findBySlug(projectSlug).ifPresent(p ->
+                    namedInputs.put("provider", p.getEffectiveDefaultProvider().name()));
+            }
+            namedInputs.putIfAbsent("provider", com.workflow.llm.LlmProvider.OPENROUTER.name());
+        }
+
         try {
             PipelineConfig config = pipelineConfigLoader.load(Paths.get(configPath));
 
@@ -931,6 +942,8 @@ public class RunController {
             m.put("tokensOut", c.getTokensOut());
             m.put("costUsd", c.getCostUsd());
             m.put("durationMs", c.getDurationMs());
+            if (c.getProvider() != null) m.put("provider", c.getProvider().name());
+            if (c.getFinishReason() != null) m.put("finishReason", c.getFinishReason());
             return m;
         }).toList();
         return ResponseEntity.ok(result);
