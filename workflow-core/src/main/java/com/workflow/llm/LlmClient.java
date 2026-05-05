@@ -491,7 +491,7 @@ public class LlmClient {
 
     // ── Claude CLI provider ───────────────────────────────────────────────────
 
-    private static final int CLI_TIMEOUT_SEC = 600;
+    private static final int CLI_TIMEOUT_SEC = 1800;
     private static final int CLI_MAX_OUTPUT_BYTES = 1024 * 1024;
 
     /** Returns true if CLAUDE_CODE_CLI integration is active AND the given model should route through it.
