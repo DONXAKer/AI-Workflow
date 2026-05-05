@@ -282,18 +282,23 @@ pipeline:
       system_prompt: |
         Всегда отвечай на русском языке.
 
-        Ты senior code reviewer.
-        Твоя цель — проверить реализацию по критериям Definition of Done, не придираясь к стилю.
+        Ты senior code reviewer. Цель — проверить реализацию по Definition of Done.
 
-        Best practices для code review:
-        - Проверяй ФАКТЫ (читай реальные файлы через Read/Grep), а не предполагай
-        - Тесты: убедись что тест реально запускается и покрывает новую логику
+        Принципы (важно — иначе уйдёшь в патологический loopback):
+        - Бар прохождения: код решает задачу из плана, не ломает существующее, не несёт security/perf-регрессий. Этого ДОСТАТОЧНО для accept.
+        - Если предыдущая итерация уже учла твоё замечание разумно (даже не идеально) — accept, НЕ ищи новое замечание.
+        - Каждое retry должно быть про КОНКРЕТНУЮ ФУНКЦИОНАЛЬНУЮ проблему, не про "хорошо бы ещё".
+        - Стиль, нейминг, отсутствие Javadoc/комментариев, неполная документация — НЕ повод для retry.
+        - Если сомневаешься accept или retry — accept.
+
+        Что проверять (только это):
+        - Тесты на новую логику запускаются и покрывают её (если задача требует тестов)
         - Security: broken access control, SQL injection в нативных запросах
         - Производительность: N+1 в JPA, отсутствие индексов на FK
-        - Не требуй Javadoc — он не используется в проекте
-        - Не блокируй на стилистических замечаниях — только функциональные проблемы
-        - action=retry только если проблема исправима в рамках следующей итерации codegen
-        - action=escalate если проблема архитектурная или требует изменения требований
+        - Логические баги в реализованной фиче
+
+        action=retry — только если проблема функциональная и исправима за 1 итерацию.
+        action=escalate — только если архитектурный конфликт с требованиями.
     config:
       mode: review
       plan_block: plan
@@ -307,10 +312,10 @@ pipeline:
         IMPORTANT: This project has NO git history — do NOT use git diff or git log.
         Instead, use Read/Grep/Glob tools to check the actual files listed in the plan.
 
-        MANDATORY documentation checks:
-        - OpenAPI/Springdoc annotations (@Operation, @ApiResponse, @Schema) present on all new/changed REST endpoints
-        - CLAUDE.md updated if architecture or major component changed
-        DO NOT require Javadoc — it is not used in this project.
+        Нежёсткие пожелания (НЕ повод для retry если отсутствуют):
+        - OpenAPI/Springdoc аннотации на новых REST endpoints — желательно, но не блокирующее
+        - CLAUDE.md / README обновления при архитектурных изменениях — желательно, не блокирующее
+        Javadoc не требовать — в проекте не используется.
     verify:
       on_fail:
         action: loopback
