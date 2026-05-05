@@ -259,6 +259,11 @@
       "Bash(launchctl unload *)",
       "Bash(launchctl load *)",
       "Bash(launchctl list *)"
+      "Read(//Users/home/.claude/**)",
+      "Bash(cp \"D:/Проекты/AI-Workflow/docs/feature-pipeline-template.yaml\" \"D:/WarCard/.ai-workflow/pipelines/_template_test.yaml\")",
+      "Bash(cd /tmp)",
+      "Bash(size=5 2>&1)",
+      "Bash(node -e ' *)"
     ]
   }
 }

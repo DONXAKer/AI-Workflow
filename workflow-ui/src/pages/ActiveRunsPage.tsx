@@ -262,10 +262,11 @@ export default function ActiveRunsPage() {
                             <Link
                               to={runHref(run.id, pathname)}
                               state={{ from: 'active', backHref: pathname }}
-                              className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 transition-colors"
+                              className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-amber-900/40 border border-amber-700/50 text-amber-300 hover:bg-amber-900/60 transition-colors"
                               title="Открыть для полного рассмотрения"
                             >
                               <Bell className="w-3 h-3" />
+                              Рассмотреть
                             </Link>
                           </div>
                         ) : (

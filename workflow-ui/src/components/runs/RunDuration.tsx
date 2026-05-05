@@ -26,11 +26,13 @@ export default function RunDuration({ startedAt, completedAt, live = false }: Pr
   }, [live, completedAt])
 
   const start = new Date(startedAt).getTime()
-  // Guard: if either timestamp is unparseable, Date returns NaN — show a dash
+  // Guard: if startedAt is missing/unparseable Date returns NaN — show a dash
   // instead of letting NaN propagate through formatDuration into "NaNs".
-  if (isNaN(start)) return <span>—</span>
+  if (!startedAt || isNaN(start)) return <span>—</span>
   const end = completedAt ? new Date(completedAt).getTime() : now
-  if (!isNaN(end) && end < start) return <span>—</span>
+  // Clock skew between server and browser can put `end < start` for a brief moment
+  // (server timestamp slightly ahead of browser clock). Clamping to 0 prevents
+  // the duration from disappearing as a dash on freshly-started runs.
   const duration = Math.max(0, isNaN(end) ? 0 : end - start)
 
   return <span>{formatDuration(duration)}</span>

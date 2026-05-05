@@ -34,6 +34,12 @@ function fmtDuration(ms: number): string {
   return `${s}s`
 }
 
+/** Compact duration: under 1s shows ms, otherwise uses fmtDuration. */
+function fmtDurationCompact(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  return fmtDuration(ms)
+}
+
 /** Live elapsed timer for running blocks */
 function LiveDuration({ startedAt }: { startedAt: string }) {
   const [elapsed, setElapsed] = useState(() => Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000))
@@ -62,6 +68,8 @@ interface Props {
   toolCalls?: ToolCallEntry[]
   /** LLM call records — provides model/token/cost info per iteration */
   llmCalls?: LlmCallEntry[]
+  /** Run ID — enables "Copy block as MD" buttons via /api/runs/{runId}/report?format=md endpoint */
+  runId?: string
 }
 
 export const TOOL_COLORS: Record<string, string> = {
@@ -100,6 +108,35 @@ export function ProviderBadge({ provider }: { provider?: LlmProvider }) {
     >
       <Icon className="w-2.5 h-2.5" />
       {cfg.label}
+    </span>
+  )
+}
+
+/** Compact "5×Edit 3×Read 2×Bash" chips, ordered by count desc, max 5 distinct tools. */
+export function ToolCountChips({ calls }: { calls: ToolCallEntry[] }) {
+  if (calls.length === 0) return <span className="text-slate-700 text-[10px]">—</span>
+  const counts = new Map<string, { total: number; errors: number }>()
+  for (const c of calls) {
+    const cur = counts.get(c.toolName) ?? { total: 0, errors: 0 }
+    cur.total += 1
+    if (c.isError) cur.errors += 1
+    counts.set(c.toolName, cur)
+  }
+  const sorted = [...counts.entries()].sort((a, b) => b[1].total - a[1].total).slice(0, 5)
+  return (
+    <span className="inline-flex items-center gap-1 flex-wrap">
+      {sorted.map(([tool, { total, errors }]) => {
+        const baseCls = TOOL_COLORS[tool] ?? 'text-slate-400 bg-slate-800/40 border-slate-700'
+        return (
+          <span
+            key={tool}
+            className={clsx('px-1.5 py-0.5 rounded border text-[10px] font-mono leading-none', baseCls)}
+            title={errors > 0 ? `${tool}: ${total} вызовов, ${errors} ошибок` : `${tool}: ${total} вызовов`}
+          >
+            {total}×{tool}{errors > 0 && <span className="text-red-400 ml-0.5">!</span>}
+          </span>
+        )
+      })}
     </span>
   )
 }
@@ -144,70 +181,86 @@ export function summarizeInput(toolName: string, inputJson: string): string {
   }
 }
 
-function IterationRow({ iteration, calls, llmCall }: { iteration: number; calls: ToolCallEntry[]; llmCall?: LlmCallEntry }) {
+function IterationTableRow({ iteration, calls, llmCall }: { iteration: number; calls: ToolCallEntry[]; llmCall?: LlmCallEntry }) {
   const [open, setOpen] = useState(false)
   const hasError = calls.some(c => c.isError)
   const totalMs = calls.reduce((s, c) => s + c.durationMs, 0)
   const shortModel = llmCall ? llmCall.model.replace(/^[^/]+\//, '') : null
 
   return (
-    <div className="border border-slate-800/60 rounded-lg overflow-hidden">
-      <button
-        type="button"
+    <Fragment>
+      <tr
+        className={clsx(
+          'border-b border-slate-800/40 cursor-pointer transition-colors',
+          open ? 'bg-slate-800/30' : 'hover:bg-slate-800/20',
+          hasError && !open && 'bg-red-950/10'
+        )}
         onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-slate-800/40 transition-colors"
       >
-        {open
-          ? <ChevronDown className="w-3 h-3 text-slate-500 flex-shrink-0" />
-          : <ChevronRight className="w-3 h-3 text-slate-500 flex-shrink-0" />}
-        <span className="text-xs text-slate-400 font-mono">Итерация {iteration}</span>
-        <ProviderBadge provider={llmCall?.provider} />
-        {shortModel && (
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-violet-950/50 border border-violet-800/50 text-violet-300 flex-shrink-0">
-            {shortModel}
-          </span>
-        )}
-        {llmCall && llmCall.tokensIn > 0 && (
-          <span className="text-[10px] text-slate-600 flex-shrink-0">
-            {(llmCall.tokensIn / 1000).toFixed(0)}K↑ {(llmCall.tokensOut / 1000).toFixed(0)}K↓
-            {llmCall.costUsd > 0 && <span className="ml-1">${llmCall.costUsd.toFixed(4)}</span>}
-          </span>
-        )}
-        <span className="text-[10px] text-slate-600">
-          {calls.length} {calls.length === 1 ? 'вызов' : calls.length < 5 ? 'вызова' : 'вызовов'}
-        </span>
-        <FinishReasonChip reason={llmCall?.finishReason} />
-        <span className="text-[10px] text-slate-700 ml-auto">{totalMs}ms</span>
-        {hasError && <span className="text-[10px] text-red-400">ошибка</span>}
-      </button>
-      {open && (
-        <div className="border-t border-slate-800/60 divide-y divide-slate-800/40">
-          {calls.map((c, i) => {
-            const colorCls = TOOL_COLORS[c.toolName] ?? 'text-slate-400 bg-slate-800/40 border-slate-700'
-            const summary = summarizeInput(c.toolName, c.inputJson)
-            return (
-              <div key={i} className="px-3 py-1.5 text-xs">
-                <div className="flex items-center gap-2">
-                  <span className={clsx('px-1.5 py-0.5 rounded border text-[10px] font-mono font-medium flex-shrink-0', colorCls)}>
-                    {c.toolName}
-                  </span>
-                  <span className="font-mono text-slate-400 truncate flex-1 min-w-0">{summary}</span>
-                  {c.isError
-                    ? <XCircle className="w-3 h-3 text-red-400 flex-shrink-0" />
-                    : <CheckCircle className="w-3 h-3 text-green-600/70 flex-shrink-0" />}
-                  <span className="text-slate-600 text-[10px] flex-shrink-0">{c.durationMs}ms</span>
-                </div>
-                {c.isError && c.outputText && (
-                  <pre className="mt-1 ml-7 text-[10px] text-red-300/80 bg-red-950/30 border border-red-900/40 rounded px-2 py-1 whitespace-pre-wrap break-all leading-relaxed max-h-32 overflow-auto">
-                    {c.outputText}
-                  </pre>
-                )}
-              </div>
-            )
-          })}
-        </div>
+        <td className="px-2 py-1.5 text-center w-7">
+          {calls.length > 0
+            ? (open
+                ? <ChevronDown className="w-3 h-3 text-slate-400 inline-block" />
+                : <ChevronRight className="w-3 h-3 text-slate-500 inline-block" />)
+            : null}
+        </td>
+        <td className="px-2 py-1.5 text-xs text-slate-400 font-mono w-12 text-center">{iteration}</td>
+        <td className="px-2 py-1.5 w-28"><ProviderBadge provider={llmCall?.provider} /></td>
+        <td className="px-2 py-1.5">
+          {shortModel && (
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-violet-950/50 border border-violet-800/50 text-violet-300">
+              {shortModel}
+            </span>
+          )}
+        </td>
+        <td className="px-2 py-1.5 text-right text-[10px] text-slate-500 font-mono whitespace-nowrap">
+          {llmCall && llmCall.tokensIn > 0
+            ? <>{(llmCall.tokensIn / 1000).toFixed(0)}K↑ {(llmCall.tokensOut / 1000).toFixed(0)}K↓</>
+            : <span className="text-slate-700">—</span>}
+        </td>
+        <td className="px-2 py-1.5 text-right text-[10px] text-slate-500 font-mono whitespace-nowrap">
+          {llmCall && llmCall.costUsd > 0
+            ? `$${llmCall.costUsd.toFixed(4)}`
+            : <span className="text-slate-700">—</span>}
+        </td>
+        <td className="px-2 py-1.5">
+          <ToolCountChips calls={calls} />
+        </td>
+        <td className="px-2 py-1.5 w-32"><FinishReasonChip reason={llmCall?.finishReason} /></td>
+        <td className="px-2 py-1.5 text-right text-[10px] text-slate-500 font-mono whitespace-nowrap">{fmtDurationCompact(totalMs)}</td>
+      </tr>
+      {open && calls.length > 0 && (
+        <tr className="border-b border-slate-800/40 bg-slate-950/40">
+          <td colSpan={9} className="px-6 py-2">
+            <div className="divide-y divide-slate-800/40">
+              {calls.map((c, i) => {
+                const colorCls = TOOL_COLORS[c.toolName] ?? 'text-slate-400 bg-slate-800/40 border-slate-700'
+                const summary = summarizeInput(c.toolName, c.inputJson)
+                return (
+                  <div key={i} className="py-1.5 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className={clsx('px-1.5 py-0.5 rounded border text-[10px] font-mono font-medium flex-shrink-0', colorCls)}>
+                        {c.toolName}
+                      </span>
+                      <span className="font-mono text-slate-400 truncate flex-1 min-w-0">{summary}</span>
+                      {c.isError
+                        ? <XCircle className="w-3 h-3 text-red-400 flex-shrink-0" />
+                        : <CheckCircle className="w-3 h-3 text-green-600/70 flex-shrink-0" />}
+                      <span className="text-slate-600 text-[10px] flex-shrink-0">{c.durationMs}ms</span>
+                    </div>
+                    {c.isError && c.outputText && (
+                      <pre className="mt-1 ml-7 text-[10px] text-red-300/80 bg-red-950/30 border border-red-900/40 rounded px-2 py-1 whitespace-pre-wrap break-all leading-relaxed max-h-32 overflow-auto">
+                        {c.outputText}
+                      </pre>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </td>
+        </tr>
       )}
-    </div>
+    </Fragment>
   )
 }
 
@@ -217,18 +270,42 @@ function IterationsPanel({ calls, llmCalls }: { calls: ToolCallEntry[]; llmCalls
     if (!byIteration.has(c.iteration)) byIteration.set(c.iteration, [])
     byIteration.get(c.iteration)!.push(c)
   }
-  const iterations = [...byIteration.entries()].sort((a, b) => a[0] - b[0])
-
+  // Include LLM-only iterations (no tool calls — e.g. claude_code_shell synthetic row).
+  const allIterNumbers = new Set<number>([...byIteration.keys()])
   const llmByIteration = new Map<number, LlmCallEntry>()
   for (const lc of (llmCalls ?? [])) {
     if (!llmByIteration.has(lc.iteration)) llmByIteration.set(lc.iteration, lc)
+    allIterNumbers.add(lc.iteration)
   }
+  const iterations = [...allIterNumbers].sort((a, b) => a - b)
 
   return (
-    <div className="space-y-1.5 px-4 py-3 bg-slate-950/60 border-t border-slate-800/60">
-      {iterations.map(([iter, iterCalls]) => (
-        <IterationRow key={iter} iteration={iter} calls={iterCalls} llmCall={llmByIteration.get(iter)} />
-      ))}
+    <div className="px-4 py-3 bg-slate-950/60 border-t border-slate-800/60">
+      <table className="w-full text-sm">
+        <thead className="border-b border-slate-800/60">
+          <tr className="text-left">
+            <th className="px-2 py-1 w-7" />
+            <th className="px-2 py-1 text-[10px] font-medium text-slate-500 uppercase tracking-wide w-12 text-center">Iter</th>
+            <th className="px-2 py-1 text-[10px] font-medium text-slate-500 uppercase tracking-wide w-28">Provider</th>
+            <th className="px-2 py-1 text-[10px] font-medium text-slate-500 uppercase tracking-wide">Model</th>
+            <th className="px-2 py-1 text-[10px] font-medium text-slate-500 uppercase tracking-wide text-right">Tokens (in/out)</th>
+            <th className="px-2 py-1 text-[10px] font-medium text-slate-500 uppercase tracking-wide text-right">Cost</th>
+            <th className="px-2 py-1 text-[10px] font-medium text-slate-500 uppercase tracking-wide">Actions</th>
+            <th className="px-2 py-1 text-[10px] font-medium text-slate-500 uppercase tracking-wide w-32">Finish</th>
+            <th className="px-2 py-1 text-[10px] font-medium text-slate-500 uppercase tracking-wide text-right">Duration</th>
+          </tr>
+        </thead>
+        <tbody>
+          {iterations.map(iter => (
+            <IterationTableRow
+              key={iter}
+              iteration={iter}
+              calls={byIteration.get(iter) ?? []}
+              llmCall={llmByIteration.get(iter)}
+            />
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -306,122 +383,512 @@ function CopyButton({ text }: { text: string }) {
 }
 
 /**
- * Detects the verify-block output shape: {@code { passed: boolean, issues: string[],
- * subject_block?, checks_failed?, recommendation?, iteration? }}. Used to inline a
- * human-readable failure banner so the user doesn't have to expand JSON to see why.
+ * Field metadata for known pipeline-block keys. Order in this array is the render
+ * order — most important fields surface first. Anything not in this map falls back
+ * to a generic JSON view inside the "Show all" section.
  */
-function asVerifyOutput(output: Record<string, unknown> | undefined): {
-  passed: boolean
-  issues: string[]
-  subject?: string
-  checksFailed?: number
-  checksPassed?: number
-  recommendation?: string
-  iteration?: number
-} | null {
-  if (!output) return null
-  if (typeof output.passed !== 'boolean') return null
-  if (!Array.isArray(output.issues)) return null
-  const issues = (output.issues as unknown[]).filter((x): x is string => typeof x === 'string')
-  return {
-    passed: output.passed,
-    issues,
-    subject: typeof output.subject_block === 'string' ? output.subject_block : undefined,
-    checksFailed: typeof output.checks_failed === 'number' ? output.checks_failed : undefined,
-    checksPassed: typeof output.checks_passed === 'number' ? output.checks_passed : undefined,
-    recommendation: typeof output.recommendation === 'string' && output.recommendation.trim()
-      ? output.recommendation : undefined,
-    iteration: typeof output.iteration === 'number' ? output.iteration : undefined,
-  }
-}
+const KNOWN_FIELDS: Array<{ key: string; label: string; kind: 'string' | 'multiline' | 'list' | 'objList' | 'bool' | 'number'; emphasis?: boolean }> = [
+  // Task / analysis
+  { key: 'title', label: 'Title', kind: 'string', emphasis: true },
+  { key: 'feat_id', label: 'Feat ID', kind: 'string' },
+  { key: 'slug', label: 'Slug', kind: 'string' },
+  { key: 'complexity', label: 'Complexity', kind: 'string' },
+  { key: 'needs_clarification', label: 'Needs clarification', kind: 'bool' },
+  { key: 'as_is', label: 'Как сейчас', kind: 'multiline' },
+  { key: 'to_be', label: 'Как надо', kind: 'multiline' },
+  { key: 'out_of_scope', label: 'Вне scope', kind: 'multiline' },
+  { key: 'acceptance', label: 'Критерии приёмки', kind: 'multiline' },
+  { key: 'technical_approach', label: 'Подход', kind: 'multiline' },
+  { key: 'affected_components', label: 'Затрагиваемые компоненты', kind: 'list' },
+  { key: 'acceptance_checklist', label: 'Acceptance checklist', kind: 'objList', emphasis: true },
+  // Plan
+  { key: 'goal', label: 'Goal', kind: 'multiline', emphasis: true },
+  { key: 'approach', label: 'Approach', kind: 'multiline' },
+  { key: 'files_to_touch', label: 'Files to touch', kind: 'list' },
+  { key: 'tools_to_use', label: 'Tools to use', kind: 'list' },
+  { key: 'definition_of_done', label: 'Definition of Done', kind: 'multiline' },
+  // Review
+  { key: 'retry_instruction', label: 'Retry instruction', kind: 'multiline' },
+  { key: 'issues', label: 'Issues', kind: 'list' },
+  // Verify acceptance
+  { key: 'passed_items', label: 'Passed', kind: 'list' },
+  { key: 'failed_items', label: 'Failed', kind: 'list', emphasis: true },
+  { key: 'verification_results', label: 'Verification results', kind: 'objList' },
+  { key: 'pass_threshold', label: 'Pass threshold', kind: 'string' },
+  // Agent
+  { key: 'final_text', label: 'Result', kind: 'multiline', emphasis: true },
+  // Shell / verify
+  { key: 'success', label: 'Success', kind: 'bool' },
+  { key: 'exit_code', label: 'Exit code', kind: 'number' },
+  { key: 'duration_ms', label: 'Длительность', kind: 'number' },
+  { key: 'stdout', label: 'stdout', kind: 'multiline' },
+  { key: 'stderr', label: 'stderr', kind: 'multiline' },
+  { key: 'command', label: 'Команда', kind: 'multiline' },
+  // Status flags
+  { key: '_skipped', label: 'Skipped', kind: 'bool' },
+  { key: 'reason', label: 'Reason', kind: 'string' },
+  { key: 'status', label: 'Status', kind: 'string' },
+]
+const KNOWN_FIELD_KEYS = new Set(KNOWN_FIELDS.map(f => f.key))
 
-function VerifyOutputBanner({ verify }: { verify: NonNullable<ReturnType<typeof asVerifyOutput>> }) {
-  if (verify.passed) {
+/**
+ * Long-content renderer with the truncation policy decided in the design grill:
+ *   - ≤ 200 lines AND ≤ 4 KB: render full text, no scroll
+ *   - else: render first 50 + last 30 lines with `... [N lines elided] ...`
+ *     marker, expand button reveals full inline
+ *
+ * The full text is always present in DOM (`data-full-text` on the wrapper) so an
+ * LLM scraping the page receives complete content even when the visible portion
+ * is truncated. A "Copy" overlay copies the full text, not the truncated view.
+ */
+const TRUNCATE_LINE_LIMIT = 200
+const TRUNCATE_BYTE_LIMIT = 4096
+const HEAD_LINES = 50
+const TAIL_LINES = 30
+
+function SmartTruncatedPre({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const lines = text.split('\n')
+  const overLineLimit = lines.length > TRUNCATE_LINE_LIMIT
+  const overByteLimit = text.length > TRUNCATE_BYTE_LIMIT
+  const needsTruncate = overLineLimit || overByteLimit
+
+  if (!needsTruncate || expanded) {
     return (
-      <div className="flex items-center gap-1.5 text-xs text-emerald-300 bg-emerald-950/30 border border-emerald-800/60 rounded-md px-2 py-1 mb-2">
-        <CheckCircle className="w-3.5 h-3.5 flex-shrink-0" />
-        <span>
-          Verify OK
-          {verify.subject && <span className="text-emerald-400/70"> · subject: <span className="font-mono">{verify.subject}</span></span>}
-          {typeof verify.checksPassed === 'number' && (
-            <span className="text-emerald-400/70"> · {verify.checksPassed} check{verify.checksPassed === 1 ? '' : 's'}</span>
-          )}
-        </span>
+      <div data-full-text={text}>
+        <pre className="text-xs text-slate-300 bg-slate-950/60 border border-slate-800/60 rounded p-2 whitespace-pre-wrap break-words leading-relaxed">{text}</pre>
+        {needsTruncate && expanded && (
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            className="mt-1 text-[10px] text-slate-500 hover:text-blue-400 transition-colors"
+          >
+            Свернуть
+          </button>
+        )}
       </div>
     )
   }
+
+  const head = lines.slice(0, HEAD_LINES).join('\n')
+  const tail = lines.slice(-TAIL_LINES).join('\n')
+  const elided = lines.length - HEAD_LINES - TAIL_LINES
+  const truncated = `${head}\n\n... [${elided} строк скрыто] ...\n\n${tail}`
+
   return (
-    <div className="text-xs bg-red-950/30 border border-red-800/60 rounded-md px-2 py-1.5 mb-2 space-y-1">
-      <div className="flex items-center gap-1.5 text-red-300 font-medium">
-        <XCircle className="w-3.5 h-3.5 flex-shrink-0" />
-        <span>
-          Verify не прошёл
-          {verify.subject && <span className="text-red-400/70 font-normal"> · subject: <span className="font-mono">{verify.subject}</span></span>}
-          {typeof verify.iteration === 'number' && verify.iteration > 1 && (
-            <span className="text-red-400/70 font-normal"> · итер. {verify.iteration}</span>
-          )}
-        </span>
-      </div>
-      {verify.issues.length > 0 && (
-        <ul className="list-disc pl-5 space-y-0.5 text-red-200/90">
-          {verify.issues.map((issue, i) => (
-            <li key={i} className="break-words">{issue}</li>
-          ))}
-        </ul>
-      )}
-      {verify.recommendation && (
-        <div className="text-[11px] text-red-300/80 italic mt-1 pl-5">
-          {verify.recommendation}
-        </div>
-      )}
+    <div data-full-text={text}>
+      <pre className="text-xs text-slate-300 bg-slate-950/60 border border-slate-800/60 rounded p-2 whitespace-pre-wrap break-words leading-relaxed">{truncated}</pre>
+      <button
+        type="button"
+        onClick={() => setExpanded(true)}
+        className="mt-1 text-[10px] text-blue-400 hover:text-blue-300 transition-colors"
+      >
+        Показать все {lines.length} строк ({(text.length / 1024).toFixed(1)} KB)
+      </button>
     </div>
   )
 }
 
-function OutputCell({ output }: { output?: Record<string, unknown> }) {
+function FieldValue({ value, kind }: { value: unknown; kind: typeof KNOWN_FIELDS[number]['kind'] }) {
+  if (value === null || value === undefined || value === '') return <span className="text-slate-600">—</span>
+  if (kind === 'bool') {
+    return value
+      ? <span className="text-green-400 text-sm">✓</span>
+      : <span className="text-slate-500 text-sm">✗</span>
+  }
+  if (kind === 'number') {
+    return <span className="font-mono text-slate-300 text-sm">{String(value)}</span>
+  }
+  if (kind === 'string') {
+    return <span className="text-slate-200 text-sm">{String(value)}</span>
+  }
+  if (kind === 'multiline') {
+    const text = String(value).trim()
+    if (!text) return <span className="text-slate-600">—</span>
+    return <SmartTruncatedPre text={text} />
+  }
+  if (kind === 'list') {
+    const arr = Array.isArray(value) ? value : []
+    if (arr.length === 0) return <span className="text-slate-600">—</span>
+    return (
+      <ul className="text-sm text-slate-300 space-y-0.5 list-disc list-inside">
+        {arr.map((item, i) => (
+          <li key={i} className="font-mono text-xs">{typeof item === 'string' ? item : JSON.stringify(item)}</li>
+        ))}
+      </ul>
+    )
+  }
+  if (kind === 'objList') {
+    const arr = Array.isArray(value) ? value : []
+    if (arr.length === 0) return <span className="text-slate-600">—</span>
+    return (
+      <div className="space-y-1">
+        {arr.map((item, i) => {
+          if (typeof item !== 'object' || item === null) {
+            return <div key={i} className="text-xs font-mono text-slate-400">{String(item)}</div>
+          }
+          const obj = item as Record<string, unknown>
+          // Common shape: {item, status, evidence} or {priority, requirement, description}
+          const status = obj.status as string | undefined
+          const statusCls = status === 'pass' ? 'text-green-400' : status === 'fail' ? 'text-red-400' : 'text-slate-400'
+          const priority = obj.priority as string | undefined
+          const priorityCls = priority === 'CRITICAL' ? 'bg-red-950/50 border-red-800/50 text-red-300'
+            : priority === 'IMPORTANT' ? 'bg-amber-950/40 border-amber-800/50 text-amber-300'
+            : 'bg-slate-800/50 border-slate-700 text-slate-400'
+          const main = obj.item ?? obj.requirement ?? obj.description ?? obj.text ?? Object.values(obj)[0]
+          return (
+            <div key={i} className="text-xs flex items-start gap-2 py-0.5">
+              {priority && (
+                <span className={clsx('px-1.5 py-0.5 rounded border text-[10px] font-mono uppercase shrink-0', priorityCls)}>{priority}</span>
+              )}
+              {status && <span className={clsx('text-sm shrink-0', statusCls)}>{status === 'pass' ? '✓' : status === 'fail' ? '✗' : '·'}</span>}
+              <span className="text-slate-300 flex-1 min-w-0 break-words">{typeof main === 'string' ? main : JSON.stringify(main)}</span>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+  return <span className="font-mono text-xs text-slate-400">{JSON.stringify(value)}</span>
+}
+
+function StructuredOutput({ output }: { output: Record<string, unknown> }) {
+  const [showJson, setShowJson] = useState(false)
+  const presentFields = KNOWN_FIELDS.filter(f => f.key in output && output[f.key] !== null && output[f.key] !== undefined)
+  const unknownKeys = Object.keys(output).filter(k => !KNOWN_FIELD_KEYS.has(k) && !k.startsWith('_'))
+  const jsonStr = JSON.stringify(output, null, 2)
+
+  if (presentFields.length === 0) {
+    // Nothing recognized — fall back to compact JSON toggle
+    return <CompactJsonView output={output} />
+  }
+
+  return (
+    <div className="space-y-2">
+      {presentFields.map(f => (
+        <div key={f.key} className={clsx(
+          'border-l-2 pl-3 py-1',
+          f.emphasis ? 'border-blue-700/60' : 'border-slate-800'
+        )}>
+          <div className="text-[10px] uppercase tracking-wide text-slate-500 font-medium mb-0.5">{f.label}</div>
+          <FieldValue value={output[f.key]} kind={f.kind} />
+        </div>
+      ))}
+      {unknownKeys.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowJson(v => !v)}
+          className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-blue-400 transition-colors"
+        >
+          {showJson ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          {showJson ? 'Скрыть' : `Ещё ${unknownKeys.length} ${unknownKeys.length === 1 ? 'поле' : unknownKeys.length < 5 ? 'поля' : 'полей'} (JSON)`}
+        </button>
+      )}
+      {showJson && (
+        <pre className="text-[10px] text-slate-400 bg-slate-950 border border-slate-800 rounded p-2 overflow-auto max-h-48 whitespace-pre-wrap">{jsonStr}</pre>
+      )}
+      <div className="flex justify-end">
+        <CopyButton text={jsonStr} />
+      </div>
+    </div>
+  )
+}
+
+function CompactJsonView({ output }: { output: Record<string, unknown> }) {
   const [expanded, setExpanded] = useState(false)
-
-  if (!output) return <span className="text-slate-600">—</span>
-
   const keys = Object.keys(output)
   const preview = keys.slice(0, 2).join(', ')
   const jsonStr = JSON.stringify(output, null, 2)
   const ChevronIcon = expanded ? ChevronDown : ChevronRight
-  const verify = asVerifyOutput(output)
-
   return (
     <div>
-      {verify && <VerifyOutputBanner verify={verify} />}
       <div className="flex items-center gap-1">
         <button
           type="button"
           onClick={() => setExpanded(v => !v)}
-          aria-expanded={expanded}
-          aria-label={expanded ? 'Свернуть' : 'Развернуть'}
           className="flex items-center gap-1 text-xs text-slate-400 hover:text-blue-400 transition-colors group/toggle"
         >
           <ChevronIcon className="w-3.5 h-3.5 flex-shrink-0 text-slate-500 group-hover/toggle:text-blue-400 transition-colors" />
           <span className="font-mono">{expanded ? 'Свернуть' : `{${preview}${keys.length > 2 ? ', ...' : '}'}}`}</span>
         </button>
-        {/* Copy button always visible alongside the toggle */}
         <CopyButton text={jsonStr} />
       </div>
       {expanded && (
-        <div className="mt-2 relative group/output">
-          <pre className="text-xs text-slate-300 bg-slate-950 border border-slate-700 rounded-lg p-3 overflow-auto max-h-48 whitespace-pre-wrap pr-8">
-            {jsonStr}
-          </pre>
-          {/* Reuse CopyButton for the expanded overlay — gives "copied" tick feedback */}
-          <div className="absolute top-2 right-2 p-0.5 rounded bg-slate-800 opacity-0 group-hover/output:opacity-100 transition-opacity">
-            <CopyButton text={jsonStr} />
-          </div>
-        </div>
+        <pre className="mt-2 text-xs text-slate-300 bg-slate-950 border border-slate-700 rounded-lg p-3 overflow-auto max-h-48 whitespace-pre-wrap">{jsonStr}</pre>
       )}
     </div>
   )
 }
 
-export default function BlockProgressTable({ blockStatuses, onReviewApproval, onRelaunchFromBlock, snapshots, toolCalls, llmCalls }: Props) {
+
+/**
+ * One-line summary of a block's output, type-aware. Renders inside the main
+ * row so the operator can scan a list of blocks and see "where it failed" or
+ * "what it produced" without expanding each block. Detail lives in expand-row.
+ *
+ * Decision tree (first match wins):
+ *   - status=failed → red ✗ chip
+ *   - status=skipped → grey "skipped"
+ *   - status=awaiting_approval → amber "approval pending"
+ *   - status=running → blue spinner-like indicator
+ *   - output has _skipped flag → grey "skipped (cond)"
+ *   - output has failed_items / passed_items (agent_verify) → "M/N pass" colored
+ *   - output has acceptance_checklist (analysis) → "checklist N items"
+ *   - output has goal+approach (orchestrator plan) → first words of goal
+ *   - output has retry_instruction (orchestrator review fail) → "loopback"
+ *   - output has issues (orchestrator review with problems) → "N issues"
+ *   - output has final_text (agent_with_tools) → char count
+ *   - output has success+exit_code (shell_exec) → ✓ ok / ✗ exit X
+ *   - output has feat_id (task_md_input) → feat_id + title preview
+ *   - fallback → field count
+ */
+function BlockSummaryChip({ block }: { block: BlockStatus }) {
+  if (block.status === 'failed') {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-red-950/40 border border-red-800/50 text-red-300 font-medium">
+        <XCircle className="w-3 h-3" />
+        failed
+      </span>
+    )
+  }
+  if (block.status === 'skipped') {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500">
+        <SkipForward className="w-3 h-3" />
+        skipped
+      </span>
+    )
+  }
+  if (block.status === 'awaiting_approval') {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-amber-950/40 border border-amber-700/50 text-amber-300 animate-pulse">
+        <Bell className="w-3 h-3" />
+        approval pending
+      </span>
+    )
+  }
+  if (block.status === 'running') {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-blue-950/40 border border-blue-800/50 text-blue-300">
+        <Loader2 className="w-3 h-3 animate-spin" />
+        running…
+      </span>
+    )
+  }
+
+  const out = block.output
+  if (!out) return <span className="text-slate-700 text-xs">—</span>
+
+  // Skipped via condition
+  if (out._skipped === true) {
+    const reason = typeof out.reason === 'string' ? out.reason : 'condition'
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500" title={reason}>
+        <SkipForward className="w-3 h-3" />
+        skipped
+      </span>
+    )
+  }
+
+  // agent_verify: passed_items + failed_items
+  if (Array.isArray(out.failed_items) || Array.isArray(out.passed_items)) {
+    const passed = Array.isArray(out.passed_items) ? out.passed_items.length : 0
+    const failed = Array.isArray(out.failed_items) ? out.failed_items.length : 0
+    const total = passed + failed
+    const ok = failed === 0 && passed > 0
+    const cls = ok
+      ? 'bg-green-950/40 border-green-800/50 text-green-300'
+      : failed > 0
+        ? 'bg-red-950/40 border-red-800/50 text-red-300 font-medium'
+        : 'bg-slate-800 border-slate-700 text-slate-400'
+    return (
+      <span className={clsx('inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border', cls)}>
+        {ok ? <CheckCircle className="w-3 h-3" /> : failed > 0 ? <XCircle className="w-3 h-3" /> : null}
+        {passed}/{total} pass
+      </span>
+    )
+  }
+
+  // analysis: acceptance_checklist length
+  if (Array.isArray(out.acceptance_checklist)) {
+    const n = out.acceptance_checklist.length
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-blue-950/40 border border-blue-800/50 text-blue-300">
+        checklist · {n} items
+      </span>
+    )
+  }
+
+  // orchestrator review fail with retry_instruction → loopback signal
+  if (typeof out.retry_instruction === 'string' && out.retry_instruction.trim()) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-amber-950/40 border border-amber-800/50 text-amber-300">
+        <RotateCcw className="w-3 h-3" />
+        loopback
+      </span>
+    )
+  }
+
+  // orchestrator review with issues
+  if (Array.isArray(out.issues) && out.issues.length > 0) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-amber-950/40 border border-amber-800/50 text-amber-300">
+        <AlertCircle className="w-3 h-3" />
+        {out.issues.length} issues
+      </span>
+    )
+  }
+
+  // orchestrator plan
+  if (typeof out.goal === 'string' && out.goal.trim()) {
+    const goalPreview = out.goal.length > 60 ? out.goal.slice(0, 60) + '…' : out.goal
+    return (
+      <span className="text-xs text-slate-400" title={out.goal}>
+        <span className="text-slate-500">goal:</span> {goalPreview}
+      </span>
+    )
+  }
+
+  // shell_exec / build / verify wrapping success+exit_code
+  if (typeof out.success === 'boolean') {
+    const exit = typeof out.exit_code === 'number' ? out.exit_code : null
+    if (out.success) {
+      return (
+        <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-green-950/40 border border-green-800/50 text-green-300">
+          <CheckCircle className="w-3 h-3" />
+          ok{exit !== null && exit !== 0 ? ` (exit ${exit})` : ''}
+        </span>
+      )
+    }
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-red-950/40 border border-red-800/50 text-red-300 font-medium">
+        <XCircle className="w-3 h-3" />
+        {exit !== null ? `exit ${exit}` : 'failed'}
+      </span>
+    )
+  }
+
+  // agent_with_tools final_text
+  if (typeof out.final_text === 'string' && out.final_text.trim()) {
+    return (
+      <span className="text-xs text-slate-400">
+        <span className="text-slate-500">result:</span> {out.final_text.length} chars
+      </span>
+    )
+  }
+
+  // task_md_input
+  if (typeof out.feat_id === 'string' && typeof out.title === 'string') {
+    const titlePreview = out.title.length > 40 ? out.title.slice(0, 40) + '…' : out.title
+    return (
+      <span className="text-xs text-slate-400">
+        <span className="font-mono text-slate-500">{out.feat_id}</span> {titlePreview}
+      </span>
+    )
+  }
+
+  // Fallback: field count
+  const keys = Object.keys(out).filter(k => !k.startsWith('_'))
+  return (
+    <span className="text-xs text-slate-500 font-mono">
+      {keys.length} {keys.length === 1 ? 'поле' : keys.length < 5 ? 'поля' : 'полей'}
+    </span>
+  )
+}
+
+/**
+ * Full-width expand panel attached to a block row. Sequential sections, each
+ * shown only when the underlying data exists:
+ *   1. Iterations — table of LLM iterations + tool calls (LLM blocks only)
+ *   2. Output — structured fields card (always for completed blocks)
+ *   3. Input — collapsed by default, often just upstream-output passthrough
+ *
+ * Layout is full-width inside expand-row so structured fields breathe instead
+ * of cramping into a narrow column. The main row shows a compact summary chip
+ * via {@link BlockSummaryChip}; details live here in expand-row.
+ */
+function BlockExpandedDetail({ block, calls, llmCalls, runId }: { block: BlockStatus; calls: ToolCallEntry[]; llmCalls?: LlmCallEntry[]; runId?: string }) {
+  const [inputOpen, setInputOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const hasIterations = calls.length > 0
+  const hasOutput = !!block.output && Object.keys(block.output).length > 0
+  const hasInput = !!block.input && Object.keys(block.input).length > 0
+
+  const copyAsMd = useCallback(async () => {
+    if (!runId) return
+    try {
+      const resp = await fetch(`/api/runs/${runId}/report?format=md&block=${encodeURIComponent(block.blockId)}`, {
+        credentials: 'include',
+      })
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      const text = await resp.text()
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (e) {
+      console.error('Copy block as MD failed:', e)
+    }
+  }, [block.blockId, runId])
+
+  return (
+    <div className="border-t border-slate-800 bg-slate-950/40">
+      {/* Copy-as-MD button — for transfer to another LLM */}
+      {runId && (
+        <div className="flex justify-end px-5 pt-2">
+          <button
+            type="button"
+            onClick={copyAsMd}
+            className={clsx(
+              'flex items-center gap-1.5 text-[10px] uppercase tracking-wide px-2 py-1 rounded border transition-colors',
+              copied
+                ? 'bg-green-950/40 border-green-800/50 text-green-300'
+                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+            )}
+            title="Скопировать блок как Markdown (для передачи в другой LLM)"
+          >
+            {copied
+              ? <><Check className="w-3 h-3" /> Скопировано</>
+              : <><Copy className="w-3 h-3" /> Copy as MD</>}
+          </button>
+        </div>
+      )}
+
+      {hasIterations && (
+        <IterationsPanel calls={calls} llmCalls={llmCalls} />
+      )}
+
+      {hasOutput && (
+        <section className="px-5 py-4 border-t border-slate-800/60">
+          <h4 className="text-[10px] uppercase tracking-wide text-slate-400 font-medium mb-2">Output</h4>
+          <StructuredOutput output={block.output!} />
+        </section>
+      )}
+
+      {hasInput && (
+        <section className="px-5 py-3 border-t border-slate-800/60">
+          <button
+            type="button"
+            onClick={() => setInputOpen(v => !v)}
+            className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-slate-500 hover:text-slate-300 font-medium transition-colors"
+          >
+            {inputOpen
+              ? <ChevronDown className="w-3 h-3" />
+              : <ChevronRight className="w-3 h-3" />}
+            Input
+            <span className="text-slate-600 normal-case font-normal">({Object.keys(block.input!).length} {Object.keys(block.input!).length === 1 ? 'поле' : 'полей'})</span>
+          </button>
+          {inputOpen && (
+            <div className="mt-2">
+              <StructuredOutput output={block.input!} />
+            </div>
+          )}
+        </section>
+      )}
+    </div>
+  )
+}
+
+export default function BlockProgressTable({ blockStatuses, onReviewApproval, onRelaunchFromBlock, snapshots, toolCalls, llmCalls, runId }: Props) {
   const [expandedBlocks, setExpandedBlocks] = useState<Set<string>>(new Set())
 
   const toggleBlock = useCallback((blockId: string) => {
@@ -472,8 +939,7 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Блок</th>
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Статус</th>
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Длительность</th>
-              <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Вход</th>
-              <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Выход</th>
+              <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Сводка</th>
               {(onReviewApproval || onRelaunchFromBlock) && (
                 <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Действия</th>
               )}
@@ -487,7 +953,7 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
               const iterCount = new Set(blockCalls.map(tc => tc.iteration)).size
               const isExpanded = expandedBlocks.has(block.blockId)
               const hasActionsCol = !!(onReviewApproval || onRelaunchFromBlock)
-              const colSpan = hasActionsCol ? 7 : 6
+              const colSpan = hasActionsCol ? 6 : 5
 
               return (
                 <Fragment key={block.blockId}>
@@ -547,7 +1013,7 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                       {block.status === 'running' && block.progressDetail && (
                         <div className="mt-1 text-[11px] text-blue-400/80 font-mono">{block.progressDetail}</div>
                       )}
-                      {blockCalls.length > 0 && (
+                      {(blockCalls.length > 0 || block.output || block.input) && (
                         <button
                           type="button"
                           onClick={() => toggleBlock(block.blockId)}
@@ -556,7 +1022,9 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                           {isExpanded
                             ? <ChevronDown className="w-3 h-3" />
                             : <ChevronRight className="w-3 h-3" />}
-                          {iterCount} итер. · {blockCalls.length} вызовов
+                          {blockCalls.length > 0
+                            ? <>{iterCount} итер. · {blockCalls.length} вызовов</>
+                            : <>детали</>}
                         </button>
                       )}
                     </td>
@@ -571,11 +1039,8 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                         <span className="text-xs text-slate-600">—</span>
                       )}
                     </td>
-                    <td className="px-5 py-3.5 max-w-xs">
-                      <OutputCell output={block.input} />
-                    </td>
-                    <td className="px-5 py-3.5 max-w-xs">
-                      <OutputCell output={block.output} />
+                    <td className="px-5 py-3.5 max-w-md">
+                      <BlockSummaryChip block={block} />
                     </td>
                     {hasActionsCol && (
                       <td className="px-5 py-3.5">
@@ -602,12 +1067,14 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                       </td>
                     )}
                   </tr>
-                  {isExpanded && blockCalls.length > 0 && (
+                  {isExpanded && (
                     <tr>
                       <td colSpan={colSpan} className="p-0">
-                        <IterationsPanel
+                        <BlockExpandedDetail
+                          block={block}
                           calls={blockCalls}
                           llmCalls={llmCalls?.filter(lc => lc.blockId === block.blockId)}
+                          runId={runId}
                         />
                       </td>
                     </tr>
