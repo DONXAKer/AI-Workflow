@@ -258,7 +258,8 @@
       "Read(//Users/home/.claude/**)",
       "Bash(launchctl unload *)",
       "Bash(launchctl load *)",
-      "Bash(launchctl list *)"
+      "Bash(launchctl list *)",
+      "Bash(lsof -nP -iTCP -sTCP:LISTEN)"
       "Read(//Users/home/.claude/**)",
       "Bash(cp \"D:/Проекты/AI-Workflow/docs/feature-pipeline-template.yaml\" \"D:/WarCard/.ai-workflow/pipelines/_template_test.yaml\")",
       "Bash(cd /tmp)",
