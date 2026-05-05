@@ -253,7 +253,9 @@
       "Bash(/Users/home/Code/AI-Workflow/workflow-core/gradlew --project-dir /Users/home/Code/AI-Workflow/workflow-core compileJava compileTestJava --no-daemon -q)",
       "Bash(/Users/home/Code/AI-Workflow/workflow-core/gradlew --project-dir /Users/home/Code/AI-Workflow/workflow-core test --no-daemon -q --tests '*ModelPresetResolver*' --tests '*LlmClient*' --tests '*AnalysisBlock*' --tests '*OrchestratorBlock*' --tests '*VerifyBlock*')",
       "Bash(/Users/home/Code/AI-Workflow/workflow-core/gradlew --project-dir /Users/home/Code/AI-Workflow/workflow-core test --no-daemon -q)",
-      "Bash(/Users/home/Code/AI-Workflow/workflow-core/gradlew --project-dir /Users/home/Code/AI-Workflow/workflow-core test --no-daemon -q --rerun)"
+      "Bash(/Users/home/Code/AI-Workflow/workflow-core/gradlew --project-dir /Users/home/Code/AI-Workflow/workflow-core test --no-daemon -q --rerun)",
+      "Bash(shasum -a 256 workflow-core/config/*.yaml)",
+      "Read(//Users/home/.claude/**)"
     ]
   }
 }

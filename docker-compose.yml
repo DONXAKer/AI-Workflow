@@ -9,15 +9,22 @@ services:
       - ${PROJECTS_ROOT}:/projects:rw
       - gradle-cache:/root/.gradle
       - ${HOME}/.local/share/claude:/home/claude/.local/share/claude:ro
-      - ${HOME}/.claude:/home/claude/.claude:ro
+      - ${HOME}/.claude:/home/claude/.claude:rw
       - ${HOME}/.claude.json:/home/claude/.claude.json:rw
     environment:
       WORKFLOW_MODE: gui
       BROWSE_ROOT_PATH: /projects
       WORKFLOW_BOOTSTRAP_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
-      ANTHROPIC_API_KEY: ${CLAUDE_OAUTH_TOKEN}
+      # ANTHROPIC_API_KEY intentionally NOT set: the OAuth token from
+      # ~/.claude/.credentials.json is used by the Claude CLI for the Max
+      # subscription. A non-empty ANTHROPIC_API_KEY would force "external API
+      # key" mode and reject the OAuth token.
       CLAUDE_BIN: claude-safe
+      GIT_AUTHOR_NAME: ${GIT_AUTHOR_NAME:-AI-Workflow}
+      GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-ai-workflow@local}
+      GIT_COMMITTER_NAME: ${GIT_AUTHOR_NAME:-AI-Workflow}
+      GIT_COMMITTER_EMAIL: ${GIT_AUTHOR_EMAIL:-ai-workflow@local}
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       YOUTRACK_URL: ${YOUTRACK_URL}
       YOUTRACK_TOKEN: ${YOUTRACK_TOKEN}

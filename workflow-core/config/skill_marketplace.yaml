@@ -183,7 +183,7 @@ pipeline:
     depends_on:
       - git_setup
     agent:
-      model: google/gemini-2.5-flash
+      model: smart
       system_prompt: |
         Всегда отвечай на русском языке.
 
