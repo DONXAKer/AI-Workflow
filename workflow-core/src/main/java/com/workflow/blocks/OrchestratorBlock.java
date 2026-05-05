@@ -272,11 +272,43 @@ public class OrchestratorBlock implements Block {
         }
 
         // Append loopback feedback from previous review attempt
-        if (input.get("_loopback") instanceof Map<?, ?> lb && !lb.isEmpty()) {
+        boolean isLoopbackIteration = input.get("_loopback") instanceof Map<?, ?> lb && !lb.isEmpty();
+        if (isLoopbackIteration) {
+            Map<?, ?> lb = (Map<?, ?>) input.get("_loopback");
             Object prevIssues = lb.get("issues");
             if (prevIssues != null && !prevIssues.toString().isBlank()) {
                 userMsg.append("## Issues from previous review attempt\n")
                     .append(prevIssues).append("\n\n");
+            }
+
+            // PR2: pull previous review's checklist_status from run.outputs (overwritten on
+            // next save, but still present at this point in the loop). Lets reviewer focus
+            // only on previously-failed items + diff for regressions.
+            List<Map<String, Object>> prevStatus = loadPreviousChecklistStatus(blockConfig.getId(), run);
+            if (!prevStatus.isEmpty()) {
+                userMsg.append("## Previous review checklist_status (focus on passed=false; trust passed=true unless diff contradicts)\n");
+                userMsg.append("| id | passed | fix |\n");
+                userMsg.append("|---|---|---|\n");
+                for (Map<String, Object> ps : prevStatus) {
+                    userMsg.append("| ").append(ps.getOrDefault("id", "?"))
+                        .append(" | ").append(ps.getOrDefault("passed", "?"))
+                        .append(" | ").append(String.valueOf(ps.getOrDefault("fix", ""))
+                            .replace("|", "\\|").replace("\n", " "))
+                        .append(" |\n");
+                }
+                userMsg.append('\n');
+            }
+
+            // PR2: list files modified by latest codegen invocation (from ToolCallAudit).
+            // Reviewer can focus diff inspection on these files instead of re-Glob'ing.
+            String targetBlockId = resolveLoopbackTargetId(blockConfig);
+            if (targetBlockId != null && !targetBlockId.isBlank()) {
+                List<String> changedFiles = findFilesChangedByLastInvocation(run.getId(), targetBlockId);
+                if (!changedFiles.isEmpty()) {
+                    userMsg.append("## Files changed by last `").append(targetBlockId).append("` iteration\n");
+                    for (String f : changedFiles) userMsg.append("- ").append(f).append('\n');
+                    userMsg.append('\n');
+                }
             }
         }
 
@@ -380,6 +412,82 @@ public class OrchestratorBlock implements Block {
             if (o instanceof Map<?, ?> m) out.add((Map<String, Object>) m);
         }
         return out;
+    }
+
+    /**
+     * Reads the previous review attempt's {@code checklist_status} from the current
+     * review block's own output in {@code run.outputs}. The runner overwrites this
+     * output once review iteration N completes, but at the start of iteration N
+     * the iteration N-1 output is still present.
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> loadPreviousChecklistStatus(String reviewBlockId, PipelineRun run) {
+        if (run == null || run.getOutputs() == null) return List.of();
+        for (com.workflow.core.BlockOutput bo : run.getOutputs()) {
+            if (bo == null || !reviewBlockId.equals(bo.getBlockId())) continue;
+            try {
+                Map<String, Object> data = objectMapper.readValue(bo.getOutputJson(),
+                    new TypeReference<Map<String, Object>>() {});
+                Object cs = data.get("checklist_status");
+                if (cs instanceof List<?> l && !l.isEmpty()) return castChecklist(l);
+            } catch (Exception ignore) { /* stale or wrong shape */ }
+        }
+        return List.of();
+    }
+
+    /** Pulls the loopback target block id from {@code verify.on_fail.target}. */
+    private String resolveLoopbackTargetId(BlockConfig blockConfig) {
+        if (blockConfig == null) return null;
+        var verify = blockConfig.getVerify();
+        if (verify == null) return null;
+        var onFail = verify.getOnFail();
+        if (onFail == null) return null;
+        return onFail.getTarget();
+    }
+
+    /**
+     * Returns unique file paths touched by Write/Edit tool calls in the most recent
+     * invocation of {@code targetBlockId} (codegen). "Most recent invocation" =
+     * audit records since the latest {@code iteration=1} marker.
+     */
+    private List<String> findFilesChangedByLastInvocation(UUID runId, String targetBlockId) {
+        if (auditRepository == null || runId == null || targetBlockId == null) return List.of();
+        List<com.workflow.tools.ToolCallAudit> records;
+        try {
+            records = auditRepository.findByRunIdAndBlockIdOrderByTimestampAsc(runId, targetBlockId);
+        } catch (Exception e) {
+            return List.of();
+        }
+        if (records == null || records.isEmpty()) return List.of();
+        // Find start index of latest invocation: walk backward, the first iteration=1 marker is it.
+        int start = 0;
+        for (int i = records.size() - 1; i >= 0; i--) {
+            Integer it = records.get(i).getIteration();
+            if (it != null && it == 1) { start = i; break; }
+        }
+        java.util.LinkedHashSet<String> files = new java.util.LinkedHashSet<>();
+        for (int i = start; i < records.size(); i++) {
+            var r = records.get(i);
+            String tool = r.getToolName();
+            if (!"Write".equals(tool) && !"Edit".equals(tool)) continue;
+            String path = extractFilePathFromToolInput(r.getInputJson());
+            if (path != null && !path.isBlank()) files.add(path);
+        }
+        return new ArrayList<>(files);
+    }
+
+    /** Pulls {@code file_path} (Claude Code convention) from a tool-call inputJson. */
+    private String extractFilePathFromToolInput(String inputJson) {
+        if (inputJson == null || inputJson.isBlank()) return null;
+        try {
+            Map<String, Object> parsed = objectMapper.readValue(inputJson,
+                new TypeReference<Map<String, Object>>() {});
+            for (String key : List.of("file_path", "path", "filename")) {
+                Object v = parsed.get(key);
+                if (v instanceof String s && !s.isBlank()) return s;
+            }
+        } catch (Exception ignore) {}
+        return null;
     }
 
     /** Pure-function output of {@link #computeReviewVerdict}. */
