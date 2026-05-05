@@ -80,6 +80,13 @@ Smart-tier additions (commit `f2e9882`):
 - `agent_verify` — LLM-driven verification against the analysis acceptance checklist
 - `orchestrator` — plan/review/handoff coordinator over downstream impl blocks
 
+**Review-mode schema (PR1+PR2, May 2026 — `OrchestratorBlock`):** `mode: review` теперь возвращает structured per-item output вместо freeform `issues`:
+- Reviewer пишет `checklist_status: [{id, passed, evidence, fix}]` строго по id-ам из `analysis.acceptance_checklist` + `regressions: []` для функциональных поломок (build/test broken). Новые id создавать запрещено промптом — это закрывает источник patho-loopback'а опуса (раньше каждая итерация находила «новое»).
+- Cascade fallback: `analysis.acceptance_checklist` → любой upstream блок с тем же ключом → auto-derive из `plan.definition_of_done` (split по newlines, synth ids `dod-N`) → legacy freeform-режим. Default — без opt-in, работает на всех pipelines.
+- `passed/issues/retry_instruction/action` вычисляются кодом (`computeReviewVerdict`): nice_to_have failures игнорируются, critical/important + любая регрессия → retry; reviewer's `escalate` уважается только если он выставил это сам (architectural). Backwards-compat для существующих `inject_context: $.review.issues` сохранена.
+- На iteration N>1 (loopback) review получает `previous_checklist_status` (focus on `passed=false`) + список файлов из ToolCallAudit (Write/Edit за последнюю invocation `verify.on_fail.target`).
+- Тестируется в `OrchestratorBlockTest` (8 unit-тестов на pure function `computeReviewVerdict`).
+
 ### LLM routing & model presets
 
 LLM calls take one of two routes — OpenRouter (default) or the Claude Code CLI when `CLAUDE_CODE_CLI` integration is the project's default provider (memory `project_llm_routing.md`). Block configs reference **named tiers**, not raw model IDs, so swapping a model is a single-place change. `ModelPresetResolver` keeps two maps so each route picks a route-appropriate model:
