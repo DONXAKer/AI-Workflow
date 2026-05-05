@@ -56,6 +56,9 @@ public class PipelineRunner {
     private ObjectMapper objectMapper;
 
     @Autowired(required = false)
+    private com.workflow.project.ProjectRepository projectRepository;
+
+    @Autowired(required = false)
     private RunWebSocketHandler wsHandler;
 
     @Autowired
@@ -468,24 +471,36 @@ public class PipelineRunner {
      * Supported operators: ==, !=, >, <, >=, <=
      */
     /**
-     * Reads {@code provider} from the run's named inputs and converts it to the
-     * {@link com.workflow.llm.LlmProvider} enum. Null when the value is missing or
-     * unparseable — in that case {@link com.workflow.llm.LlmClient} falls back to
-     * its existing model-name-based routing.
+     * Resolves the LLM provider for this run. Resolution order:
+     * 1. {@code provider} field in run inputs (per-run override)
+     * 2. {@link com.workflow.project.Project#getEffectiveDefaultProvider()} for the run's project
+     * 3. {@code null} → {@link com.workflow.llm.LlmClient} falls back to its model-name-based routing
      */
     @SuppressWarnings("unchecked")
     private com.workflow.llm.LlmProvider resolveRunProvider(PipelineRun run) {
         String inputsJson = run.getRunInputsJson();
-        if (inputsJson == null || inputsJson.isBlank()) return null;
-        try {
-            Map<String, Object> inputs = objectMapper.readValue(
-                inputsJson, new TypeReference<Map<String, Object>>() {});
-            Object raw = inputs.get("provider");
-            if (raw == null) return null;
-            return com.workflow.llm.LlmProvider.valueOf(raw.toString().trim().toUpperCase());
-        } catch (Exception e) {
-            return null;
+        if (inputsJson != null && !inputsJson.isBlank()) {
+            try {
+                Map<String, Object> inputs = objectMapper.readValue(
+                    inputsJson, new TypeReference<Map<String, Object>>() {});
+                Object raw = inputs.get("provider");
+                if (raw != null) {
+                    return com.workflow.llm.LlmProvider.valueOf(raw.toString().trim().toUpperCase());
+                }
+            } catch (Exception ignore) {
+                // fall through to project-level default
+            }
         }
+        if (projectRepository != null && run.getProjectSlug() != null) {
+            try {
+                return projectRepository.findBySlug(run.getProjectSlug())
+                    .map(com.workflow.project.Project::getEffectiveDefaultProvider)
+                    .orElse(null);
+            } catch (Exception ignore) {
+                // ignore, fall back to null
+            }
+        }
+        return null;
     }
 
     private boolean evaluateCondition(String expr, PipelineRun run) {
@@ -776,6 +791,8 @@ public class PipelineRunner {
             }
 
             run.setCurrentBlock(blockId);
+            run.setCurrentOperation("Запущен блок: " + blockId);
+            run.setLastActivityAt(java.time.Instant.now());
             run.setStatus(RunStatus.RUNNING);
             runRepository.save(run);
 
@@ -1041,6 +1058,8 @@ public class PipelineRunner {
         // All blocks done
         run.setStatus(RunStatus.COMPLETED);
         run.setCurrentBlock(null);
+        run.setCurrentOperation(null);
+        run.setLastActivityAt(Instant.now());
         run.setCompletedAt(Instant.now());
         runRepository.save(run);
 

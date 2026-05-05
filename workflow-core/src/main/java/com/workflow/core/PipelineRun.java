@@ -33,6 +33,13 @@ public class PipelineRun {
 
     private String currentBlock;
 
+    /** Sub-block-level activity description, e.g. "codegen iteration 5" or "review pass 2/3". */
+    @Column(columnDefinition = "TEXT")
+    private String currentOperation;
+
+    /** Heartbeat: when the runner last touched the run (block transition or LLM subprocess heartbeat). */
+    private Instant lastActivityAt;
+
     @Column(columnDefinition = "TEXT")
     private String error;
 
@@ -144,6 +151,10 @@ public class PipelineRun {
     public void setStatus(RunStatus status) { this.status = status; }
     public String getCurrentBlock() { return currentBlock; }
     public void setCurrentBlock(String currentBlock) { this.currentBlock = currentBlock; }
+    public String getCurrentOperation() { return currentOperation; }
+    public void setCurrentOperation(String currentOperation) { this.currentOperation = currentOperation; }
+    public Instant getLastActivityAt() { return lastActivityAt; }
+    public void setLastActivityAt(Instant lastActivityAt) { this.lastActivityAt = lastActivityAt; }
     public String getError() { return error; }
     public void setError(String error) { this.error = error; }
     public Instant getStartedAt() { return startedAt; }

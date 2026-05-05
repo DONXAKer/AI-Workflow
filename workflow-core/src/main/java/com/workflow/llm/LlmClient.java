@@ -67,6 +67,9 @@ public class LlmClient {
     @Autowired(required = false)
     private LlmCallRepository llmCallRepository;
 
+    @Autowired(required = false)
+    private com.workflow.core.PipelineRunRepository runRepositoryForHeartbeat;
+
     public String complete(String model, String system, String user, int maxTokens, double temperature) {
         if (shouldUseCli(model)) {
             return completeViaCli(resolveCliModel(model), system, user);
@@ -613,23 +616,58 @@ public class LlmClient {
         Thread outReader = drainStream(proc.getInputStream(), stdoutRef, CLI_MAX_OUTPUT_BYTES);
         Thread errReader = drainStream(proc.getErrorStream(), stderrRef, 32 * 1024);
 
-        boolean finished = proc.waitFor(CLI_TIMEOUT_SEC, TimeUnit.SECONDS);
-        if (!finished) {
-            proc.destroyForcibly();
-            outReader.interrupt();
-            errReader.interrupt();
-            throw new RuntimeException("Claude CLI timed out after " + CLI_TIMEOUT_SEC + "s");
-        }
-        outReader.join(5_000);
-        errReader.join(5_000);
+        // Heartbeat: каждые 10 секунд обновляет run.lastActivityAt + currentOperation
+        // чтобы UI/API могли видеть прогресс долгих CLI-сессий (codegen на Sonnet
+        // регулярно крутится 5-15 минут). Без этого `currentOperation` остаётся
+        // "Запущен блок: codegen" всё это время и не понятно жив ли процесс.
+        long startTime = System.currentTimeMillis();
+        java.util.concurrent.ScheduledExecutorService heartbeat =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "cli-heartbeat");
+                t.setDaemon(true);
+                return t;
+            });
+        heartbeat.scheduleAtFixedRate(() -> {
+            try {
+                if (runRepositoryForHeartbeat == null) return;
+                LlmCallContext.current().ifPresent(ctx -> {
+                    if (ctx.runId() == null) return;
+                    long elapsedSec = (System.currentTimeMillis() - startTime) / 1000;
+                    int bytes = stdoutRef.get().length();
+                    runRepositoryForHeartbeat.findById(ctx.runId()).ifPresent(r -> {
+                        r.setCurrentOperation(String.format(
+                            "CLI [%s]: %ds elapsed, %d stdout bytes",
+                            ctx.blockId() != null ? ctx.blockId() : "?", elapsedSec, bytes));
+                        r.setLastActivityAt(java.time.Instant.now());
+                        runRepositoryForHeartbeat.save(r);
+                    });
+                });
+            } catch (Exception ignore) {
+                // heartbeat must never break the main flow
+            }
+        }, 10, 10, java.util.concurrent.TimeUnit.SECONDS);
 
-        int exit = proc.exitValue();
-        if (exit != 0) {
-            String stderr = stderrRef.get();
-            String msg = stderr.isBlank() ? "" : ": " + (stderr.length() > 1000 ? stderr.substring(0, 1000) + "..." : stderr);
-            throw new RuntimeException("Claude CLI exited " + exit + msg);
+        try {
+            boolean finished = proc.waitFor(CLI_TIMEOUT_SEC, TimeUnit.SECONDS);
+            if (!finished) {
+                proc.destroyForcibly();
+                outReader.interrupt();
+                errReader.interrupt();
+                throw new RuntimeException("Claude CLI timed out after " + CLI_TIMEOUT_SEC + "s");
+            }
+            outReader.join(5_000);
+            errReader.join(5_000);
+
+            int exit = proc.exitValue();
+            if (exit != 0) {
+                String stderr = stderrRef.get();
+                String msg = stderr.isBlank() ? "" : ": " + (stderr.length() > 1000 ? stderr.substring(0, 1000) + "..." : stderr);
+                throw new RuntimeException("Claude CLI exited " + exit + msg);
+            }
+            return stdoutRef.get();
+        } finally {
+            heartbeat.shutdownNow();
         }
-        return stdoutRef.get();
     }
 
     private Thread drainStream(InputStream in, AtomicReference<String> ref, int maxBytes) {
