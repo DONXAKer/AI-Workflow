@@ -19,6 +19,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Duration;
@@ -85,7 +86,10 @@ public class RunReportController {
 
     @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
     @GetMapping("/runs/{runId}/report")
-    public ResponseEntity<byte[]> downloadReport(@PathVariable String runId) {
+    public ResponseEntity<byte[]> downloadReport(
+            @PathVariable String runId,
+            @RequestParam(value = "format", required = false, defaultValue = "html") String format,
+            @RequestParam(value = "block", required = false) String block) {
         UUID id;
         try {
             id = UUID.fromString(runId);
@@ -99,6 +103,17 @@ public class RunReportController {
         List<LlmCall> llmCalls = llmCallRepository.findByRunIdOrderByTimestampAsc(id);
         List<ToolCallAudit> toolCalls = toolCallAuditRepository.findByRunIdOrderByTimestampAsc(id);
 
+        if ("md".equalsIgnoreCase(format) || "markdown".equalsIgnoreCase(format)) {
+            String md = buildMarkdown(run, llmCalls, toolCalls, block);
+            byte[] bytes = md.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            String suffix = (block != null && !block.isBlank()) ? "-" + sanitizeFilename(block) : "";
+            String filename = "run-" + runId.substring(0, 8) + suffix + ".md";
+            return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .contentType(new MediaType("text", "markdown", java.nio.charset.StandardCharsets.UTF_8))
+                .body(bytes);
+        }
+
         String html = buildHtml(run, llmCalls, toolCalls);
         byte[] bytes = html.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
@@ -107,6 +122,10 @@ public class RunReportController {
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
             .contentType(new MediaType("text", "html", java.nio.charset.StandardCharsets.UTF_8))
             .body(bytes);
+    }
+
+    private static String sanitizeFilename(String s) {
+        return s.replaceAll("[^a-zA-Z0-9._-]", "_");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -571,4 +590,267 @@ public class RunReportController {
         }
         </style>
         """;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Markdown generation
+    //
+    // Single canonical format consumed both by the download button and by an
+    // external LLM scraper via `?format=md`. Per-block extraction (`?block=ID`)
+    // returns just the matching `## block` section so a Copy-block-as-MD button
+    // produces the same string the full report would contain for that block.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private String buildMarkdown(PipelineRun run, List<LlmCall> llmCalls,
+                                  List<ToolCallAudit> toolCalls, String blockFilter) {
+        Map<String, List<LlmCall>> llmByBlock = llmCalls.stream()
+            .filter(c -> c.getBlockId() != null)
+            .collect(Collectors.groupingBy(LlmCall::getBlockId));
+        Map<String, List<ToolCallAudit>> toolsByBlock = toolCalls.stream()
+            .filter(c -> c.getBlockId() != null)
+            .collect(Collectors.groupingBy(ToolCallAudit::getBlockId));
+
+        List<BlockOutput> outputs = run.getOutputs() != null ? run.getOutputs() : List.of();
+        List<String> orderedBlocks = outputs.stream()
+            .map(BlockOutput::getBlockId).distinct().collect(Collectors.toList());
+        if (run.getCurrentBlock() != null && !orderedBlocks.contains(run.getCurrentBlock())) {
+            orderedBlocks.add(run.getCurrentBlock());
+        }
+        Map<String, BlockOutput> outputByBlock = outputs.stream()
+            .collect(Collectors.toMap(BlockOutput::getBlockId, o -> o, (a, b) -> b));
+
+        StringBuilder sb = new StringBuilder();
+
+        boolean singleBlock = blockFilter != null && !blockFilter.isBlank();
+
+        if (!singleBlock) {
+            // Run header
+            sb.append("# Run ").append(run.getId()).append(" — ")
+              .append(run.getPipelineName()).append(" (").append(statusLabel(run.getStatus())).append(")\n\n");
+            if (run.getStartedAt() != null) {
+                sb.append("- **Started:** ").append(run.getStartedAt()).append('\n');
+            }
+            if (run.getCompletedAt() != null) {
+                sb.append("- **Completed:** ").append(run.getCompletedAt()).append('\n');
+            }
+            sb.append("- **Duration:** ").append(formatDuration(run.getStartedAt(), run.getCompletedAt())).append('\n');
+            if (run.getProjectSlug() != null && !"default".equals(run.getProjectSlug())) {
+                sb.append("- **Project:** ").append(run.getProjectSlug()).append('\n');
+            }
+            double totalCost = llmCalls.stream().mapToDouble(LlmCall::getCostUsd).sum();
+            if (totalCost > 0) sb.append("- **Total LLM cost:** $").append(String.format("%.4f", totalCost)).append('\n');
+            if (!llmCalls.isEmpty()) {
+                long tIn = llmCalls.stream().mapToLong(LlmCall::getTokensIn).sum();
+                long tOut = llmCalls.stream().mapToLong(LlmCall::getTokensOut).sum();
+                sb.append("- **Tokens:** ").append(String.format("%,d", tIn)).append(" in / ")
+                  .append(String.format("%,d", tOut)).append(" out\n");
+            }
+            sb.append('\n');
+
+            if (run.getRequirement() != null && !run.getRequirement().isBlank()) {
+                sb.append("**Requirement:** ").append(run.getRequirement()).append("\n\n");
+            }
+            if (run.getError() != null && !run.getError().isBlank()) {
+                sb.append("**Error:**\n```\n").append(run.getError()).append("\n```\n\n");
+            }
+            sb.append("---\n\n");
+        }
+
+        // Blocks
+        for (String blockId : orderedBlocks) {
+            if (singleBlock && !blockId.equals(blockFilter)) continue;
+            renderBlockMd(sb, blockId, outputByBlock.get(blockId),
+                llmByBlock.getOrDefault(blockId, List.of()),
+                toolsByBlock.getOrDefault(blockId, List.of()));
+        }
+
+        if (singleBlock && sb.length() == 0) {
+            sb.append("# Block `").append(blockFilter).append("` not found in run\n");
+        }
+
+        return sb.toString();
+    }
+
+    private void renderBlockMd(StringBuilder sb, String blockId, BlockOutput bo,
+                                List<LlmCall> blockLlm, List<ToolCallAudit> blockTools) {
+        // Block header with inline metadata
+        sb.append("## ").append(blockId);
+        String label = blockLabel(blockId);
+        if (label != null && !label.equals(blockId)) sb.append(" (").append(label).append(')');
+        sb.append("\n\n");
+
+        // Inline metadata line
+        List<String> meta = new ArrayList<>();
+        if (!blockLlm.isEmpty()) {
+            String model = blockLlm.get(0).getModel();
+            if (model != null) meta.add("model: " + model);
+            String provider = blockLlm.get(0).getProvider() != null ? blockLlm.get(0).getProvider().name() : null;
+            if (provider != null) meta.add("provider: " + provider);
+            int iters = (int) blockLlm.stream().filter(c -> c.getIteration() > 0)
+                .mapToInt(LlmCall::getIteration).distinct().count();
+            if (iters > 0) meta.add(iters + " iterations");
+            double cost = blockLlm.stream().mapToDouble(LlmCall::getCostUsd).sum();
+            if (cost > 0) meta.add(String.format("$%.4f", cost));
+            int durMs = blockLlm.stream().mapToInt(LlmCall::getDurationMs).sum();
+            if (durMs > 0) meta.add(formatMs(durMs));
+        }
+        if (!meta.isEmpty()) {
+            sb.append("`").append(String.join(" · ", meta)).append("`\n\n");
+        }
+
+        // Iterations table (only if there are tool-use iterations)
+        if (!blockTools.isEmpty()) {
+            Map<Integer, List<ToolCallAudit>> byIter = blockTools.stream()
+                .collect(Collectors.groupingBy(t -> t.getIteration() == null ? 0 : t.getIteration()));
+            sb.append("### Iterations\n\n");
+            sb.append("| Iter | Tools | Errors | Duration |\n");
+            sb.append("|------|-------|--------|----------|\n");
+            for (Map.Entry<Integer, List<ToolCallAudit>> e : byIter.entrySet().stream()
+                    .sorted(Map.Entry.comparingByKey()).collect(Collectors.toList())) {
+                List<ToolCallAudit> calls = e.getValue();
+                Map<String, Long> counts = calls.stream()
+                    .collect(Collectors.groupingBy(ToolCallAudit::getToolName, Collectors.counting()));
+                String toolStr = counts.entrySet().stream()
+                    .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                    .map(en -> en.getValue() + "×" + en.getKey())
+                    .collect(Collectors.joining(", "));
+                long errs = calls.stream().filter(ToolCallAudit::isError).count();
+                int dur = calls.stream().mapToInt(ToolCallAudit::getDurationMs).sum();
+                sb.append("| ").append(e.getKey()).append(" | ").append(toolStr)
+                  .append(" | ").append(errs > 0 ? errs : "—")
+                  .append(" | ").append(formatMs(dur)).append(" |\n");
+            }
+            sb.append('\n');
+        }
+
+        // Output as structured fields
+        if (bo != null && bo.getOutputJson() != null) {
+            Map<String, Object> output = parseJson(bo.getOutputJson());
+            if (output != null && !output.isEmpty()) {
+                sb.append("### Output\n\n");
+                renderFieldsMd(sb, output);
+            }
+        }
+
+        sb.append("\n---\n\n");
+    }
+
+    private void renderFieldsMd(StringBuilder sb, Map<String, Object> output) {
+        // Render known important fields first, in priority order
+        String[] PRIORITY_FIELDS = {
+            "title", "feat_id", "complexity", "needs_clarification",
+            "as_is", "to_be", "out_of_scope", "acceptance",
+            "technical_approach", "affected_components", "acceptance_checklist",
+            "goal", "approach", "files_to_touch", "definition_of_done", "tools_to_use",
+            "retry_instruction", "issues",
+            "passed_items", "failed_items", "verification_results", "pass_threshold",
+            "final_text",
+            "success", "exit_code", "duration_ms", "stdout", "stderr", "command",
+            "_skipped", "reason", "status",
+        };
+        Set<String> known = new HashSet<>(Arrays.asList(PRIORITY_FIELDS));
+        for (String key : PRIORITY_FIELDS) {
+            if (output.containsKey(key)) {
+                renderFieldMd(sb, key, output.get(key));
+            }
+        }
+        // Unknown fields go to a code block
+        Map<String, Object> unknown = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : output.entrySet()) {
+            if (!known.contains(e.getKey()) && !e.getKey().startsWith("_") && e.getValue() != null) {
+                unknown.put(e.getKey(), e.getValue());
+            }
+        }
+        if (!unknown.isEmpty()) {
+            sb.append("**Other fields:**\n```json\n");
+            try {
+                sb.append(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(unknown));
+            } catch (Exception ex) {
+                sb.append(unknown.toString());
+            }
+            sb.append("\n```\n\n");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void renderFieldMd(StringBuilder sb, String key, Object value) {
+        if (value == null) return;
+        String label = fieldLabel(key);
+        // Lists
+        if (value instanceof List<?>) {
+            List<?> list = (List<?>) value;
+            if (list.isEmpty()) return;
+            sb.append("**").append(label).append(":**\n");
+            for (Object item : list) {
+                if (item instanceof Map) {
+                    Map<String, Object> obj = (Map<String, Object>) item;
+                    String priority = obj.get("priority") != null ? obj.get("priority").toString() : null;
+                    String status = obj.get("status") != null ? obj.get("status").toString() : null;
+                    Object main = obj.getOrDefault("item",
+                        obj.getOrDefault("requirement",
+                            obj.getOrDefault("description",
+                                obj.getOrDefault("text", obj.values().iterator().next()))));
+                    sb.append("- ");
+                    if (priority != null) sb.append('[').append(priority).append("] ");
+                    if ("pass".equals(status)) sb.append("✓ ");
+                    else if ("fail".equals(status)) sb.append("✗ ");
+                    sb.append(main).append('\n');
+                } else {
+                    sb.append("- ").append(item).append('\n');
+                }
+            }
+            sb.append('\n');
+            return;
+        }
+        // Multiline strings
+        if (value instanceof String) {
+            String text = ((String) value).trim();
+            if (text.isEmpty()) return;
+            if (text.contains("\n") || text.length() > 80) {
+                sb.append("**").append(label).append(":**\n```\n").append(text).append("\n```\n\n");
+            } else {
+                sb.append("- **").append(label).append(":** ").append(text).append('\n');
+            }
+            return;
+        }
+        // Booleans
+        if (value instanceof Boolean) {
+            sb.append("- **").append(label).append(":** ").append(((Boolean) value) ? "✓" : "✗").append('\n');
+            return;
+        }
+        // Numbers / fallback
+        sb.append("- **").append(label).append(":** ").append(value).append('\n');
+    }
+
+    private static String fieldLabel(String key) {
+        return switch (key) {
+            case "as_is" -> "Как сейчас";
+            case "to_be" -> "Как надо";
+            case "out_of_scope" -> "Вне scope";
+            case "acceptance" -> "Критерии приёмки";
+            case "acceptance_checklist" -> "Acceptance checklist";
+            case "technical_approach" -> "Технический подход";
+            case "affected_components" -> "Затрагиваемые компоненты";
+            case "definition_of_done" -> "Definition of Done";
+            case "files_to_touch" -> "Files to touch";
+            case "tools_to_use" -> "Tools to use";
+            case "retry_instruction" -> "Retry instruction";
+            case "passed_items" -> "Passed";
+            case "failed_items" -> "Failed";
+            case "verification_results" -> "Verification results";
+            case "pass_threshold" -> "Pass threshold";
+            case "final_text" -> "Result";
+            case "exit_code" -> "Exit code";
+            case "duration_ms" -> "Duration (ms)";
+            case "_skipped" -> "Skipped";
+            default -> key;
+        };
+    }
+
+    private static String formatMs(int ms) {
+        if (ms < 1000) return ms + "ms";
+        long s = ms / 1000;
+        long m = s / 60;
+        if (m == 0) return s + "s";
+        return m + "m " + (s % 60) + "s";
+    }
 }

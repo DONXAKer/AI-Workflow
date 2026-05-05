@@ -9,7 +9,6 @@ import BlockProgressTable from '../components/BlockProgressTable'
 import ApprovalDialog from '../components/ApprovalDialog'
 import ReturnDialog from '../components/ReturnDialog'
 import LoopbackTimeline from '../components/LoopbackTimeline'
-import AllIterationsTable from '../components/AllIterationsTable'
 import LogPanel from '../components/LogPanel'
 import { parseConfigSnapshot } from '../utils/configSnapshot'
 import { blockIdLabel } from '../utils/blockLabels'
@@ -73,7 +72,7 @@ export default function RunPage() {
   const [showApprovalDialog, setShowApprovalDialog] = useState(false)
   const [logs, setLogs] = useState<string[]>([])
   const [wsConnected, setWsConnected] = useState(false)
-  const [activeTab, setActiveTab] = useState<'blocks' | 'timeline' | 'iterations' | 'logs' | 'summary'>('blocks')
+  const [activeTab, setActiveTab] = useState<'blocks' | 'timeline' | 'logs' | 'summary'>('blocks')
   const [toolCalls, setToolCalls] = useState<ToolCallEntry[]>([])
   const [llmCalls, setLlmCalls] = useState<LlmCallEntry[]>([])
   const [showReturnDialog, setShowReturnDialog] = useState(false)
@@ -582,7 +581,7 @@ export default function RunPage() {
               </button>
             )}
 
-            {/* Download report */}
+            {/* Download report (HTML) */}
             {runId && (
               <a
                 href={isHistorical ? `/api/runs/${runId}/report` : undefined}
@@ -597,7 +596,20 @@ export default function RunPage() {
                 title={isHistorical ? 'Скачать HTML-отчёт о запуске' : 'Отчёт будет доступен после завершения'}
               >
                 <Download className="w-3.5 h-3.5" />
-                Отчёт
+                HTML
+              </a>
+            )}
+
+            {/* Download report as Markdown — for LLM-friendly review */}
+            {runId && (
+              <a
+                href={`/api/runs/${runId}/report?format=md`}
+                download
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
+                title="Скачать run как Markdown — оптимизировано для передачи другому LLM"
+              >
+                <Download className="w-3.5 h-3.5" />
+                MD
               </a>
             )}
           </div>
@@ -631,18 +643,56 @@ export default function RunPage() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
               <div>
                 <p className="text-slate-500 text-xs uppercase tracking-wide mb-1">Требование</p>
-                <p className={clsx('text-slate-200 whitespace-pre-wrap', !requirementExpanded && 'line-clamp-3')}>
-                  {run.requirement || '—'}
-                </p>
-                {(run.requirement?.length ?? 0) > 120 && (
-                  <button
-                    type="button"
-                    onClick={() => setRequirementExpanded(v => !v)}
-                    className="mt-1 text-xs text-slate-500 hover:text-slate-300 transition-colors"
-                  >
-                    {requirementExpanded ? 'Свернуть' : 'Показать полностью'}
-                  </button>
-                )}
+                {(() => {
+                  // Fallback chain:
+                  // 1) run.requirement (legacy text-based runs)
+                  // 2) task_md.title (file-based runs via task_md_input block)
+                  // 3) inputs.task_file (path to task.md, if task_md output not yet present)
+                  // 4) '—' (truly empty)
+                  let displayed: string | null = run.requirement && run.requirement.trim() ? run.requirement : null
+                  let subtitle: string | null = null
+                  if (!displayed && run.outputs) {
+                    const taskMd = run.outputs.find(o => o.blockId === 'task_md')
+                    if (taskMd) {
+                      try {
+                        const parsed = JSON.parse(taskMd.outputJson) as { title?: string; feat_id?: string; slug?: string }
+                        if (parsed.title) {
+                          displayed = parsed.feat_id ? `${parsed.feat_id}: ${parsed.title}` : parsed.title
+                          if (parsed.slug) subtitle = `tasks/active/${parsed.feat_id ?? ''}-${parsed.slug}.md`
+                        }
+                      } catch {}
+                    }
+                  }
+                  if (!displayed && run.runInputsJson) {
+                    try {
+                      const inputs = JSON.parse(run.runInputsJson) as Record<string, unknown>
+                      const taskFile = inputs.task_file
+                      if (typeof taskFile === 'string' && taskFile) {
+                        displayed = taskFile.split('/').pop() ?? taskFile
+                        subtitle = taskFile
+                      }
+                    } catch {}
+                  }
+                  return (
+                    <>
+                      <p className={clsx('text-slate-200 whitespace-pre-wrap', !requirementExpanded && 'line-clamp-3')}>
+                        {displayed || '—'}
+                      </p>
+                      {subtitle && (
+                        <p className="text-xs text-slate-500 font-mono mt-0.5 truncate" title={subtitle}>{subtitle}</p>
+                      )}
+                      {(displayed?.length ?? 0) > 120 && (
+                        <button
+                          type="button"
+                          onClick={() => setRequirementExpanded(v => !v)}
+                          className="mt-1 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+                        >
+                          {requirementExpanded ? 'Свернуть' : 'Показать полностью'}
+                        </button>
+                      )}
+                    </>
+                  )
+                })()}
               </div>
               <div>
                 <p className="text-slate-500 text-xs uppercase tracking-wide mb-1">Текущий блок</p>
@@ -851,24 +901,6 @@ export default function RunPage() {
         >
           История итераций
         </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('iterations')}
-          aria-selected={activeTab === 'iterations'}
-          role="tab"
-          className={clsx(
-            'px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-slate-950',
-            activeTab === 'iterations'
-              ? 'border-blue-500 text-blue-400'
-              : 'border-transparent text-slate-500 hover:text-slate-300'
-          )}
-        >
-          Итерации (таблица)
-          {llmCalls.length > 0 && (
-            <span className="ml-2 text-[10px] text-slate-500 font-mono">{llmCalls.length}</span>
-          )}
-        </button>
         {/* Event Log tab only available for active runs */}
         {!isHistorical && (
           <button
@@ -1040,6 +1072,7 @@ export default function RunPage() {
           snapshots={blockSnapshots}
           toolCalls={toolCalls}
           llmCalls={llmCalls}
+          runId={runId}
           onReviewApproval={!isHistorical && pendingApproval ? (blockId) => {
             if (pendingApproval.blockId === blockId) setShowApprovalDialog(true)
           } : undefined}
@@ -1048,9 +1081,6 @@ export default function RunPage() {
       </div>
       <div className={activeTab === 'timeline' ? undefined : 'hidden'}>
         <LoopbackTimeline loopHistoryJson={run?.loopHistoryJson} />
-      </div>
-      <div className={activeTab === 'iterations' ? undefined : 'hidden'}>
-        <AllIterationsTable llmCalls={llmCalls} toolCalls={toolCalls} />
       </div>
       {!isHistorical && (
         <div className={activeTab === 'logs' ? undefined : 'hidden'}>
