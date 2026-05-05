@@ -255,7 +255,10 @@
       "Bash(/Users/home/Code/AI-Workflow/workflow-core/gradlew --project-dir /Users/home/Code/AI-Workflow/workflow-core test --no-daemon -q)",
       "Bash(/Users/home/Code/AI-Workflow/workflow-core/gradlew --project-dir /Users/home/Code/AI-Workflow/workflow-core test --no-daemon -q --rerun)",
       "Bash(shasum -a 256 workflow-core/config/*.yaml)",
-      "Read(//Users/home/.claude/**)"
+      "Read(//Users/home/.claude/**)",
+      "Bash(launchctl unload *)",
+      "Bash(launchctl load *)",
+      "Bash(launchctl list *)"
     ]
   }
 }
