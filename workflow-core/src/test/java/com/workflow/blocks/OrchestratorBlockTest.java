@@ -171,4 +171,112 @@ class OrchestratorBlockTest {
         bc.setConfig(cfg);
         return bc;
     }
+
+    // ── computeReviewVerdict pure function tests ───────────────────────────────
+
+    @Test
+    void verdict_allPassed_continuePassedTrue() {
+        var v = OrchestratorBlock.computeReviewVerdict(
+            List.of(item("a1", true, "found", ""), item("a2", true, "found", "")),
+            List.of(),
+            Map.of("a1", "critical", "a2", "important"),
+            "retry");
+        assertTrue(v.passed());
+        assertEquals("continue", v.action());
+        assertEquals("", v.issues());
+        assertEquals("", v.retryInstruction());
+    }
+
+    @Test
+    void verdict_criticalFail_retryPassedFalse() {
+        var v = OrchestratorBlock.computeReviewVerdict(
+            List.of(item("a1", false, "missing impl", "Add the X method"),
+                    item("a2", true, "ok", "")),
+            List.of(),
+            Map.of("a1", "critical", "a2", "important"),
+            "retry");
+        assertFalse(v.passed());
+        assertEquals("retry", v.action());
+        assertTrue(v.issues().contains("[critical] a1"));
+        assertTrue(v.retryInstruction().contains("a1: Add the X method"));
+    }
+
+    @Test
+    void verdict_niceToHaveFail_ignored_passedTrue() {
+        // Reproduces SM-001 patho-loopback scenario: opus picks at nice-to-have docs items.
+        // With priority-aware verdict, nice_to_have failures don't block.
+        var v = OrchestratorBlock.computeReviewVerdict(
+            List.of(item("a1", true, "ok", ""),
+                    item("polish-1", false, "no docstrings", "Add docstrings"),
+                    item("polish-2", false, "no comments", "Add comments")),
+            List.of(),
+            Map.of("a1", "critical", "polish-1", "nice_to_have", "polish-2", "nice_to_have"),
+            "retry");
+        assertTrue(v.passed(), "nice_to_have fails must NOT block");
+        assertEquals("continue", v.action());
+        assertEquals("", v.issues());
+    }
+
+    @Test
+    void verdict_regression_alwaysBlocking() {
+        // Even with all checklist items passed, a regression is blocking.
+        var v = OrchestratorBlock.computeReviewVerdict(
+            List.of(item("a1", true, "ok", "")),
+            List.of(Map.of("description", "Build broken", "evidence", "compileJava failed at line 42")),
+            Map.of("a1", "critical"),
+            "retry");
+        assertFalse(v.passed());
+        assertEquals("retry", v.action());
+        assertTrue(v.issues().contains("[REGRESSION] Build broken"));
+        assertTrue(v.retryInstruction().contains("REGRESSION: Build broken"));
+    }
+
+    @Test
+    void verdict_unknownIdDefaultsToImportant_blocks() {
+        // If reviewer cites an id not in priorityById (shouldn't happen but defensive),
+        // we treat it as important and let it block.
+        var v = OrchestratorBlock.computeReviewVerdict(
+            List.of(item("ghost-id", false, "?", "fix?")),
+            List.of(),
+            Map.of(),
+            "retry");
+        assertFalse(v.passed());
+        assertEquals("retry", v.action());
+    }
+
+    @Test
+    void verdict_escalateRespectedWhenReviewerSets() {
+        // Reviewer explicitly escalated (architectural problem). Verdict preserves it.
+        var v = OrchestratorBlock.computeReviewVerdict(
+            List.of(item("a1", false, "wrong abstraction", "")),
+            List.of(),
+            Map.of("a1", "critical"),
+            "escalate");
+        assertFalse(v.passed());
+        assertEquals("escalate", v.action());
+    }
+
+    @Test
+    void verdict_escalateIgnoredWhenAllPassed() {
+        // Even if reviewer says escalate, if everything passes we continue.
+        var v = OrchestratorBlock.computeReviewVerdict(
+            List.of(item("a1", true, "ok", "")),
+            List.of(),
+            Map.of("a1", "critical"),
+            "escalate");
+        assertTrue(v.passed());
+        assertEquals("continue", v.action());
+    }
+
+    @Test
+    void verdict_emptyChecklistAndNoRegressions_passed() {
+        var v = OrchestratorBlock.computeReviewVerdict(
+            List.of(), List.of(), Map.of(), "retry");
+        assertTrue(v.passed());
+        assertEquals("continue", v.action());
+    }
+
+    private static Map<String, Object> item(String id, boolean passed, String evidence, String fix) {
+        return Map.of("id", id, "passed", passed, "evidence", evidence, "fix", fix);
+    }
 }

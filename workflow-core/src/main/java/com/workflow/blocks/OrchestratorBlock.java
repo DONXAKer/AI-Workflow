@@ -228,13 +228,37 @@ public class OrchestratorBlock implements Block {
         Map<String, Object> planOut = planBlockId.isBlank() ? Map.of()
             : firstNonNull(resolveContextBlock(input, run, planBlockId), Map.of());
 
-        StringBuilder userMsg = new StringBuilder("Review the implementation and verify it meets the definition of done.\n\n");
+        // Single source of truth — acceptance_checklist from analysis (with fallback chain).
+        // See loadAcceptanceChecklist for the cascade.
+        List<Map<String, Object>> checklist = loadAcceptanceChecklist(input, run, planOut);
+        boolean haveChecklist = !checklist.isEmpty();
+
+        StringBuilder userMsg = new StringBuilder("Review the implementation against the acceptance checklist.\n\n");
+
+        if (haveChecklist) {
+            userMsg.append("## Acceptance checklist (ЕДИНСТВЕННЫЙ источник истины — оцениваешь только эти пункты)\n");
+            userMsg.append("| id | priority | text | source |\n");
+            userMsg.append("|---|---|---|---|\n");
+            for (Map<String, Object> item : checklist) {
+                userMsg.append("| ").append(item.getOrDefault("id", "?"))
+                    .append(" | ").append(item.getOrDefault("priority", "important"))
+                    .append(" | ").append(String.valueOf(item.getOrDefault("text", ""))
+                        .replace("|", "\\|").replace("\n", " "))
+                    .append(" | ").append(item.getOrDefault("source", "derived"))
+                    .append(" |\n");
+            }
+            userMsg.append('\n');
+        }
 
         if (!planOut.isEmpty()) {
             Object goal = planOut.get("goal");
             Object dod  = planOut.get("definition_of_done");
-            if (goal != null) userMsg.append("## Goal\n").append(goal).append("\n\n");
-            if (dod  != null) userMsg.append("## Definition of Done\n").append(dod).append("\n\n");
+            if (goal != null) userMsg.append("## Plan goal\n").append(goal).append("\n\n");
+            if (!haveChecklist && dod != null) {
+                // Without an acceptance_checklist, expose plan's DoD so the reviewer still has
+                // a target to verify. With a checklist, DoD is redundant and clutters the prompt.
+                userMsg.append("## Definition of Done\n").append(dod).append("\n\n");
+            }
         }
 
         // Inject context blocks (e.g. build_test results, run_tests output)
@@ -263,10 +287,170 @@ public class OrchestratorBlock implements Block {
                 .append("```\n").append(tree).append("```\n\n");
         }
 
-        return runLoop(blockConfig, run, workingDir, userMsg.toString(),
-            buildReviewSystemPrompt(extra, agentSystemPrompt), REVIEW_TOOLS, REVIEW_BASH,
+        Map<String, Object> result = runLoop(blockConfig, run, workingDir, userMsg.toString(),
+            buildReviewSystemPrompt(extra, agentSystemPrompt, haveChecklist), REVIEW_TOOLS, REVIEW_BASH,
             asInt(cfg, "max_iterations", DEFAULT_MAX_ITER_REVIEW),
             asDouble(cfg, "budget_usd_cap", DEFAULT_BUDGET_USD), "review");
+
+        // Code-side decisioning: if reviewer returned checklist_status, derive passed/issues/
+        // retry_instruction/action deterministically from per-item priorities + regressions.
+        // This prevents opus from "freely re-deciding" on each iteration and bounds the loop.
+        if (haveChecklist && result.get("checklist_status") instanceof List<?> cs) {
+            Map<String, String> priorityById = checklist.stream()
+                .collect(Collectors.toMap(
+                    i -> String.valueOf(i.get("id")),
+                    i -> String.valueOf(i.getOrDefault("priority", "important")),
+                    (a, b) -> a));
+            List<Map<String, Object>> regressions = result.get("regressions") instanceof List<?> r
+                ? (List<Map<String, Object>>) (List<?>) r : List.of();
+            String reviewerAction = String.valueOf(result.getOrDefault("action", "retry"));
+            ReviewVerdict v = computeReviewVerdict(
+                (List<Map<String, Object>>) (List<?>) cs, regressions, priorityById, reviewerAction);
+            result.put("passed", v.passed());
+            result.put("action", v.action());
+            result.put("issues", v.issues());
+            result.put("retry_instruction", v.retryInstruction());
+        }
+
+        return result;
+    }
+
+    /**
+     * Cascade for the acceptance checklist:
+     *   1. {@code analysis.acceptance_checklist} — preferred, structured per-item with priority+source
+     *   2. plan_block's {@code acceptance_checklist} — if plan transcribed it
+     *   3. Auto-derived from plan's {@code definition_of_done} (each non-empty line → synthetic
+     *      item id={@code dod-N}, priority={@code important})
+     *   4. Empty list — caller falls back to legacy freeform-issues review
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> loadAcceptanceChecklist(
+            Map<String, Object> input, PipelineRun run, Map<String, Object> planOut) {
+        // 1+2. Scan inputs (depends_on chain) and run.outputs for any block with checklist
+        if (input != null) {
+            for (Object v : input.values()) {
+                if (v instanceof Map<?, ?> m) {
+                    Object cl = m.get("acceptance_checklist");
+                    if (cl instanceof List<?> l && !l.isEmpty()) {
+                        return castChecklist(l);
+                    }
+                }
+            }
+        }
+        if (run != null && run.getOutputs() != null) {
+            for (com.workflow.core.BlockOutput bo : run.getOutputs()) {
+                if (bo == null || bo.getOutputJson() == null) continue;
+                try {
+                    Map<String, Object> data = objectMapper.readValue(bo.getOutputJson(),
+                        new TypeReference<Map<String, Object>>() {});
+                    Object cl = data.get("acceptance_checklist");
+                    if (cl instanceof List<?> l && !l.isEmpty()) {
+                        return castChecklist(l);
+                    }
+                } catch (Exception ignore) { /* not JSON or not what we want */ }
+            }
+        }
+        // 3. Auto-derive from plan's definition_of_done — split by newlines, synth ids
+        if (planOut != null) {
+            Object dod = planOut.get("definition_of_done");
+            if (dod instanceof String s && !s.isBlank()) {
+                List<Map<String, Object>> synth = new ArrayList<>();
+                int n = 0;
+                for (String line : s.split("\\r?\\n")) {
+                    String t = line.strip().replaceFirst("^[-*\\d.\\s]+", "").strip();
+                    if (t.isBlank()) continue;
+                    n++;
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("id", "dod-" + n);
+                    item.put("text", t);
+                    item.put("priority", "important");
+                    item.put("source", "derived");
+                    synth.add(item);
+                }
+                if (!synth.isEmpty()) return synth;
+            }
+        }
+        return List.of();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> castChecklist(List<?> l) {
+        List<Map<String, Object>> out = new ArrayList<>(l.size());
+        for (Object o : l) {
+            if (o instanceof Map<?, ?> m) out.add((Map<String, Object>) m);
+        }
+        return out;
+    }
+
+    /** Pure-function output of {@link #computeReviewVerdict}. */
+    public record ReviewVerdict(boolean passed, String action, String issues, String retryInstruction) {}
+
+    /**
+     * Pure function: turns per-item {@code checklist_status} + {@code regressions} +
+     * priority map into the legacy {@code passed/action/issues/retry_instruction} fields
+     * that {@link com.workflow.core.PipelineRunner} consumes.
+     *
+     * <p>Decision rule (Q4 of design):
+     * <ul>
+     *   <li>nice_to_have failures — ignored</li>
+     *   <li>any critical failure OR any regression → action=retry, passed=false</li>
+     *   <li>important failures → action=retry, passed=false</li>
+     *   <li>nothing failing → passed=true, action=continue</li>
+     *   <li>reviewerAction="escalate" preserved if not passed (architectural escalation)</li>
+     * </ul>
+     */
+    public static ReviewVerdict computeReviewVerdict(
+            List<Map<String, Object>> checklistStatus,
+            List<Map<String, Object>> regressions,
+            Map<String, String> priorityById,
+            String reviewerAction) {
+
+        List<String> blockingMessages = new ArrayList<>();
+        List<String> retryFixes = new ArrayList<>();
+        boolean hasBlockingFail = false;
+
+        if (checklistStatus != null) {
+            for (Map<String, Object> item : checklistStatus) {
+                if (item == null) continue;
+                Object passedObj = item.get("passed");
+                boolean itemPassed = passedObj instanceof Boolean b ? b : false;
+                if (itemPassed) continue;
+
+                String id = String.valueOf(item.getOrDefault("id", "?"));
+                String priority = priorityById.getOrDefault(id, "important");
+                if ("nice_to_have".equals(priority)) continue; // policy: nice_to_have never blocks
+
+                String fix = String.valueOf(item.getOrDefault("fix", "")).trim();
+                String evidence = String.valueOf(item.getOrDefault("evidence", "")).trim();
+                hasBlockingFail = true;
+                blockingMessages.add(String.format("- [%s] %s: %s%s",
+                    priority, id, evidence,
+                    fix.isEmpty() ? "" : " | fix: " + fix));
+                if (!fix.isEmpty()) retryFixes.add("- " + id + ": " + fix);
+            }
+        }
+
+        if (regressions != null) {
+            for (Map<String, Object> reg : regressions) {
+                if (reg == null) continue;
+                String desc = String.valueOf(reg.getOrDefault("description", "regression"));
+                String evidence = String.valueOf(reg.getOrDefault("evidence", "")).trim();
+                hasBlockingFail = true;
+                blockingMessages.add("- [REGRESSION] " + desc
+                    + (evidence.isEmpty() ? "" : " (" + evidence + ")"));
+                retryFixes.add("- REGRESSION: " + desc);
+            }
+        }
+
+        boolean passed = !hasBlockingFail;
+        String action;
+        if (passed) action = "continue";
+        else if ("escalate".equalsIgnoreCase(reviewerAction)) action = "escalate";
+        else action = "retry";
+
+        return new ReviewVerdict(passed, action,
+            String.join("\n", blockingMessages),
+            String.join("\n", retryFixes));
     }
 
     /**
@@ -370,7 +554,9 @@ public class OrchestratorBlock implements Block {
         // Without this guard, defaults below would fill action=escalate / passed=false
         // and the pipeline would crash with a misleading "Orchestrator escalated:".
         boolean hasRealOutput = "review".equals(mode)
-            ? !asString(out, "issues", "").isBlank() || !asString(out, "carry_forward", "").isBlank()
+            ? !asString(out, "issues", "").isBlank()
+                || !asString(out, "carry_forward", "").isBlank()
+                || (out.get("checklist_status") instanceof List<?> cs && !cs.isEmpty())
             : !asString(out, "goal", "").isBlank() || !asString(out, "approach", "").isBlank();
         if (!hasRealOutput) {
             throw new IllegalStateException(
@@ -385,9 +571,11 @@ public class OrchestratorBlock implements Block {
         if ("review".equals(mode)) {
             out.putIfAbsent("passed", Boolean.FALSE);
             out.putIfAbsent("issues", "");
-            out.putIfAbsent("action", "escalate");
+            out.putIfAbsent("action", "retry");
             out.putIfAbsent("retry_instruction", "");
             out.putIfAbsent("carry_forward", "");
+            out.putIfAbsent("checklist_status", List.of());
+            out.putIfAbsent("regressions", List.of());
         } else {
             out.putIfAbsent("goal", "");
             out.putIfAbsent("files_to_touch", "");
@@ -472,12 +660,12 @@ Respond with the JSON only. No text after the closing ```.
         return sb.toString();
     }
 
-    private static String buildReviewSystemPrompt(String extra, String agentSystemPrompt) {
+    private static String buildReviewSystemPrompt(String extra, String agentSystemPrompt, boolean haveChecklist) {
         StringBuilder sb = new StringBuilder();
         if (!agentSystemPrompt.isBlank()) {
             sb.append(agentSystemPrompt).append("\n\n");
         }
-        sb.append("You are a code reviewer. Verify that the implementation matches the definition of done.\n\n");
+        sb.append("You are a code reviewer. Verify that the implementation satisfies the acceptance checklist.\n\n");
         sb.append("Use Read, Grep, Glob, and git diff (Bash) to examine the actual changes. Do NOT modify files.\n");
         sb.append("""
 
@@ -497,14 +685,59 @@ EFFICIENCY:
         if (!extra.isBlank()) {
             sb.append("\n## Project context\n").append(extra).append("\n");
         }
-        sb.append("""
+        if (haveChecklist) {
+            sb.append("""
 
-MANDATORY CHECKS — verify ALL of the following regardless of what the definition_of_done says:
-1. TESTS: At least one test covers the new or changed logic. Check test files with Read/Grep.
-   If build/test context was provided above, verify the test run result is green (no failures).
-2. API DOCS: If any REST endpoints were added or changed, OpenAPI/Swagger annotations are present and accurate.
-3. DOCS: If external behavior or architecture changed, README or CLAUDE.md reflects the change.
-4. BUILD: No compile errors. If build context was provided above, verify the build succeeded.
+PRINCIPLES (важно — иначе уйдёшь в патологический loopback):
+- Acceptance checklist в user-message — ЕДИНСТВЕННЫЙ источник истины. Оцениваешь ТОЛЬКО эти id.
+- Каждый id из таблицы ОБЯЗАН иметь запись в checklist_status. Не пропускай и не плоди новые id.
+- Не добавляй "улучшилось бы если...", "хорошо бы ещё...", замечания по стилю, нейминг,
+  отсутствие docstring/комментариев. Это НЕ поводы для passed=false.
+- evidence — конкретный путь файла + что искал/что нашёл. "Не нашёл реализации" допустимо
+  если действительно отсутствует. Не нужно пересказывать содержимое файла — нужно подтверждение
+  что требование пункта выполнено или нет.
+- regressions — ТОЛЬКО функциональные поломки: build/compile errors, провалившиеся тесты,
+  ранее работавший feature теперь сломан. НЕ субъективные "стало хуже" / "можно красивее".
+  Если build_test context показывает успех — regressions=[].
+- Если предыдущая итерация уже учла твоё замечание разумно (даже не идеально) — passed=true.
+
+MANDATORY FINAL RESPONSE FORMAT — output ONLY this JSON block when done:
+```json
+{
+  "checklist_status": [
+    {"id": "<id из таблицы>", "passed": <true|false>,
+     "evidence": "<какой файл/строка/тест подтверждает (или 'не найдено')>",
+     "fix": "<если passed=false: что КОНКРЕТНО допилить, иначе пустая строка>"}
+  ],
+  "regressions": [
+    {"description": "<что сломалось>", "evidence": "<git diff snippet или test failure>"}
+  ],
+  "carry_forward": "brief summary of what was accomplished",
+  "action": "retry"
+}
+```
+Rules:
+- One entry in checklist_status per item from the acceptance checklist table — same exact ids.
+- "regressions": [] if build/tests are green. Use only for objective functional breakage.
+- "action": always "retry" by default. Use "escalate" ONLY for architectural conflicts that
+  the implementor literally cannot resolve without spec changes (e.g. plan asks for X but
+  requirement actually needs Y). Do NOT escalate just because items are not passed.
+- DO NOT include "passed", "issues", or "retry_instruction" — those fields are computed
+  deterministically by the runner from your checklist_status + regressions.
+- Your FINAL message must be ONLY the ```json block. No text before or after it.
+""");
+        } else {
+            sb.append("""
+
+LEGACY MODE (no acceptance_checklist found upstream — falling back to freeform review).
+
+Что проверять:
+- Тесты на новую логику запускаются и покрывают её (если задача требует тестов)
+- Security: broken access control, SQL injection в нативных запросах
+- Производительность: N+1 в JPA, отсутствие индексов на FK
+- Логические баги в реализованной фиче
+
+Если предыдущая итерация уже учла замечание разумно — accept. Не ищи новое каждый раз.
 
 MANDATORY FINAL RESPONSE FORMAT — output ONLY this JSON block when done:
 ```json
@@ -517,12 +750,12 @@ MANDATORY FINAL RESPONSE FORMAT — output ONLY this JSON block when done:
 }
 ```
 Rules:
-- "passed": true only if ALL mandatory checks AND all definition-of-done items are met
-- "action": "continue" (passed), "retry" (fixable code issues), or "escalate" (architectural/blocking problem)
+- "passed": true only if all definition-of-done items are met
+- "action": "continue" (passed), "retry" (fixable code issues), or "escalate" (architectural/blocking)
 - Set retry_instruction to a specific, actionable fix description when action=retry
-- Use "escalate" when the problem cannot be fixed by the implementor alone (wrong architecture, missing requirements)
 - Your FINAL message must be ONLY the ```json block. No text before or after it.
 """);
+        }
         return sb.toString();
     }
 
