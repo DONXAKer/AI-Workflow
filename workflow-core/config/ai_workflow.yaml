@@ -1,0 +1,391 @@
+name: ai-workflow
+description: AI-pipeline для разработки AI-Workflow
+
+# =============================================================================
+# Entry Points
+# =============================================================================
+entry_points:
+  - id: from_task_file
+    name: "Задача из файла"
+    description: "Читает задачу из .md файла в проекте → план → код → тесты → review"
+    from_block: task_md
+    requires_input: task_file
+
+  - id: from_requirement
+    name: "Новая задача с нуля"
+    description: "Анализ → декомпозиция → план → код → тесты"
+    from_block: analysis
+    requires_input: requirement
+
+  - id: code_only
+    name: "Только генерация кода"
+    description: "Сразу к кодогенерации (задача уже известна)"
+    from_block: codegen
+    requires_input: requirement
+    inject:
+      - block_id: analysis
+        source: empty
+      - block_id: plan
+        source: empty
+
+# =============================================================================
+# Integrations
+# =============================================================================
+integrations:
+  # github: github-ai-workflow  # раскомментировать когда репозиторий создан
+
+# =============================================================================
+# Knowledge Base
+# =============================================================================
+knowledge_base:
+  sources:
+    - type: files
+      path: /projects/AI-Workflow/docs
+    - type: files
+      path: /projects/AI-Workflow/workflow-core/src/main/java
+    - type: files
+      path: /projects/AI-Workflow/workflow-ui/app
+
+# =============================================================================
+# Pipeline
+# =============================================================================
+pipeline:
+
+  # ---------------------------------------------------------------------------
+  # 0. Task file input (entry point: from_task_file)
+  # ---------------------------------------------------------------------------
+  - id: task_md
+    block: task_md_input
+    approval: false
+    config:
+      file_path: "${input.task_file}"
+
+  # ---------------------------------------------------------------------------
+  # 1. Analysis
+  # ---------------------------------------------------------------------------
+  - id: analysis
+    block: analysis
+    depends_on:
+      - task_md
+    agent:
+      model: smart
+      system_prompt: |
+        Всегда отвечай на русском языке.
+
+        Ты senior software architect с 15+ годами опыта в enterprise-разработке и design of distributed systems.
+        Проект — маркетплейс AI-навыков (skills/plugins для LLM-ассистентов).
+
+        Рабочая директория: /projects/AI-Workflow
+        Миграции: workflow-core/src/main/resources/db/migration/
+
+        Best practices для глубокого архитектурного анализа:
+        - Оценивай влияние на связанные компоненты (coupling, cohesion)
+        - Рассматривай performance implications: N+1 запросы, отсутствие индексов, блокирующие операции
+        - Выявляй security risks: injection, broken access control, sensitive data exposure
+        - При изменениях хранения данных — учитывай 289-ФЗ, 152-ФЗ
+        - Оценивай backward compatibility и migration path
+        - Указывай, нужны ли Flyway-миграции и в какой последовательности
+        - Для async-компонентов (модерация) — проверяй idempotency и error recovery
+
+        Обязательно верни: affected_components, technical_approach, complexity (low/medium/high), risks.
+      max_tokens: 8192
+    approval_mode: auto_notify
+
+  # ---------------------------------------------------------------------------
+  # 2. Clarification (пропускается для низкой сложности)
+  # ---------------------------------------------------------------------------
+  - id: clarification
+    block: clarification
+    depends_on:
+      - analysis
+    condition: "$.analysis.needs_clarification == true"
+    agent:
+      model: flash
+      system_prompt: |
+        Всегда отвечай на русском языке.
+
+        Ты опытный бизнес-аналитик и tech lead, специализирующийся на уточнении требований перед разработкой.
+
+        Best practices для качественного clarification:
+        - Задавай только вопросы, без ответов на которые нельзя приступить к реализации
+        - Один вопрос = одна неопределённость; не объединяй несколько в один
+        - Приоритизируй: сначала вопросы, влияющие на архитектуру и схему БД
+        - Избегай вопросов об очевидном из контекста и стека проекта
+        - Формулируй вопросы конкретно, с вариантами ответа если возможно
+        - Максимум 5 вопросов за итерацию
+      max_tokens: 4096
+    approval_mode: auto_notify
+
+  # ---------------------------------------------------------------------------
+  # 3. Plan (orchestrator: explores codebase, produces implementation plan + DoD)
+  # ---------------------------------------------------------------------------
+  - id: plan
+    block: orchestrator
+    phase: analyze
+    depends_on:
+      - clarification
+      - analysis
+      - task_md
+    agent:
+      model: reasoning
+      temperature: 0.1
+      max_tokens: 8192
+      system_prompt: |
+        Всегда отвечай на русском языке.
+
+        Ты principal software architect.
+        Твоя задача — создать детальный, исполняемый план реализации.
+
+        Best practices для планирования:
+        - Изучи реальный код (Read/Grep/Glob) перед составлением плана — не угадывай структуру
+        - Укажи точные пути файлов для изменения/создания (не пакеты, а конкретные файлы)
+        - Definition of Done должен быть ВЕРИФИЦИРУЕМЫМ: тесты, компиляция, конкретные API endpoints
+        - Учитывай зависимости между файлами: entity → repository → service → controller
+    config:
+      mode: plan
+      context_blocks:
+        - task_md
+        - analysis
+        - clarification
+      working_dir: /projects/AI-Workflow
+      max_iterations: 12
+      system_prompt_extra: |
+        Backend: workflow-core/ (Gradle Kotlin DSL, Flyway migrations in workflow-core/src/main/resources/db/migration/)
+        Frontend: workflow-ui/ (TypeScript, Tailwind)
+        Tests: workflow-core/src/test/java (JUnit 5, Testcontainers for integration tests)
+        CLAUDE.md in project root must be updated when architecture changes.
+    approval: true
+
+  # ---------------------------------------------------------------------------
+  # 4. Git branch (создаёт feature-ветку перед кодогенерацией)
+  # ---------------------------------------------------------------------------
+  - id: git_setup
+    block: shell_exec
+    phase: implement
+    depends_on:
+      - plan
+    config:
+      working_dir: /projects/AI-Workflow
+      command: |
+        set -e
+        BRANCH="feature/${task_md.feat_id}-${task_md.slug}"
+        echo "=== Creating branch: $BRANCH ==="
+        git stash --include-untracked 2>/dev/null || true
+        git checkout main
+        git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
+        echo "=== On branch: $(git branch --show-current) ==="
+      timeout_seconds: 30
+    approval: false
+
+  # ---------------------------------------------------------------------------
+  # 5. Code Generation (agent_with_tools)
+  # ---------------------------------------------------------------------------
+  - id: codegen
+    block: agent_with_tools
+    depends_on:
+      - git_setup
+    agent:
+      model: smart
+      system_prompt: |
+        Всегда отвечай на русском языке.
+
+        Ты senior full-stack разработчик. Генерируй production-ready код.
+
+        Рабочая директория проекта: /projects/AI-Workflow
+        - Backend: workflow-core/ (Gradle Groovy DSL, Java 21 Spring Boot 3.4)
+        - Frontend: workflow-ui/
+        - Gradlew находится в workflow-core/: запускай через `cd workflow-core && ./gradlew <задача>`
+        - Миграции: workflow-core/src/main/resources/db/migration/
+        - build.gradle — Groovy DSL
+
+        Best practices:
+        - ВСЕГДА читай соседние файлы (Read) перед написанием нового кода — соблюдай стиль и паттерны
+        - После написания кода — запусти `cd workflow-core && ./gradlew compileJava` для проверки компиляции
+      max_tokens: 16384
+      temperature: 0.2
+      max_iterations: 10
+    config:
+      working_dir: /projects/AI-Workflow
+      max_iterations: 20
+      allowed_tools:
+        - Read
+        - Write
+        - Edit
+        - Glob
+        - Grep
+        - Bash
+      user_message: |
+        Реализуй задачу согласно плану.
+
+        ## Цель
+        ${plan.goal}
+
+        ## Файлы для изменения
+        ${plan.files_to_touch}
+
+        ## Подход
+        ${plan.approach}
+
+        ## Definition of Done
+        ${plan.definition_of_done}
+
+        После реализации запусти `cd workflow-core && ./gradlew compileJava` чтобы убедиться в отсутствии ошибок компиляции.
+      bash_allowlist:
+        - "Bash(./gradlew*)"
+        - "Bash(cd workflow-core*)"
+        - "Bash(cd workflow-ui*)"
+        - "Bash(npm run*)"
+        - "Bash(find *)"
+        - "Bash(ls*)"
+        - "Bash(grep *)"
+        - "Bash(cat *)"
+    approval_mode: auto_notify
+
+  # ---------------------------------------------------------------------------
+  # 5. Build & Test
+  # ---------------------------------------------------------------------------
+  - id: build_test
+    block: shell_exec
+    phase: verify
+    depends_on:
+      - codegen
+    config:
+      working_dir: /projects/AI-Workflow
+      command: |
+        set -e
+        cd /projects/AI-Workflow
+
+        JAVA_CHANGED=$(git diff --name-only main 2>/dev/null | grep -E "\.(java|kts|gradle)$" | head -1 || true)
+        UI_CHANGED=$(git diff --name-only main 2>/dev/null | grep -E "^workflow-ui/" | head -1 || true)
+
+        if [ -n "$JAVA_CHANGED" ]; then
+          echo "=== API compilation (java/gradle changes detected) ==="
+          cd /projects/AI-Workflow/workflow-core
+          ./gradlew compileJava compileTestJava --no-daemon -q 2>&1 | tail -30
+          cd /projects/AI-Workflow
+        else
+          echo "=== API compilation skipped (no java changes) ==="
+        fi
+
+        if [ -n "$UI_CHANGED" ]; then
+          echo "=== Frontend install + build (ui changes detected) ==="
+          cd /projects/AI-Workflow/workflow-ui
+          if [ ! -d node_modules ]; then npm ci 2>&1 | tail -5; fi
+          npm run build 2>&1 | tail -30
+        else
+          echo "=== Frontend build skipped (no ui changes) ==="
+        fi
+
+        echo "=== DONE ==="
+      timeout_seconds: 900
+    approval: false
+    on_failure:
+      action: loopback
+      target: codegen
+      max_iterations: 2
+      inject_context:
+        build_error: "$.build_test.stderr"
+        build_output: "$.build_test.output"
+
+  # ---------------------------------------------------------------------------
+  # 6. Review (orchestrator: verifies code against plan's DoD)
+  # ---------------------------------------------------------------------------
+  - id: review
+    block: orchestrator
+    phase: verify
+    depends_on:
+      - build_test
+    agent:
+      model: reasoning
+      max_tokens: 8192
+      system_prompt: |
+        Всегда отвечай на русском языке.
+
+        Ты senior code reviewer. Цель — проверить реализацию по Definition of Done.
+
+        Принципы (важно — иначе уйдёшь в патологический loopback):
+        - Бар прохождения: код решает задачу из плана, не ломает существующее, не несёт security/perf-регрессий. Этого ДОСТАТОЧНО для accept.
+        - Если предыдущая итерация уже учла твоё замечание разумно (даже не идеально) — accept, НЕ ищи новое замечание.
+        - Каждое retry должно быть про КОНКРЕТНУЮ ФУНКЦИОНАЛЬНУЮ проблему, не про "хорошо бы ещё".
+        - Стиль, нейминг, отсутствие Javadoc/комментариев, неполная документация — НЕ повод для retry.
+        - Если сомневаешься accept или retry — accept.
+
+        Что проверять (только это):
+        - Тесты на новую логику запускаются и покрывают её (если задача требует тестов)
+        - Security: broken access control, SQL injection в нативных запросах
+        - Производительность: N+1 в JPA, отсутствие индексов на FK
+        - Логические баги в реализованной фиче
+
+        action=retry — только если проблема функциональная и исправима за 1 итерацию.
+        action=escalate — только если архитектурный конфликт с требованиями.
+    config:
+      mode: review
+      plan_block: plan
+      context_blocks:
+        - build_test
+      working_dir: /projects/AI-Workflow
+      max_iterations: 10
+      system_prompt_extra: |
+        Working directory: /projects/AI-Workflow
+
+        IMPORTANT: This project has NO git history — do NOT use git diff or git log.
+        Instead, use Read/Grep/Glob tools to check the actual files listed in the plan.
+
+        Нежёсткие пожелания (НЕ повод для retry если отсутствуют):
+        - OpenAPI/Springdoc аннотации на новых REST endpoints — желательно, но не блокирующее
+        - CLAUDE.md / README обновления при архитектурных изменениях — желательно, не блокирующее
+        Javadoc не требовать — в проекте не используется.
+    verify:
+      on_fail:
+        action: loopback
+        target: codegen
+        max_iterations: 3
+        inject_context:
+          retry_instruction: "$.review.retry_instruction"
+          issues: "$.review.issues"
+          carry_forward: "$.review.carry_forward"
+          build_output: "$.build_test.output"
+    approval: false
+
+  # ---------------------------------------------------------------------------
+  # 7. Git commit (коммитит результат в feature-ветку)
+  # ---------------------------------------------------------------------------
+  - id: git_commit
+    block: shell_exec
+    phase: release
+    depends_on:
+      - review
+    config:
+      working_dir: /projects/AI-Workflow
+      command: |
+        set -e
+        echo "=== Branch: $(git branch --show-current) ==="
+        git add -A
+        if git diff --cached --quiet; then
+          echo "Nothing to commit"
+        else
+          git commit -m "feat(${task_md.feat_id}): ${task_md.title}"
+          echo "=== Committed ==="
+          git log --oneline -3
+        fi
+      timeout_seconds: 30
+    approval: false
+
+  # ---------------------------------------------------------------------------
+  # 8. GitHub PR (раскомментировать когда GitHub репозиторий настроен)
+  # ---------------------------------------------------------------------------
+  # - id: pr
+  #   block: github_pr
+  #   depends_on:
+  #     - review
+  #   config:
+  #     base_branch: main
+  #   approval: true
+  #
+  # - id: ci
+  #   block: github_actions
+  #   depends_on:
+  #     - pr
+  #   approval: false
+  #   config:
+  #     timeout: 1800

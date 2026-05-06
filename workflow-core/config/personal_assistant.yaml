@@ -1,0 +1,326 @@
+name: personal-assistant
+description: AI-pipeline для разработки Personal_assistant (FastAPI single-user chat assistant)
+
+# =============================================================================
+# Entry Points
+# =============================================================================
+entry_points:
+  - id: from_task_file
+    name: "Задача из файла"
+    description: "Читает задачу из .md → план → код → review → commit"
+    from_block: task_md
+    requires_input: task_file
+
+  - id: from_requirement
+    name: "Новая задача с нуля"
+    description: "Анализ → план → код → review"
+    from_block: analysis
+    requires_input: requirement
+
+# =============================================================================
+# Knowledge Base
+# =============================================================================
+knowledge_base:
+  sources:
+    - type: files
+      path: /projects/Personal_assistant/app
+    - type: files
+      path: /projects/Personal_assistant/tests
+    - type: files
+      path: /projects/Personal_assistant/docs
+
+# =============================================================================
+# Pipeline
+# =============================================================================
+pipeline:
+
+  - id: task_md
+    block: task_md_input
+    approval: false
+    config:
+      file_path: "${input.task_file}"
+
+  - id: analysis
+    block: analysis
+    depends_on:
+      - task_md
+    agent:
+      model: smart
+      system_prompt: |
+        Всегда отвечай на русском языке.
+
+        Ты senior software architect.
+        Проект — Personal_assistant: single-user FastAPI chat-ассистент с orchestrator-driven flow
+        (один LLM-вызов в `app/orchestrator.py` решает всё через структурированный JSON с `actions[]`).
+
+        Рабочая директория: /projects/Personal_assistant
+        Код: app/ (orchestrator.py, web/routes.py, integrations/, intents/, scheduler.py, db.py, user_settings.py)
+        Тесты: tests/ (pytest, всё внешнее замокано в conftest.py — НИКОГДА не зови реальные сервисы)
+        Состояние: SQLite (/data/assistant.db), markdown memory + ChromaDB RAG.
+
+        Best practices анализа:
+        - Любой новый side-effect = новый action type в orchestrator + handler в routes._process
+        - Деструктивные действия требуют _pending_* подтверждения
+        - Новая колонка БД — добавлять в init_db() в app/db.py (CREATE TABLE IF NOT EXISTS, миграций нет)
+        - Новая UI-настройка — в EDITABLE_FIELDS в user_settings.py
+        - Все ответы пользователю на русском
+        - Внешние интеграции (Gmail/Calendar/Todoist) идут через app/integrations/*
+
+        Обязательно верни: affected_components, technical_approach, complexity (low/medium/high), risks,
+        acceptance_checklist (verifiable items, по которым review будет проверять).
+      max_tokens: 8192
+    approval_mode: auto_notify
+
+  - id: clarification
+    block: clarification
+    depends_on:
+      - analysis
+    condition: "$.analysis.needs_clarification == true"
+    agent:
+      model: flash
+      system_prompt: |
+        Всегда отвечай на русском языке.
+        Задавай только вопросы, без ответов на которые нельзя приступить к реализации.
+        Один вопрос = одна неопределённость. Максимум 5 вопросов.
+      max_tokens: 4096
+    approval_mode: auto_notify
+
+  - id: plan
+    block: orchestrator
+    phase: analyze
+    depends_on:
+      - clarification
+      - analysis
+      - task_md
+    agent:
+      model: reasoning
+      temperature: 0.1
+      max_tokens: 8192
+      system_prompt: |
+        Всегда отвечай на русском языке.
+
+        Ты principal software architect.
+        Создай детальный, исполняемый план реализации.
+
+        Best practices:
+        - Изучи реальный код (Read/Grep/Glob) перед планом — не угадывай
+        - Указывай точные пути файлов: app/orchestrator.py, app/web/routes.py, app/integrations/X.py
+        - Definition of Done — ВЕРИФИЦИРУЕМЫЙ: новые endpoints, новые actions, проходящие тесты
+        - Учитывай поток: orchestrator (LLM) → action JSON → routes._process handler → integrations
+        - Если меняется схема БД — упомяни init_db() в app/db.py
+    config:
+      mode: plan
+      context_blocks:
+        - task_md
+        - analysis
+        - clarification
+      working_dir: /projects/Personal_assistant
+      max_iterations: 12
+      system_prompt_extra: |
+        Stack: FastAPI + Pydantic + APScheduler + SQLite + ChromaDB.
+        Tests: pytest, conftest.py мокает orchestrator, Google APIs, Todoist, ChromaDB, scheduler.
+        Любые новые тесты обязаны переиспользовать `client` fixture, не звать реальные сервисы.
+        CLAUDE.md в корне проекта обновлять при архитектурных изменениях.
+    approval: true
+
+  - id: git_setup
+    block: shell_exec
+    phase: implement
+    depends_on:
+      - plan
+    config:
+      working_dir: /projects/Personal_assistant
+      command: |
+        set -e
+        BRANCH="feature/${task_md.slug}"
+        echo "=== Creating branch: $BRANCH ==="
+        git stash --include-untracked 2>/dev/null || true
+        git checkout main
+        git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
+        echo "=== On branch: $(git branch --show-current) ==="
+      timeout_seconds: 30
+    approval: false
+
+  - id: codegen
+    block: agent_with_tools
+    depends_on:
+      - git_setup
+    agent:
+      model: smart
+      system_prompt: |
+        Всегда отвечай на русском языке.
+
+        Ты senior Python разработчик. Генерируй production-ready код.
+
+        Рабочая директория проекта: /projects/Personal_assistant
+        Стек: FastAPI 0.115 + Pydantic v2 + APScheduler + SQLite + ChromaDB + Google API client + Todoist API.
+        Структура:
+          - app/main.py — FastAPI entrypoint
+          - app/orchestrator.py — единая LLM-функция, возвращает structured JSON {reply, buttons, actions}
+          - app/web/routes.py — HTTP endpoints + handler `_process` для actions[]
+          - app/integrations/ — gmail.py, calendar.py, todoist.py (внешние API)
+          - app/intents/ — inbox.py, meeting.py, tracker.py (helpers, НЕ роутер)
+          - app/db.py — SQLite, init_db() создаёт схему
+          - app/scheduler.py — APScheduler jobs (digest, reminders, tracker scan)
+          - app/user_settings.py — EDITABLE_FIELDS + get_user_setting (DB→env fallback)
+          - tests/ — pytest, conftest.py мокает всё внешнее
+
+        Жёсткие правила проекта:
+        - Новый side-effect = новый action type в orchestrator + ветка в routes._process
+        - Деструктивные действия требуют _pending_* подтверждения (см. _pending_delete)
+        - Новые тесты используют `client` fixture, не звать реальные сервисы
+        - Все user-facing reply на русском
+        - Новые DB columns — в init_db() (CREATE TABLE IF NOT EXISTS)
+        - Перед новым кодом ВСЕГДА читай соседние файлы (Read), соблюдай стиль и паттерны проекта.
+
+        После реализации:
+        - `python3 -m compileall -q app/` (проверка синтаксиса)
+        - Если есть тесты — `pytest --collect-only -q tests/` (структура импортов)
+      max_tokens: 16384
+      temperature: 0.2
+      max_iterations: 12
+    config:
+      working_dir: /projects/Personal_assistant
+      max_iterations: 25
+      allowed_tools:
+        - Read
+        - Write
+        - Edit
+        - Glob
+        - Grep
+        - Bash
+      user_message: |
+        Реализуй задачу согласно плану.
+
+        ## Цель
+        ${plan.goal}
+
+        ## Файлы для изменения
+        ${plan.files_to_touch}
+
+        ## Подход
+        ${plan.approach}
+
+        ## Definition of Done
+        ${plan.definition_of_done}
+
+        После реализации запусти `python3 -m compileall -q app/` чтобы убедиться, что синтаксис валиден.
+      bash_allowlist:
+        - "Bash(python3 *)"
+        - "Bash(pytest*)"
+        - "Bash(find *)"
+        - "Bash(ls*)"
+        - "Bash(grep *)"
+        - "Bash(cat *)"
+        - "Bash(git status*)"
+        - "Bash(git diff*)"
+    approval_mode: auto_notify
+
+  - id: build_test
+    block: shell_exec
+    phase: verify
+    depends_on:
+      - codegen
+    config:
+      working_dir: /projects/Personal_assistant
+      command: |
+        set -e
+        echo "=== Python syntax check ==="
+        python3 -m compileall -q app/
+        echo "=== Test collection (если pytest установлен) ==="
+        if command -v pytest >/dev/null 2>&1; then
+          pytest --collect-only -q tests/ 2>&1 | tail -10 || true
+        else
+          echo "(pytest не установлен в контейнере workflow-core — пропускаю)"
+        fi
+        echo "=== Git diff stat ==="
+        git diff --stat HEAD~0 2>/dev/null || true
+        git status --short
+        echo "=== DONE ==="
+      timeout_seconds: 180
+    approval: false
+    on_failure:
+      action: loopback
+      target: codegen
+      max_iterations: 2
+      inject_context:
+        build_error: "$.build_test.stderr"
+        build_output: "$.build_test.output"
+
+  - id: review
+    block: orchestrator
+    phase: verify
+    depends_on:
+      - build_test
+    agent:
+      model: reasoning
+      max_tokens: 8192
+      system_prompt: |
+        Всегда отвечай на русском языке.
+
+        Ты senior code reviewer. Проверь реализацию по Definition of Done.
+
+        Принципы (важно — иначе уйдёшь в патологический loopback):
+        - Бар: код решает задачу, не ломает существующее, не несёт security/perf-регрессий. Этого достаточно.
+        - Стиль, нейминг, отсутствие docstrings, неполная документация — НЕ повод для retry.
+        - Если предыдущая итерация уже учла замечание разумно (даже не идеально) — accept.
+        - Если сомневаешься accept или retry — accept.
+
+        Что проверять:
+        - Новые actions добавлены в orchestrator system prompt И handler в routes._process
+        - Деструктивные actions имеют _pending_* подтверждение
+        - Тесты используют `client` fixture, не зовут реальные сервисы
+        - Логические баги в реализованной фиче
+        - Новые DB columns добавлены в init_db()
+
+        action=retry — только если функциональная проблема, исправимая за 1 итерацию.
+        action=escalate — только если архитектурный конфликт.
+    config:
+      mode: review
+      plan_block: plan
+      context_blocks:
+        - build_test
+      working_dir: /projects/Personal_assistant
+      max_iterations: 10
+      system_prompt_extra: |
+        Working directory: /projects/Personal_assistant
+        Stack: FastAPI + SQLite + ChromaDB + Google API.
+
+        Используй Read/Grep/Glob для проверки фактических файлов из плана.
+
+        Нежёсткие пожелания (НЕ повод для retry):
+        - Docstrings — желательно, не блокирующее
+        - CLAUDE.md / README обновления при архитектурных изменениях — желательно
+        - Type hints на каждой функции — желательно, не блокирующее
+    verify:
+      on_fail:
+        action: loopback
+        target: codegen
+        max_iterations: 3
+        inject_context:
+          retry_instruction: "$.review.retry_instruction"
+          issues: "$.review.issues"
+          carry_forward: "$.review.carry_forward"
+          build_output: "$.build_test.output"
+    approval: false
+
+  - id: git_commit
+    block: shell_exec
+    phase: release
+    depends_on:
+      - review
+    config:
+      working_dir: /projects/Personal_assistant
+      command: |
+        set -e
+        echo "=== Branch: $(git branch --show-current) ==="
+        git add -A
+        if git diff --cached --quiet; then
+          echo "Nothing to commit"
+        else
+          git commit -m "feat(${task_md.feat_id}): ${task_md.title}"
+          echo "=== Committed ==="
+          git log --oneline -3
+        fi
+      timeout_seconds: 30
+    approval: false
