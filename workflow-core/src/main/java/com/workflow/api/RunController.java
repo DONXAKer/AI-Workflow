@@ -465,14 +465,40 @@ public class RunController {
     }
 
     @GetMapping("/runs/{runId}")
-    public ResponseEntity<PipelineRun> getRun(@PathVariable String runId) {
+    public ResponseEntity<?> getRun(@PathVariable String runId) {
         try {
             UUID id = UUID.fromString(runId);
             // Use the EntityGraph variant so all three collections are loaded
             // eagerly in a single batch rather than lazily on serialization.
-            return pipelineRunRepository.findWithCollectionsById(id)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+            Optional<PipelineRun> runOpt = pipelineRunRepository.findWithCollectionsById(id);
+            if (runOpt.isEmpty()) return ResponseEntity.notFound().build();
+
+            PipelineRun run = runOpt.get();
+
+            // Build chronologically ordered events from BlockOutput timestamps.
+            // Internal entries (loopback context, _loopback_*) are excluded.
+            List<BlockOutput> orderedOutputs = blockOutputRepository.findByRunIdOrderByStartedAt(id);
+            List<Map<String, Object>> events = orderedOutputs.stream()
+                .filter(b -> !b.getBlockId().startsWith("_"))
+                .map(b -> {
+                    Long durationMs = null;
+                    if (b.getStartedAt() != null && b.getCompletedAt() != null) {
+                        durationMs = b.getCompletedAt().toEpochMilli() - b.getStartedAt().toEpochMilli();
+                    }
+                    Map<String, Object> event = new LinkedHashMap<>();
+                    event.put("blockId", b.getBlockId());
+                    event.put("startedAt", b.getStartedAt());
+                    event.put("completedAt", b.getCompletedAt());
+                    event.put("durationMs", durationMs);
+                    return event;
+                })
+                .toList();
+
+            Map<String, Object> body = objectMapper.convertValue(run,
+                new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            body.put("events", events);
+
+            return ResponseEntity.ok(body);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().build();
         }

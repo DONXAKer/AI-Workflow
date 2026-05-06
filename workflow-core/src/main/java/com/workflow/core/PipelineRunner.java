@@ -106,8 +106,8 @@ public class PipelineRunner {
             .requirement(requirement)
             .status(RunStatus.RUNNING)
             .startedAt(java.time.Instant.now())
-            .completedBlocks(new java.util.HashSet<>())
-            .autoApprove(new java.util.HashSet<>())
+            .completedBlocks(new java.util.LinkedHashSet<>())
+            .autoApprove(new java.util.LinkedHashSet<>())
             .outputs(new ArrayList<>())
             .build();
         pipelineRun.setDryRun(dryRun);
@@ -161,8 +161,8 @@ public class PipelineRunner {
             .requirement(requirement)
             .status(RunStatus.RUNNING)
             .startedAt(java.time.Instant.now())
-            .completedBlocks(new java.util.HashSet<>())
-            .autoApprove(new java.util.HashSet<>())
+            .completedBlocks(new java.util.LinkedHashSet<>())
+            .autoApprove(new java.util.LinkedHashSet<>())
             .outputs(new ArrayList<>())
             .build();
         pipelineRun.setProjectSlug(com.workflow.project.ProjectContext.get());
@@ -178,6 +178,7 @@ public class PipelineRunner {
         captureConfigSnapshot(pipelineRun, config);
 
         List<BlockConfig> sorted = topologicalSort(config.getPipeline());
+        Instant preEntryNow = Instant.now();
         for (BlockConfig blockConfig : sorted) {
             if (blockConfig.getId().equals(fromBlockId)) break;
             pipelineRun.getCompletedBlocks().add(blockConfig.getId());
@@ -190,7 +191,8 @@ public class PipelineRunner {
             try {
                 String outputJson = objectMapper.writeValueAsString(injected);
                 BlockOutput blockOutput = BlockOutput.builder()
-                    .run(pipelineRun).blockId(blockConfig.getId()).outputJson(outputJson).build();
+                    .run(pipelineRun).blockId(blockConfig.getId()).outputJson(outputJson)
+                    .startedAt(preEntryNow).completedAt(preEntryNow).build();
                 pipelineRun.getOutputs().add(blockOutput);
             } catch (Exception e) {
                 log.warn("Failed to serialize injected output for block {}: {}", blockConfig.getId(), e.getMessage());
@@ -757,7 +759,8 @@ public class PipelineRunner {
                 Map<String, Object> skipped = new HashMap<>();
                 skipped.put("_skipped", true);
                 skipped.put("reason", "disabled");
-                saveBlockOutput(run, blockId, skipped);
+                Instant skipInstant = Instant.now();
+                saveBlockOutput(run, blockId, skipped, null, skipInstant, skipInstant);
                 if (!run.getCompletedBlocks().contains(blockId)) run.getCompletedBlocks().add(blockId);
                 runRepository.save(run);
                 if (wsHandler != null) wsHandler.sendBlockSkipped(run.getId(), blockId, "disabled");
@@ -772,7 +775,8 @@ public class PipelineRunner {
                     Map<String, Object> skipped = new HashMap<>();
                     skipped.put("_skipped", true);
                     skipped.put("reason", "condition: " + blockConfig.getCondition());
-                    saveBlockOutput(run, blockId, skipped);
+                    Instant skipInstant = Instant.now();
+                    saveBlockOutput(run, blockId, skipped, null, skipInstant, skipInstant);
                     if (!run.getCompletedBlocks().contains(blockId)) run.getCompletedBlocks().add(blockId);
                     runRepository.save(run);
                     i++;
@@ -798,6 +802,7 @@ public class PipelineRunner {
 
             if (wsHandler != null) wsHandler.sendBlockStarted(run.getId(), blockId);
             if (metrics != null) metrics.recordBlockStarted(blockConfig.getBlock());
+            Instant blockStart = Instant.now();
             long blockStartedAt = System.currentTimeMillis();
 
             Map<String, Object> inputs = gatherInputs(blockConfig, run, currentRequirement);
@@ -853,7 +858,7 @@ public class PipelineRunner {
                     .stream().map(BlockConfig::getId).collect(Collectors.toList());
 
                 // Persist block output before pausing so the API can serve it to late-joining clients
-                saveBlockOutput(run, blockId, output, inputs);
+                saveBlockOutput(run, blockId, output, inputs, blockStart, Instant.now());
 
                 run.setStatus(RunStatus.PAUSED_FOR_APPROVAL);
                 run.setPausedAt(Instant.now());
@@ -876,7 +881,7 @@ public class PipelineRunner {
 
                 } catch (JumpToBlockException jumpEx) {
                     clearApprovalTimeout(run);
-                    saveBlockOutput(run, blockId, output);
+                    saveBlockOutput(run, blockId, output, null, blockStart, Instant.now());
                     if (!run.getCompletedBlocks().contains(blockId)) run.getCompletedBlocks().add(blockId);
 
                     for (Map.Entry<String, Map<String, Object>> entry : jumpEx.getInjectedOutputs().entrySet()) {
@@ -900,7 +905,7 @@ public class PipelineRunner {
                 }
             }
 
-            saveBlockOutput(run, blockId, output, inputs);
+            saveBlockOutput(run, blockId, output, inputs, blockStart, Instant.now());
             if (!run.getCompletedBlocks().contains(blockId)) run.getCompletedBlocks().add(blockId);
             if (output.containsKey("requirement") && output.get("requirement") instanceof String newReq) {
                 currentRequirement = newReq;
@@ -998,7 +1003,7 @@ public class PipelineRunner {
                                     overrides != null ? overrides : "all_failed_items_overridden");
                                 overrideOut.put("override_reason",
                                     ar.getOutput() != null ? ar.getOutput().get("reason") : null);
-                                saveBlockOutput(run, blockId, overrideOut);
+                                saveBlockOutput(run, blockId, overrideOut, null, blockStart, Instant.now());
                                 if (!run.getCompletedBlocks().contains(blockId)) {
                                     run.getCompletedBlocks().add(blockId);
                                 }
@@ -1167,22 +1172,37 @@ public class PipelineRunner {
     }
 
     private void saveBlockOutput(PipelineRun run, String blockId, Map<String, Object> output) {
-        saveBlockOutput(run, blockId, output, null);
+        saveBlockOutput(run, blockId, output, null, null, null);
     }
 
-    private void saveBlockOutput(PipelineRun run, String blockId, Map<String, Object> output, Map<String, Object> inputs) {
+    private void saveBlockOutput(PipelineRun run, String blockId, Map<String, Object> output,
+                                  Map<String, Object> inputs) {
+        saveBlockOutput(run, blockId, output, inputs, null, null);
+    }
+
+    private void saveBlockOutput(PipelineRun run, String blockId, Map<String, Object> output,
+                                  Instant startedAt, Instant completedAt) {
+        saveBlockOutput(run, blockId, output, null, startedAt, completedAt);
+    }
+
+    private void saveBlockOutput(PipelineRun run, String blockId, Map<String, Object> output,
+                                  Map<String, Object> inputs, Instant startedAt, Instant completedAt) {
         try {
             String outputJson = objectMapper.writeValueAsString(output);
             String inputJson = inputs != null ? objectMapper.writeValueAsString(inputs) : null;
             Optional<BlockOutput> existing = run.getOutputs().stream()
                 .filter(o -> o.getBlockId().equals(blockId)).findFirst();
             if (existing.isPresent()) {
-                existing.get().setOutputJson(outputJson);
-                if (inputJson != null) existing.get().setInputJson(inputJson);
-                blockOutputRepository.save(existing.get());
+                BlockOutput bo = existing.get();
+                bo.setOutputJson(outputJson);
+                if (inputJson != null) bo.setInputJson(inputJson);
+                if (startedAt != null && bo.getStartedAt() == null) bo.setStartedAt(startedAt);
+                if (completedAt != null) bo.setCompletedAt(completedAt);
+                blockOutputRepository.save(bo);
             } else {
                 BlockOutput blockOutput = BlockOutput.builder()
-                    .run(run).blockId(blockId).outputJson(outputJson).inputJson(inputJson).build();
+                    .run(run).blockId(blockId).outputJson(outputJson).inputJson(inputJson)
+                    .startedAt(startedAt).completedAt(completedAt).build();
                 blockOutputRepository.save(blockOutput);
                 run.getOutputs().add(blockOutput);
             }

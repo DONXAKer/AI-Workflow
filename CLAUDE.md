@@ -214,7 +214,7 @@ pipeline:
 - `POST /api/runs` — start a run (`configPath`, `requirement`, `fromBlock`, `entryPointId`, `injectedOutputs`)
 - `GET /api/runs` — list runs (pagination, filters)
 - `GET /api/runs/stats` — run statistics
-- `GET /api/runs/{runId}` — run detail
+- `GET /api/runs/{runId}` — run detail; includes `events: [{blockId, startedAt, completedAt, durationMs}]` — chronological block timeline sourced from `BlockOutput.startedAt`/`completedAt` (internal `_`-prefixed entries excluded)
 - `POST /api/runs/{runId}/approval` — resolve approval gate
 - `POST /api/runs/{runId}/cancel` — cancel run
 - `POST /api/runs/detect` — auto-detect entry point

@@ -1031,6 +1031,10 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                     <td className="px-5 py-3.5 whitespace-nowrap">
                       {block.status === 'running' && block.startedAt ? (
                         <LiveDuration startedAt={block.startedAt} />
+                      ) : block.durationMs != null ? (
+                        <span className="font-mono text-xs text-slate-400">
+                          {fmtDurationCompact(block.durationMs)}
+                        </span>
                       ) : block.startedAt && block.completedAt ? (
                         <span className="font-mono text-xs text-slate-400">
                           {fmtDuration(new Date(block.completedAt).getTime() - new Date(block.startedAt).getTime())}
