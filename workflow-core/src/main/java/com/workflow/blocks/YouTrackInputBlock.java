@@ -31,6 +31,7 @@ public class YouTrackInputBlock implements Block {
         return new BlockMetadata(
             "YouTrack input",
             "input",
+            Phase.INTAKE,
             List.of(
                 FieldSchema.string("issue_id", "ID задачи",
                     "Опциональный ID задачи (PROJ-42). Если пусто — берётся из run inputs.")

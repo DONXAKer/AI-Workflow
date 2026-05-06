@@ -12,6 +12,8 @@ import java.util.Map;
  *
  * @param label         human-readable display name (e.g. "Shell exec")
  * @param category      one of: input | agent | verify | ci | infra | output | general
+ * @param phase         pipeline phase this block belongs to. {@link Phase#ANY} marks
+ *                      polymorphic blocks that operators must pin per-instance.
  * @param configFields  list of {@link FieldSchema} entries describing block.config keys.
  *                      Empty list = UI shows {@code RawJsonFallback} unless
  *                      {@code hasCustomForm=true}.
@@ -24,6 +26,7 @@ import java.util.Map;
 public record BlockMetadata(
     String label,
     String category,
+    Phase phase,
     List<FieldSchema> configFields,
     boolean hasCustomForm,
     Map<String, Object> uiHints
@@ -31,10 +34,27 @@ public record BlockMetadata(
     public BlockMetadata {
         if (configFields == null) configFields = List.of();
         if (uiHints == null) uiHints = Map.of();
+        if (phase == null) phase = Phase.ANY;
     }
 
-    /** Default metadata for blocks that don't override {@link Block#getMetadata()}. */
+    /**
+     * Backward-compat constructor for blocks declared before phases existed.
+     * Defaults phase to {@link Phase#ANY} — these blocks will emit a WARN at
+     * validation until their {@code getMetadata()} is updated to pass an
+     * explicit phase. Callers should migrate to the canonical 6-arg form.
+     */
+    public BlockMetadata(String label, String category, List<FieldSchema> configFields,
+                         boolean hasCustomForm, Map<String, Object> uiHints) {
+        this(label, category, Phase.ANY, configFields, hasCustomForm, uiHints);
+    }
+
+    /**
+     * Default metadata for blocks that don't override {@link Block#getMetadata()}.
+     * Phase is resolved from the canonical {@link Phase#forBlockType(String)}
+     * map — blocks listed there get a meaningful phase even without a custom
+     * {@code getMetadata()}, unmapped blocks fall back to {@link Phase#ANY}.
+     */
     public static BlockMetadata defaultFor(String name) {
-        return new BlockMetadata(name, "general", List.of(), false, Map.of());
+        return new BlockMetadata(name, "general", Phase.forBlockType(name), List.of(), false, Map.of());
     }
 }

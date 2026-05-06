@@ -49,6 +49,11 @@ defaults:
     temperature: 0.3
     maxTokens: 8192
 
+# This template has a two-pass structure (server impl/verify → blueprint impl/verify)
+# that does not fit the linear phase ordering. Project copies that drop the
+# blueprint sub-flow can remove this flag and rely on default phase validation.
+phase_check: false
+
 pipeline:
   - id: "task_md"
     block: "task_md_input"

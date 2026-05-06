@@ -121,6 +121,7 @@ pipeline:
   # ---------------------------------------------------------------------------
   - id: plan
     block: orchestrator
+    phase: analyze
     depends_on:
       - clarification
       - analysis
@@ -160,6 +161,7 @@ pipeline:
   # ---------------------------------------------------------------------------
   - id: git_setup
     block: shell_exec
+    phase: implement
     depends_on:
       - plan
     config:
@@ -244,6 +246,7 @@ pipeline:
   # ---------------------------------------------------------------------------
   - id: build_test
     block: shell_exec
+    phase: verify
     depends_on:
       - codegen
     config:
@@ -274,6 +277,7 @@ pipeline:
   # ---------------------------------------------------------------------------
   - id: review
     block: orchestrator
+    phase: verify
     depends_on:
       - build_test
     agent:
@@ -333,6 +337,7 @@ pipeline:
   # ---------------------------------------------------------------------------
   - id: git_commit
     block: shell_exec
+    phase: release
     depends_on:
       - review
     config:

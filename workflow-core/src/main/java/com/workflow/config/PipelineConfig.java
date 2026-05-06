@@ -27,6 +27,9 @@ public class PipelineConfig {
 
     private List<TriggerConfig> triggers = new ArrayList<>();
 
+    @JsonProperty("phase_check")
+    private boolean phaseCheck = true;
+
     public PipelineConfig() {}
 
     public String getName() {
@@ -91,5 +94,13 @@ public class PipelineConfig {
 
     public void setTriggers(List<TriggerConfig> triggers) {
         this.triggers = triggers != null ? triggers : new ArrayList<>();
+    }
+
+    public boolean isPhaseCheck() {
+        return phaseCheck;
+    }
+
+    public void setPhaseCheck(boolean phaseCheck) {
+        this.phaseCheck = phaseCheck;
     }
 }

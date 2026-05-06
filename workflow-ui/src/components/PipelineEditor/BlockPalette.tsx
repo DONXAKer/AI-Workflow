@@ -1,25 +1,14 @@
 import { useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
 import clsx from 'clsx'
-import { BlockRegistryEntry } from '../../types'
+import { BlockRegistryEntry, Phase } from '../../types'
 import { blockTypeLabel, blockTypeLabelWithCode } from '../../utils/blockLabels'
+import { PHASE_LABEL, PHASE_ORDER, phaseStripeClass } from '../../utils/phaseColors'
 
 interface BlockPaletteProps {
   registry: BlockRegistryEntry[]
   onAdd: (entry: BlockRegistryEntry) => void
 }
-
-const CATEGORY_LABEL: Record<string, string> = {
-  input: 'Входные данные',
-  agent: 'Агенты',
-  verify: 'Проверки',
-  ci: 'CI/CD',
-  infra: 'Инфраструктура',
-  output: 'Выходные данные',
-  general: 'Прочие',
-}
-
-const CATEGORY_ORDER = ['input', 'agent', 'verify', 'ci', 'infra', 'output', 'general']
 
 export function BlockPalette({ registry, onAdd }: BlockPaletteProps) {
   const [q, setQ] = useState('')
@@ -33,10 +22,13 @@ export function BlockPalette({ registry, onAdd }: BlockPaletteProps) {
           (blockTypeLabel(e.type)?.toLowerCase().includes(ql) ?? false) ||
           (e.description ?? '').toLowerCase().includes(ql))
       : registry
-    const out: Record<string, BlockRegistryEntry[]> = {}
+    const out: Record<Phase, BlockRegistryEntry[]> = {
+      INTAKE: [], ANALYZE: [], IMPLEMENT: [], VERIFY: [],
+      PUBLISH: [], RELEASE: [], ANY: [],
+    }
     for (const e of filtered) {
-      const cat = e.metadata.category || 'general'
-      ;(out[cat] ??= []).push(e)
+      const phase: Phase = e.metadata.phase ?? 'ANY'
+      out[phase].push(e)
     }
     return out
   }, [registry, q])
@@ -59,13 +51,17 @@ export function BlockPalette({ registry, onAdd }: BlockPaletteProps) {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto p-2 space-y-3">
-        {CATEGORY_ORDER.map(cat => {
-          const items = grouped[cat]
+        {PHASE_ORDER.map(phase => {
+          const items = grouped[phase]
           if (!items || items.length === 0) return null
           return (
-            <div key={cat}>
-              <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1 px-1">
-                {CATEGORY_LABEL[cat] ?? cat}
+            <div key={phase} data-testid={`palette-phase-${phase.toLowerCase()}`}>
+              <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1 px-1 flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  className={clsx('w-1.5 h-3 rounded-sm', phaseStripeClass(phase))}
+                />
+                {PHASE_LABEL[phase]}
               </div>
               <div className="space-y-0.5">
                 {items.map(item => (
@@ -82,7 +78,7 @@ export function BlockPalette({ registry, onAdd }: BlockPaletteProps) {
                     title={item.description}
                   >
                     <div className="font-medium leading-tight">{blockTypeLabelWithCode(item.type)}</div>
-                    <div className="font-mono text-[10px] text-slate-500 mt-0.5 truncate">
+                    <div className="font-mono text-[10px] text-slate-500 mt-0.5">
                       {item.metadata.label}
                     </div>
                   </button>

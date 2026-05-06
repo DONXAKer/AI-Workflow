@@ -93,6 +93,7 @@ pipeline:
 
   - id: build
     block: shell_exec
+    phase: verify
     approval: false
     depends_on: [impl]
     config:
@@ -119,6 +120,7 @@ pipeline:
 
   - id: tests
     block: shell_exec
+    phase: verify
     approval: false
     depends_on: [verify_build]
     config:
@@ -176,6 +178,7 @@ pipeline:
 
   - id: commit
     block: shell_exec
+    phase: release
     approval: false
     depends_on: [verify_acceptance]
     config:

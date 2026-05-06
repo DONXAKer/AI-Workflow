@@ -259,12 +259,21 @@
       "Bash(launchctl unload *)",
       "Bash(launchctl load *)",
       "Bash(launchctl list *)",
-      "Bash(lsof -nP -iTCP -sTCP:LISTEN)"
-      "Read(//Users/home/.claude/**)",
+      "Bash(lsof -nP -iTCP -sTCP:LISTEN)",
       "Bash(cp \"D:/Проекты/AI-Workflow/docs/feature-pipeline-template.yaml\" \"D:/WarCard/.ai-workflow/pipelines/_template_test.yaml\")",
       "Bash(cd /tmp)",
       "Bash(size=5 2>&1)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(tee /tmp/pa_run_1.1.json)",
+      "Bash(INITIAL_RUN_ID=fbcbe818-fa1f-4322-8a93-e63bbe0c37a1 nohup /tmp/pa_runner.sh)",
+      "Bash(kill 36278)",
+      "Bash(break)",
+      "Bash(/tmp/wf.sh GET \"/api/runs?limit=3\")",
+      "Bash(sips -s format png /Users/home/Code/1.bmp --out /tmp/1.png)",
+      "Bash(PROJECT_SLUG=ai-workflow /tmp/wf.sh POST \"/api/pipelines/validate?configPath=./config/ai_workflow.yaml\")",
+      "Bash(/tmp/wf.sh POST /api/projects -d '{ *)",
+      "Bash(PROJECT_SLUG=ai-workflow /tmp/wf.sh POST *)",
+      "Bash(PROJECT_SLUG=ai-workflow /tmp/wf.sh GET \"/api/runs/bb467022-efc3-4852-a1b0-3a7d0e222b71\")"
     ]
   }
 }

@@ -64,6 +64,7 @@ public class HttpGetBlock implements Block {
         return new BlockMetadata(
             "HTTP GET",
             "infra",
+            Phase.ANY,
             List.of(
                 FieldSchema.requiredString("url", "URL", "Полный URL запроса. Поддерживает ${...}."),
                 FieldSchema.number("timeout_sec", "Таймаут (сек)", DEFAULT_TIMEOUT_SEC,

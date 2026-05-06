@@ -29,6 +29,7 @@ public class GitBranchInputBlock implements Block {
         return new BlockMetadata(
             "Git branch input",
             "input",
+            Phase.INTAKE,
             List.of(
                 FieldSchema.requiredString("branch", "Имя ветки",
                     "Существующая ветка в GitLab проекта."),

@@ -105,6 +105,7 @@ public class CodeGenerationBlock implements Block {
         return new BlockMetadata(
             "Code generation",
             "agent",
+            Phase.IMPLEMENT,
             List.of(),
             false,
             Map.of()

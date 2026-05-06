@@ -1,5 +1,7 @@
 package com.workflow.config;
 
+import com.workflow.blocks.Block;
+import com.workflow.blocks.Phase;
 import com.workflow.core.BlockRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -56,6 +58,10 @@ public class PipelineConfigValidator {
     public static final String FORWARD_REF              = "FORWARD_REF";
     public static final String REF_UNKNOWN_BLOCK        = "REF_UNKNOWN_BLOCK";
     public static final String REF_DISABLED_BLOCK       = "REF_DISABLED_BLOCK";
+    public static final String INVALID_PHASE            = "INVALID_PHASE";
+    public static final String PHASE_MONOTONICITY       = "PHASE_MONOTONICITY";
+    public static final String PHASE_LOOPBACK_FORWARD   = "PHASE_LOOPBACK_FORWARD";
+    public static final String PHASE_OVERRIDE_MISSING   = "PHASE_OVERRIDE_MISSING";
 
     /** Matches {@code ${...}} interpolations in YAML strings. */
     private static final Pattern DOLLAR_BRACE_REF = Pattern.compile("\\$\\{([^}]+)}");
@@ -260,7 +266,130 @@ public class PipelineConfigValidator {
             }
         }
 
+        // ── Level 4 — phase ordering ─────────────────────────────────────────
+        if (config.isPhaseCheck()) {
+            validatePhases(blocks, blockMap, errors);
+        }
+
         return ValidationResult.of(errors);
+    }
+
+    /**
+     * Level 4 — phase ordering. Each block has an effective phase resolved from
+     * (1) the per-instance YAML override {@code block.phase}, falling back to
+     * (2) the block type's default {@link Phase} declared in {@link com.workflow.blocks.BlockMetadata}.
+     *
+     * <p>Rules:
+     * <ul>
+     *   <li>Unparseable {@code phase} string → {@link #INVALID_PHASE} (ERROR).</li>
+     *   <li>For every {@code depends_on} edge u→v with both phases concrete (not ANY):
+     *       {@code phase(v) >= phase(u)}, else {@link #PHASE_MONOTONICITY} (ERROR).</li>
+     *   <li>For every loopback ({@code verify.on_fail.target}, {@code on_failure.target}):
+     *       {@code phase(target) < phase(self)} when both concrete, else
+     *       {@link #PHASE_LOOPBACK_FORWARD} (ERROR).</li>
+     *   <li>Block whose effective phase is {@link Phase#ANY} without explicit override:
+     *       {@link #PHASE_OVERRIDE_MISSING} (WARN — operator should pin the role).</li>
+     * </ul>
+     *
+     * <p>{@link Phase#ANY} blocks are transparent in the monotonicity check —
+     * any edge involving an ANY block on either side is skipped.
+     */
+    private void validatePhases(List<BlockConfig> blocks, Map<String, BlockConfig> blockMap,
+                                List<ValidationError> errors) {
+        Map<String, Phase> effective = new HashMap<>();
+        for (int i = 0; i < blocks.size(); i++) {
+            BlockConfig b = blocks.get(i);
+            if (b.getId() == null) continue;
+            String location = "pipeline[" + i + "]";
+
+            String override = b.getPhase();
+            Phase phase;
+            if (override != null && !override.isBlank()) {
+                phase = parsePhase(override);
+                if (phase == null) {
+                    errors.add(new ValidationError(INVALID_PHASE,
+                        "Block '" + b.getId() + "' has unknown phase '" + override
+                            + "'. Valid: intake, analyze, implement, verify, publish, release, any",
+                        location + ".phase", b.getId(), Severity.ERROR));
+                    phase = defaultPhase(b);
+                }
+            } else {
+                phase = defaultPhase(b);
+            }
+            effective.put(b.getId(), phase);
+
+            if (phase == Phase.ANY && (override == null || override.isBlank())) {
+                errors.add(new ValidationError(PHASE_OVERRIDE_MISSING,
+                    "Block '" + b.getId() + "' uses block type '" + b.getBlock()
+                        + "' which is polymorphic (phase=ANY). Set 'phase: <intake|analyze|implement|verify|publish|release>' "
+                        + "to pin its role and enable phase ordering checks for this block.",
+                    location + ".phase", b.getId(), Severity.WARN));
+            }
+        }
+
+        for (int i = 0; i < blocks.size(); i++) {
+            BlockConfig b = blocks.get(i);
+            if (b.getId() == null) continue;
+            Phase mine = effective.get(b.getId());
+            if (mine == null) continue;
+            String location = "pipeline[" + i + "]";
+
+            if (b.getDependsOn() != null) {
+                for (String dep : b.getDependsOn()) {
+                    if (dep == null || !blockMap.containsKey(dep)) continue;
+                    Phase parent = effective.get(dep);
+                    if (parent == null) continue;
+                    if (Phase.violatesMonotonic(parent, mine)) {
+                        errors.add(new ValidationError(PHASE_MONOTONICITY,
+                            "Block '" + b.getId() + "' (phase=" + mine + ") depends on '" + dep
+                                + "' (phase=" + parent + ") — successor phase must be >= predecessor.",
+                            location + ".depends_on", b.getId(), Severity.ERROR));
+                    }
+                }
+            }
+
+            VerifyConfig v = b.getVerify();
+            if (v != null && v.getOnFail() != null && "loopback".equals(v.getOnFail().getAction())) {
+                checkLoopbackPhase(b.getId(), mine, v.getOnFail().getTarget(), effective,
+                    location + ".verify.on_fail.target", errors);
+            }
+            OnFailureConfig of = b.getOnFailure();
+            if (of != null && "loopback".equals(of.getAction())) {
+                checkLoopbackPhase(b.getId(), mine, of.getTarget(), effective,
+                    location + ".on_failure.target", errors);
+            }
+        }
+    }
+
+    private void checkLoopbackPhase(String blockId, Phase mine, String target,
+                                    Map<String, Phase> effective, String location,
+                                    List<ValidationError> errors) {
+        if (target == null || target.isBlank()) return;
+        Phase tgt = effective.get(target);
+        if (tgt == null) return;
+        if (mine == Phase.ANY || tgt == Phase.ANY) return;
+        if (tgt.order() >= mine.order()) {
+            errors.add(new ValidationError(PHASE_LOOPBACK_FORWARD,
+                "Block '" + blockId + "' (phase=" + mine + ") loops back to '" + target
+                    + "' (phase=" + tgt + ") — loopback target must be in an earlier phase.",
+                location, blockId, Severity.ERROR));
+        }
+    }
+
+    private Phase parsePhase(String s) {
+        if (s == null) return null;
+        try {
+            return Phase.valueOf(s.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private Phase defaultPhase(BlockConfig b) {
+        if (b.getBlock() == null) return Phase.ANY;
+        Block bean = blockRegistry.get(b.getBlock());
+        if (bean == null) return Phase.forBlockType(b.getBlock());
+        return bean.getMetadata().phase();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

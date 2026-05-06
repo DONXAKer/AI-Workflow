@@ -371,4 +371,120 @@ class PipelineConfigValidatorTest {
         ValidationResult r = validator.validate(cfg);
         assertTrue(r.valid(), () -> "expected valid, got: " + r.errors());
     }
+
+    // ── Level 4 — phase ordering ──────────────────────────────────────────────
+
+    @Test
+    void phaseDecreasesAlongDependsOn_emitsPhaseMonotonicity() {
+        // verify (VERIFY=3) → analysis (ANALYZE=1): violates monotonicity.
+        BlockConfig analysis = block("analysis", "analysis");
+        BlockConfig v = block("v", "verify");
+        v.setDependsOn(new ArrayList<>(List.of("analysis")));
+        // Reverse: declare a block whose successor is earlier in phase order.
+        // analysis depends_on verify — analysis(ANALYZE)<verify(VERIFY).
+        analysis.setDependsOn(new ArrayList<>(List.of("v")));
+        // To avoid DAG cycle, drop v's depends_on:
+        v.setDependsOn(new ArrayList<>());
+        // Now analysis -> v means v completes first, then analysis runs;
+        // that's analysis(ANALYZE=1) AFTER v(VERIFY=3), which violates.
+        ValidationResult r = validator.validate(pipeline(v, analysis));
+        assertTrue(codes(r).contains(PipelineConfigValidator.PHASE_MONOTONICITY),
+            () -> "expected PHASE_MONOTONICITY, got: " + r.errors());
+    }
+
+    @Test
+    void phaseRespected_noPhaseErrors() {
+        // task_md(INTAKE) → analysis(ANALYZE) → impl(IMPLEMENT) → v(VERIFY): all monotonic.
+        BlockConfig taskMd = block("task_md", "task_md_input");
+        BlockConfig analysis = block("analysis", "analysis");
+        analysis.setDependsOn(new ArrayList<>(List.of("task_md")));
+        BlockConfig impl = block("impl", "agent_with_tools");
+        impl.setDependsOn(new ArrayList<>(List.of("analysis")));
+        BlockConfig v = block("v", "verify");
+        v.setDependsOn(new ArrayList<>(List.of("impl")));
+        ValidationResult r = validator.validate(pipeline(taskMd, analysis, impl, v));
+        assertFalse(codes(r).contains(PipelineConfigValidator.PHASE_MONOTONICITY),
+            () -> "expected no PHASE_MONOTONICITY, got: " + r.errors());
+    }
+
+    @Test
+    void loopbackToLaterPhase_emitsPhaseLoopbackForward() {
+        // verify (VERIFY) loops back to a target in a strictly LATER phase — illegal.
+        // Need an IMPLEMENT block whose loopback target is RELEASE (we don't have
+        // 'release_notes' in the stub registry, so use shell_exec with phase override).
+        BlockConfig impl = block("impl", "agent_with_tools");          // IMPLEMENT
+        BlockConfig later = block("later", "shell_exec");              // ANY by default
+        later.setPhase("release");                                       // override → RELEASE
+        BlockConfig v = block("v", "verify");                           // VERIFY
+        v.setDependsOn(new ArrayList<>(List.of("impl")));
+        VerifyConfig vc = new VerifyConfig();
+        vc.setSubject("impl");
+        OnFailConfig of = new OnFailConfig();
+        of.setAction("loopback");
+        of.setTarget("later");                                          // VERIFY → RELEASE: forward
+        vc.setOnFail(of);
+        v.setVerify(vc);
+        ValidationResult r = validator.validate(pipeline(impl, later, v));
+        assertTrue(codes(r).contains(PipelineConfigValidator.PHASE_LOOPBACK_FORWARD),
+            () -> "expected PHASE_LOOPBACK_FORWARD, got: " + r.errors());
+    }
+
+    @Test
+    void polymorphicWithoutOverride_emitsWarn() {
+        // shell_exec defaults to ANY — without explicit phase override should WARN.
+        BlockConfig sh = block("sh", "shell_exec");
+        ValidationResult r = validator.validate(pipeline(sh));
+        assertTrue(codes(r).contains(PipelineConfigValidator.PHASE_OVERRIDE_MISSING),
+            () -> "expected PHASE_OVERRIDE_MISSING, got: " + r.errors());
+        // WARN does not block: the result must still be valid().
+        assertTrue(r.valid(), () -> "WARN-only result should be valid, got: " + r.errors());
+    }
+
+    @Test
+    void polymorphicWithOverride_noWarn() {
+        BlockConfig sh = block("sh", "shell_exec");
+        sh.setPhase("verify");
+        ValidationResult r = validator.validate(pipeline(sh));
+        assertFalse(codes(r).contains(PipelineConfigValidator.PHASE_OVERRIDE_MISSING),
+            () -> "no PHASE_OVERRIDE_MISSING expected when phase is set, got: " + r.errors());
+    }
+
+    @Test
+    void phaseCheckDisabled_skipsLevel4() {
+        // Construct a pipeline that would normally fail PHASE_MONOTONICITY
+        // and assert that phase_check=false suppresses the error entirely.
+        BlockConfig v = block("v", "verify");
+        BlockConfig analysis = block("analysis", "analysis");
+        analysis.setDependsOn(new ArrayList<>(List.of("v")));
+        PipelineConfig cfg = pipeline(v, analysis);
+        cfg.setPhaseCheck(false);
+        ValidationResult r = validator.validate(cfg);
+        assertFalse(codes(r).contains(PipelineConfigValidator.PHASE_MONOTONICITY),
+            () -> "phase_check=false should skip Level 4, got: " + r.errors());
+        assertFalse(codes(r).contains(PipelineConfigValidator.PHASE_OVERRIDE_MISSING));
+    }
+
+    @Test
+    void anyBlockTransparentInDependsOn_noErrors() {
+        // analysis(ANALYZE) → orchestrator(ANY override → analyze) → impl(IMPLEMENT):
+        // ANY block, even when overridden, is transparent only when ANY itself.
+        // Here we test the truly-transparent case: leave orchestrator as ANY.
+        BlockConfig analysis = block("analysis", "analysis");
+        BlockConfig orch = block("orch", "orchestrator");           // stays ANY
+        orch.setDependsOn(new ArrayList<>(List.of("analysis")));
+        BlockConfig impl = block("impl", "agent_with_tools");
+        impl.setDependsOn(new ArrayList<>(List.of("orch")));        // IMPLEMENT depends on ANY → transparent
+        ValidationResult r = validator.validate(pipeline(analysis, orch, impl));
+        assertFalse(codes(r).contains(PipelineConfigValidator.PHASE_MONOTONICITY),
+            () -> "ANY should be transparent in monotonicity, got: " + r.errors());
+    }
+
+    @Test
+    void unknownPhaseString_emitsInvalidPhase() {
+        BlockConfig sh = block("sh", "shell_exec");
+        sh.setPhase("bogus");
+        ValidationResult r = validator.validate(pipeline(sh));
+        assertTrue(codes(r).contains(PipelineConfigValidator.INVALID_PHASE),
+            () -> "expected INVALID_PHASE, got: " + r.errors());
+    }
 }

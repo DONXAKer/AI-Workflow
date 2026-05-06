@@ -120,6 +120,7 @@ public class OrchestratorBlock implements Block {
         return new BlockMetadata(
             "Orchestrator",
             "agent",
+            Phase.ANY,
             List.of(
                 FieldSchema.enumField("mode", "Режим", List.of("plan", "review"),
                     "plan", "plan — построить план; review — проверить результат относительно definition_of_done."),

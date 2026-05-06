@@ -126,6 +126,7 @@ public class AgentVerifyBlock implements Block {
         return new BlockMetadata(
             "Agent Verify",
             "verify",
+            Phase.VERIFY,
             List.of(
                 FieldSchema.string("subject", "Subject block",
                     "ID блока чей acceptance_checklist проверяется (обычно analysis)."),

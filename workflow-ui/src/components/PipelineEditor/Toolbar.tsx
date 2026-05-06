@@ -1,6 +1,8 @@
-import { ArrowLeft, Save, ShieldCheck, Loader2, Settings, AlertCircle, Undo2 } from 'lucide-react'
+import { ArrowLeft, Save, ShieldCheck, Loader2, Settings, AlertCircle, Undo2, AlertTriangle } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import clsx from 'clsx'
+import { Phase } from '../../types'
+import { CONCRETE_PHASES, PHASE_LABEL, phaseStripeClass } from '../../utils/phaseColors'
 
 interface Props {
   projectSlug: string
@@ -14,6 +16,10 @@ interface Props {
   validatedClean: boolean
   errorCount: number
   canUndo: boolean
+  /** Concrete phases (no ANY) currently present in the pipeline. Empty array hides the indicator. */
+  presentPhases?: Set<Phase>
+  /** Pipeline-level phase_check flag — hides indicator when off. */
+  phaseCheckEnabled?: boolean
   onUndo: () => void
   onValidate: () => void
   onSave: () => void
@@ -61,6 +67,10 @@ export function Toolbar(props: Props) {
           Валидно
         </span>
       )}
+      <MissingPhasesIndicator
+        presentPhases={props.presentPhases}
+        enabled={props.phaseCheckEnabled !== false}
+      />
 
       <button
         type="button"
@@ -114,6 +124,37 @@ export function Toolbar(props: Props) {
         <Settings className="w-4 h-4" />
       </button>
     </div>
+  )
+}
+
+function MissingPhasesIndicator({ presentPhases, enabled }: {
+  presentPhases?: Set<Phase>
+  enabled: boolean
+}) {
+  if (!enabled) return null
+  if (!presentPhases || presentPhases.size === 0) return null
+  const missing = CONCRETE_PHASES.filter(p => !presentPhases.has(p))
+  if (missing.length === 0) return null
+  const tooltip = missing.map(p => PHASE_LABEL[p]).join(', ')
+  return (
+    <span
+      data-testid="missing-phases-indicator"
+      title={`Не представлены фазы: ${tooltip}`}
+      className="text-xs text-amber-200 bg-amber-950/40 border border-amber-900/60 rounded px-2 py-1 flex items-center gap-1.5"
+    >
+      <AlertTriangle className="w-3.5 h-3.5" />
+      <span className="hidden md:inline">Нет фаз:</span>
+      <span className="flex items-center gap-0.5">
+        {missing.map(p => (
+          <span
+            key={p}
+            aria-label={PHASE_LABEL[p]}
+            className={clsx('w-1.5 h-3 rounded-sm', phaseStripeClass(p))}
+            title={PHASE_LABEL[p]}
+          />
+        ))}
+      </span>
+    </span>
   )
 }
 

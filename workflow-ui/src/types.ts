@@ -291,12 +291,16 @@ export interface PipelineConfigSettings {
   blocks: PipelineBlockSetting[]
 }
 
+export type Severity = 'ERROR' | 'WARN' | 'INFO'
+
 /** Single error from `POST /api/pipelines/validate` (mirrors Java `ValidationError` record). */
 export interface ValidationError {
   code: string
   message: string
   location: string | null
   blockId: string | null
+  /** ERROR blocks save/run; WARN/INFO are advisory. Defaults to ERROR for legacy responses. */
+  severity?: Severity
 }
 
 /** Result envelope from `POST /api/pipelines/validate`. */
@@ -427,6 +431,13 @@ export interface BlockConfigDto {
   /** Java @JsonProperty("on_timeout"). */
   on_timeout?: TimeoutConfigDto | null
   retry?: RetryConfigDto | null
+  /**
+   * Per-instance phase override. Lower-case string ('intake' | 'analyze' |
+   * 'implement' | 'verify' | 'publish' | 'release' | 'any'). Null/undefined
+   * means inherit from BlockMetadataDto.phase. The validator parses
+   * case-insensitively.
+   */
+  phase?: string | null
 }
 
 export interface EntryPointInjectionDto {
@@ -473,6 +484,12 @@ export interface PipelineConfigDto {
   /** Java @JsonProperty("entry_points"). */
   entry_points?: EntryPointConfigDto[]
   triggers?: TriggerConfigDto[]
+  /**
+   * Disable Level 4 phase ordering check for this pipeline. Default true.
+   * Set to false for legacy/exotic pipelines that do not fit the linear
+   * phase model (e.g. multi-pass templates).
+   */
+  phase_check?: boolean
 }
 
 // ── Block registry (UI editor metadata) ───────────────────────────────────────
@@ -491,9 +508,17 @@ export interface FieldSchemaDto {
   hints?: Record<string, unknown>
 }
 
+export type Phase =
+  | 'INTAKE' | 'ANALYZE' | 'IMPLEMENT' | 'VERIFY' | 'PUBLISH' | 'RELEASE' | 'ANY'
+
 export interface BlockMetadataDto {
   label: string
   category: string
+  /**
+   * Pipeline phase this block type belongs to. ANY = polymorphic block whose
+   * phase the operator must pin per-instance via BlockConfigDto.phase override.
+   */
+  phase: Phase
   configFields: FieldSchemaDto[]
   hasCustomForm: boolean
   uiHints?: Record<string, unknown>

@@ -142,9 +142,10 @@ pipeline:
         conflict_files: "$.merge.conflicts"
         main_diff: "$.merge.main_diff"
 
-  # 12. Build artifact once — promoted to all envs
+  # 12. Build artifact once — promoted to all envs (release-build, post-merge)
   - id: build
     block: build
+    phase: release
     approval_mode: auto
     depends_on: [merge]
     config:
@@ -160,9 +161,10 @@ pipeline:
       environment: test
       strategy: rolling
 
-  # 14. Acceptance/smoke tests — loopback on failure
+  # 14. Acceptance/smoke tests against deployed environment — loopback on failure
   - id: acceptance
     block: run_tests
+    phase: release
     approval_mode: auto
     depends_on: [deploy_test]
     config:

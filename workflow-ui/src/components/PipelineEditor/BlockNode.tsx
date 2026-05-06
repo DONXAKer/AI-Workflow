@@ -4,6 +4,7 @@ import { AlertCircle, Ban, Plus, Sparkles, ShieldCheck, Wrench, Globe, FileInput
 import clsx from 'clsx'
 import { BlockNode as BlockNodeT } from './types'
 import { blockIdLabelWithCode, blockTypeLabelWithCode } from '../../utils/blockLabels'
+import { phaseStripeClass, PHASE_LABEL } from '../../utils/phaseColors'
 
 const CATEGORY_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
   input: FileInput,
@@ -23,14 +24,22 @@ function BlockNodeImpl(props: NodeProps<BlockNodeT>) {
   return (
     <div
       data-testid={`block-node-${data.blockId}`}
+      data-phase={data.phase}
       data-block-id={data.blockId}
       className={clsx(
-        'group relative bg-slate-900 border rounded-lg px-3 py-2 min-w-[180px] max-w-[260px] text-left shadow-sm transition-colors',
+        'group relative bg-slate-900 border rounded-lg pt-2.5 pb-2 px-3 min-w-[180px] max-w-[260px] text-left shadow-sm transition-colors overflow-hidden',
         data.selected ? 'border-blue-500 ring-2 ring-blue-500/40' : 'border-slate-700',
         errors.length > 0 && 'border-red-600 ring-2 ring-red-600/30',
         data.disabled && 'opacity-50',
       )}
     >
+      {/* Phase top-stripe — visible at-a-glance phase membership */}
+      <div
+        data-testid={`block-phase-stripe-${data.blockId}`}
+        className={clsx('absolute top-0 left-0 right-0 h-1', phaseStripeClass(data.phase))}
+        title={PHASE_LABEL[data.phase] ?? data.phase}
+      />
+
       {/* Source / target handles for react-flow drag-edge */}
       <Handle type="target" position={Position.Top} className="!bg-slate-500 !w-2 !h-2" />
       <Handle type="source" position={Position.Bottom} className="!bg-slate-500 !w-2 !h-2" />

@@ -52,6 +52,17 @@ public class BlockConfig {
     @JsonProperty("retry")
     private RetryConfig retry;
 
+    /**
+     * Per-instance phase override. {@code null} = use the block type's default
+     * phase from {@link com.workflow.blocks.BlockMetadata#phase()}. Set to one
+     * of the {@link com.workflow.blocks.Phase} values (case-insensitive) to pin
+     * a polymorphic block (shell_exec, http_get, orchestrator) or to repurpose
+     * a monomorphic block (e.g. a {@code build} block playing the release-build
+     * role rather than verify-build).
+     */
+    @JsonProperty("phase")
+    private String phase;
+
     public BlockConfig() {}
 
     public String getId() {
@@ -159,6 +170,9 @@ public class BlockConfig {
     public RetryConfig getRetry() { return retry; }
     public void setRetry(RetryConfig retry) { this.retry = retry; }
 
+    public String getPhase() { return phase; }
+    public void setPhase(String phase) { this.phase = phase; }
+
     /**
      * Returns a copy of this BlockConfig with a merged config map.
      */
@@ -180,6 +194,7 @@ public class BlockConfig {
         copy.setTimeoutSeconds(this.timeoutSeconds);
         copy.setOnTimeout(this.onTimeout);
         copy.setRetry(this.retry);
+        copy.setPhase(this.phase);
         Map<String, Object> mergedConfig = new HashMap<>(this.config);
         mergedConfig.putAll(extraConfig);
         copy.setConfig(mergedConfig);

@@ -6,6 +6,7 @@ import AgentWithToolsForm from './forms/AgentWithToolsForm'
 import VerifyForm from './forms/VerifyForm'
 import RawJsonFallback from './forms/RawJsonFallback'
 import { HelpPopover, ExpressionHelpBody } from './HelpPopover'
+import PhaseSelector from './PhaseSelector'
 
 interface Props {
   block: BlockConfigDto
@@ -97,7 +98,12 @@ export function SidePanel({
         )}
 
         {/* Common fields */}
-        <CommonFields block={block} otherBlockIds={otherBlockIds} onPatch={onPatch} />
+        <CommonFields
+          block={block}
+          otherBlockIds={otherBlockIds}
+          defaultPhase={meta?.phase}
+          onPatch={onPatch}
+        />
 
         {/* Block-specific form */}
         <div className="border-t border-slate-800 pt-4">
@@ -120,9 +126,10 @@ export function SidePanel({
   )
 }
 
-function CommonFields({ block, otherBlockIds, onPatch }: {
+function CommonFields({ block, otherBlockIds, defaultPhase, onPatch }: {
   block: BlockConfigDto
   otherBlockIds: string[]
+  defaultPhase: import('../../types').Phase | undefined
   onPatch: (p: Partial<BlockConfigDto>) => void
 }) {
   return (
@@ -149,6 +156,11 @@ function CommonFields({ block, otherBlockIds, onPatch }: {
           Approval
         </label>
       </div>
+      <PhaseSelector
+        value={block.phase}
+        defaultPhase={defaultPhase}
+        onChange={(next) => onPatch({ phase: next })}
+      />
       <div>
         <label className="block text-xs font-medium text-slate-300 mb-1">depends_on</label>
         <DependsOnPicker

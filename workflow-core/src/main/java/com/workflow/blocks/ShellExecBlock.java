@@ -69,6 +69,7 @@ public class ShellExecBlock implements Block {
         return new BlockMetadata(
             "Shell exec",
             "infra",
+            Phase.ANY,
             List.of(
                 new FieldSchema("command", "Команда", "string", true, null,
                     "Shell-команда (sh -c). Поддерживает интерполяцию ${block.field}.",

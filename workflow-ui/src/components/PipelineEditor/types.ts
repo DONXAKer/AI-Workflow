@@ -5,13 +5,15 @@
  */
 
 import type { Node, Edge } from '@xyflow/react'
-import { BlockConfigDto, ValidationError } from '../../types'
+import { BlockConfigDto, Phase, ValidationError } from '../../types'
 
 export interface BlockNodeData extends Record<string, unknown> {
   /** The block id (== the YAML id field, also the ReactFlow node id). */
   blockId: string
   /** The block type (e.g. agent_with_tools). */
   blockType: string
+  /** Effective phase of this block instance (override or registry default). */
+  phase: Phase
   /** Human label rendered as the node's title. */
   label: string
   /** Russian display name (used as a subtitle when present). */

@@ -132,6 +132,7 @@ public class AgentWithToolsBlock implements Block {
         return new BlockMetadata(
             "Agent (tool-use)",
             "agent",
+            Phase.IMPLEMENT,
             List.of(
                 new FieldSchema("user_message", "User message", "string", true, null,
                     "Сообщение для модели. Поддерживает ${block.field} и {placeholder}.",

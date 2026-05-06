@@ -13,16 +13,18 @@ import {
 import type { Edge as RFEdge } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 
-import { PipelineConfigDto, ValidationError } from '../../types'
+import { BlockRegistryEntry, PipelineConfigDto, ValidationError } from '../../types'
 import { autoLayout } from './layout'
 import BlockNode from './BlockNode'
 import { BlockNode as BlockNodeT, BlockNodeData, PipelineEdge, PipelineEdgeData } from './types'
 import { blockIdLabel } from '../../utils/blockLabels'
+import { effectivePhase } from '../../utils/phaseColors'
 
 interface CanvasProps {
   config: PipelineConfigDto
   selectedBlockId: string | null
   errors: ValidationError[]
+  byType: Record<string, BlockRegistryEntry>
   onSelectBlock: (id: string | null) => void
   onConnectDependsOn: (sourceId: string, targetId: string) => void
   onDeleteEdge: (sourceId: string, targetId: string) => void
@@ -39,14 +41,14 @@ export function Canvas(props: CanvasProps) {
 }
 
 function CanvasInner({
-  config, selectedBlockId, errors, onSelectBlock, onConnectDependsOn, onDeleteEdge,
+  config, selectedBlockId, errors, byType, onSelectBlock, onConnectDependsOn, onDeleteEdge,
 }: CanvasProps) {
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null)
 
   // Build initial node + edge arrays from the config
   const { nodes: builtNodes, edges: builtEdges } = useMemo(
-    () => buildGraph(config, selectedBlockId, errors),
-    [config, selectedBlockId, errors],
+    () => buildGraph(config, selectedBlockId, errors, byType),
+    [config, selectedBlockId, errors, byType],
   )
 
   const laidOutNodes = useMemo(() => autoLayout(builtNodes, builtEdges, 'TB'), [builtNodes, builtEdges])
@@ -114,6 +116,7 @@ function buildGraph(
   config: PipelineConfigDto,
   selectedBlockId: string | null,
   errors: ValidationError[],
+  byType: Record<string, BlockRegistryEntry>,
 ): { nodes: BlockNodeT[]; edges: PipelineEdge[] } {
   const blocks = config.pipeline ?? []
   const blockIdSet = new Set(blocks.map(b => b.id))
@@ -135,6 +138,7 @@ function buildGraph(
     const data: BlockNodeData = {
       blockId: b.id,
       blockType: b.block,
+      phase: effectivePhase(b, byType[b.block]),
       label: blockIdLabel(b.id),
       displayName: blockIdLabel(b.id),
       selected: b.id === selectedBlockId,

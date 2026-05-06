@@ -45,6 +45,7 @@ public class VerifyBlock implements Block {
         return new BlockMetadata(
             "Verify",
             "verify",
+            Phase.VERIFY,
             List.of(),     // нет config-полей — все настройки в BlockConfig.verify
             true,          // hasCustomForm — UI uses dedicated VerifyForm
             Map.of()

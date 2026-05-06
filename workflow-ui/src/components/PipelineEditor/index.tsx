@@ -11,6 +11,7 @@ import Canvas from './Canvas'
 import BlockPalette from './BlockPalette'
 import SidePanel from './SidePanel'
 import PipelineSettingsModal from './PipelineSettingsModal'
+import { effectivePhase, PHASE_LABEL, phaseOrder, phaseStripeClass } from '../../utils/phaseColors'
 
 interface PipelineInfo {
   path: string
@@ -116,6 +117,15 @@ export function PipelineEditor() {
     return editor.errors.filter(e => e.blockId === selectedBlockId)
   }, [selectedBlockId, editor.errors])
 
+  const presentPhases = useMemo(() => {
+    const out = new Set<import('../../types').Phase>()
+    for (const b of editor.current?.pipeline ?? []) {
+      const p = effectivePhase(b, byType[b.block])
+      if (p !== 'ANY') out.add(p)
+    }
+    return out
+  }, [editor.current, byType])
+
   const addBlockFromRegistry = useCallback((entry: BlockRegistryEntry, afterBlockId?: string | null) => {
     if (!editor.current) return
     const existingIds = new Set((editor.current.pipeline ?? []).map(b => b.id))
@@ -165,6 +175,8 @@ export function PipelineEditor() {
         validatedClean={editor.validatedClean}
         errorCount={editor.errors.length}
         canUndo={editor.canUndo}
+        presentPhases={presentPhases}
+        phaseCheckEnabled={editor.current?.phase_check !== false}
         onUndo={editor.undo}
         onValidate={validate}
         onSave={save}
@@ -240,6 +252,7 @@ export function PipelineEditor() {
               config={editor.current}
               selectedBlockId={selectedBlockId}
               errors={editor.errors}
+              byType={byType}
               onSelectBlock={setSelectedBlockId}
               onConnectDependsOn={(s, t) => editor.setDependsOn(s, t, true)}
               onDeleteEdge={(s, t) => editor.setDependsOn(s, t, false)}
@@ -247,32 +260,71 @@ export function PipelineEditor() {
           )}
 
           {/* Add-block popover */}
-          {showAddPicker && (
-            <div ref={addPickerRef}
-              data-testid="add-block-popover"
-              className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-slate-900 border border-slate-700 rounded-lg shadow-xl p-2 max-h-[60vh] overflow-y-auto w-72">
-              <div className="text-xs text-slate-400 px-2 pb-2 border-b border-slate-800 mb-2">
-                Тип блока для добавления
+          {showAddPicker && (() => {
+            const afterId = showAddPicker.afterBlockId
+            const afterBlock = afterId
+              ? editor.current?.pipeline?.find(b => b.id === afterId)
+              : null
+            const afterPhase = afterBlock
+              ? effectivePhase(afterBlock, byType[afterBlock.block])
+              : null
+            const allowed = afterPhase
+              ? registry.filter(e => {
+                  const p = e.metadata.phase
+                  if (p === 'ANY' || afterPhase === 'ANY') return true
+                  return phaseOrder(p) >= phaseOrder(afterPhase)
+                })
+              : registry
+            const filtered = afterPhase && allowed.length < registry.length
+            return (
+              <div ref={addPickerRef}
+                data-testid="add-block-popover"
+                className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-slate-900 border border-slate-700 rounded-lg shadow-xl p-2 max-h-[60vh] overflow-y-auto w-72">
+                <div className="text-xs text-slate-400 px-2 pb-2 border-b border-slate-800 mb-2 flex items-center gap-1.5">
+                  {filtered && afterPhase && (
+                    <span
+                      className={`w-2 h-2 rounded-sm ${phaseStripeClass(afterPhase)}`}
+                      title={PHASE_LABEL[afterPhase]}
+                    />
+                  )}
+                  <span>
+                    {filtered
+                      ? `После фазы ${afterPhase!.toLowerCase()} — допустимы:`
+                      : 'Тип блока для добавления'}
+                  </span>
+                </div>
+                <div className="space-y-0.5">
+                  {allowed.map(e => (
+                    <button
+                      key={e.type}
+                      type="button"
+                      data-testid={`add-after-${e.type}`}
+                      onClick={() => {
+                        addBlockFromRegistry(e, showAddPicker.afterBlockId)
+                        setShowAddPicker(null)
+                      }}
+                      className="w-full text-left px-2 py-1.5 rounded text-xs bg-slate-800/40 hover:bg-blue-900/40 border border-slate-800 hover:border-blue-700 text-slate-200 hover:text-blue-200 flex items-center gap-2"
+                    >
+                      <span
+                        aria-hidden
+                        className={`w-1.5 h-4 rounded-sm flex-shrink-0 ${phaseStripeClass(e.metadata.phase)}`}
+                        title={PHASE_LABEL[e.metadata.phase]}
+                      />
+                      <span className="flex-1 min-w-0">
+                        <div className="font-medium">{blockTypeLabelWithCode(e.type)}</div>
+                        <div className="font-mono text-[10px] text-slate-500">{e.metadata.label}</div>
+                      </span>
+                    </button>
+                  ))}
+                  {allowed.length === 0 && (
+                    <div className="text-[11px] text-slate-500 px-2 py-3 text-center">
+                      Нет блоков, совместимых с фазой <code>{afterPhase?.toLowerCase()}</code>.
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="space-y-0.5">
-                {registry.map(e => (
-                  <button
-                    key={e.type}
-                    type="button"
-                    data-testid={`add-after-${e.type}`}
-                    onClick={() => {
-                      addBlockFromRegistry(e, showAddPicker.afterBlockId)
-                      setShowAddPicker(null)
-                    }}
-                    className="w-full text-left px-2 py-1.5 rounded text-xs bg-slate-800/40 hover:bg-blue-900/40 border border-slate-800 hover:border-blue-700 text-slate-200 hover:text-blue-200"
-                  >
-                    <div className="font-medium">{blockTypeLabelWithCode(e.type)}</div>
-                    <div className="font-mono text-[10px] text-slate-500">{e.metadata.label}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+            )
+          })()}
         </div>
 
         {/* Side panel */}
@@ -323,6 +375,8 @@ export function PipelineEditor() {
   )
 }
 
+type PipelineTemplate = 'empty' | 'standard' | 'custom'
+
 function NewPipelineModal({ onClose, onCreated }: {
   onClose: () => void
   onCreated: (info: { path: string; name: string; pipelineName: string }) => void
@@ -330,6 +384,7 @@ function NewPipelineModal({ onClose, onCreated }: {
   const [slug, setSlug] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [description, setDescription] = useState('')
+  const [template, setTemplate] = useState<PipelineTemplate>('standard')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -345,6 +400,9 @@ function NewPipelineModal({ onClose, onCreated }: {
     }
     setSubmitting(true)
     try {
+      // Both 'empty' and 'standard' currently call the same createPipeline endpoint —
+      // after the in-repo feature.yaml migration it IS the canonical 6-phase skeleton.
+      // 'custom' is reserved for a future phase-checkbox wizard (see plan §8 PR4).
       const result = await api.createPipeline({ slug, displayName, description })
       onCreated({ path: result.path, name: result.name, pipelineName: result.pipelineName })
     } catch (e) {
@@ -390,6 +448,33 @@ function NewPipelineModal({ onClose, onCreated }: {
             className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-y"
           />
         </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-300 mb-1">Шаблон</label>
+          <div className="space-y-1.5" data-testid="new-pipeline-template">
+            <TemplateRadio
+              value="empty"
+              current={template}
+              onSelect={setTemplate}
+              label="Пустой"
+              hint="Минимальный скелет — добавишь блоки сам."
+            />
+            <TemplateRadio
+              value="standard"
+              current={template}
+              onSelect={setTemplate}
+              label="Standard feature (6 фаз)"
+              hint="intake → analyze → implement → verify → publish → release."
+            />
+            <TemplateRadio
+              value="custom"
+              current={template}
+              onSelect={setTemplate}
+              label="Custom (по фазам)"
+              hint="Скоро: галочки фаз + выбор дефолтных блоков."
+              disabled
+            />
+          </div>
+        </div>
         {error && (
           <div className="flex items-center gap-1.5 text-xs text-red-400">
             <AlertCircle className="w-3.5 h-3.5" /> {error}
@@ -411,6 +496,44 @@ function NewPipelineModal({ onClose, onCreated }: {
         </div>
       </div>
     </div>
+  )
+}
+
+function TemplateRadio({ value, current, onSelect, label, hint, disabled }: {
+  value: PipelineTemplate
+  current: PipelineTemplate
+  onSelect: (v: PipelineTemplate) => void
+  label: string
+  hint: string
+  disabled?: boolean
+}) {
+  const checked = current === value
+  return (
+    <label
+      data-testid={`new-pipeline-template-${value}`}
+      className={
+        'flex items-start gap-2 px-2 py-1.5 rounded border text-xs cursor-pointer ' +
+        (disabled
+          ? 'border-slate-800 bg-slate-950/40 text-slate-600 cursor-not-allowed'
+          : checked
+            ? 'border-blue-700 bg-blue-950/30 text-slate-100'
+            : 'border-slate-800 hover:border-slate-700 text-slate-300')
+      }
+    >
+      <input
+        type="radio"
+        name="new-pipeline-template"
+        value={value}
+        checked={checked}
+        disabled={disabled}
+        onChange={() => onSelect(value)}
+        className="mt-0.5 accent-blue-500"
+      />
+      <span className="flex-1 min-w-0">
+        <div className="font-medium">{label}</div>
+        <div className="text-[10px] text-slate-500">{hint}</div>
+      </span>
+    </label>
   )
 }
 

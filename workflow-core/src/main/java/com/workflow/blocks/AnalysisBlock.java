@@ -135,6 +135,7 @@ public class AnalysisBlock implements Block {
         return new BlockMetadata(
             "Analysis",
             "agent",
+            Phase.ANALYZE,
             List.of(),
             false,
             Map.of()

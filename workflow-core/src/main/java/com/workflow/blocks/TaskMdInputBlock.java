@@ -98,6 +98,7 @@ public class TaskMdInputBlock implements Block {
         return new BlockMetadata(
             "Task.md input",
             "input",
+            Phase.INTAKE,
             List.of(
                 FieldSchema.requiredString("file_path", "Путь к task.md",
                     "Абсолютный путь к файлу задачи или ${input.task_file} для подстановки из run inputs.")
