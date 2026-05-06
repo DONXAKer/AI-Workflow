@@ -3,6 +3,8 @@ package com.workflow.core;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 
+import java.time.Instant;
+
 @Entity
 @Table(name = "block_output")
 public class BlockOutput {
@@ -24,6 +26,12 @@ public class BlockOutput {
     @Column(columnDefinition = "TEXT")
     private String inputJson;
 
+    @Column(name = "started_at")
+    private Instant startedAt;
+
+    @Column(name = "completed_at")
+    private Instant completedAt;
+
     public BlockOutput() {}
 
     public BlockOutput(PipelineRun run, String blockId, String outputJson) {
@@ -40,6 +48,8 @@ public class BlockOutput {
         public Builder blockId(String blockId) { bo.blockId = blockId; return this; }
         public Builder outputJson(String outputJson) { bo.outputJson = outputJson; return this; }
         public Builder inputJson(String inputJson) { bo.inputJson = inputJson; return this; }
+        public Builder startedAt(Instant startedAt) { bo.startedAt = startedAt; return this; }
+        public Builder completedAt(Instant completedAt) { bo.completedAt = completedAt; return this; }
         public BlockOutput build() { return bo; }
     }
 
@@ -54,4 +64,8 @@ public class BlockOutput {
     public void setOutputJson(String outputJson) { this.outputJson = outputJson; }
     public String getInputJson() { return inputJson; }
     public void setInputJson(String inputJson) { this.inputJson = inputJson; }
+    public Instant getStartedAt() { return startedAt; }
+    public void setStartedAt(Instant startedAt) { this.startedAt = startedAt; }
+    public Instant getCompletedAt() { return completedAt; }
+    public void setCompletedAt(Instant completedAt) { this.completedAt = completedAt; }
 }

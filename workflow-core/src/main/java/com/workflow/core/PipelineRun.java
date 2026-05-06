@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -52,12 +53,12 @@ public class PipelineRun {
     @ElementCollection(fetch = FetchType.LAZY)
     @CollectionTable(name = "pipeline_run_completed_blocks", joinColumns = @JoinColumn(name = "run_id"))
     @Column(name = "block_id")
-    private Set<String> completedBlocks = new HashSet<>();
+    private Set<String> completedBlocks = new LinkedHashSet<>();
 
     @ElementCollection(fetch = FetchType.LAZY)
     @CollectionTable(name = "pipeline_run_auto_approve", joinColumns = @JoinColumn(name = "run_id"))
     @Column(name = "block_id")
-    private Set<String> autoApprove = new HashSet<>();
+    private Set<String> autoApprove = new LinkedHashSet<>();
 
     @OneToMany(mappedBy = "run", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<BlockOutput> outputs = new ArrayList<>();

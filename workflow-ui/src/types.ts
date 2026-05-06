@@ -51,6 +51,13 @@ export interface StoredBlockOutput {
   inputJson?: string
 }
 
+export interface BlockEvent {
+  blockId: string
+  startedAt: string | null
+  completedAt: string | null
+  durationMs: number | null
+}
+
 export interface PipelineRun {
   id: string
   pipelineName: string
@@ -70,6 +77,8 @@ export interface PipelineRun {
   dryRun?: boolean
   entryPointId?: string
   runInputsJson?: string | null
+  /** Chronologically ordered block events with timing data from BlockOutput.startedAt/completedAt */
+  events?: BlockEvent[]
 }
 
 export type ApprovalMode = 'manual' | 'auto' | 'auto_notify'
@@ -559,6 +568,8 @@ export interface BlockStatus {
   startedAt?: string
   /** ISO timestamp set when BLOCK_COMPLETE is received — used to compute per-step duration */
   completedAt?: string
+  /** Pre-computed duration in ms from BlockOutput.startedAt/completedAt (historical runs) */
+  durationMs?: number
   /** Latest progress detail from BLOCK_PROGRESS WS events */
   progressDetail?: string
 }

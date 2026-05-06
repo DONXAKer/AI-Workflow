@@ -4,7 +4,7 @@ import { AlertCircle, Loader2, RotateCcw, Undo2, FileEdit, FilePlus, Sparkles, D
 import { useToast } from '../context/ToastContext'
 import { api } from '../services/api'
 import { connectToRun } from '../services/websocket'
-import { PipelineRun, BlockStatus, WsMessage, ApprovalDecision, ToolCallEntry, LlmCallEntry } from '../types'
+import { PipelineRun, BlockStatus, WsMessage, ApprovalDecision, ToolCallEntry, LlmCallEntry, BlockEvent } from '../types'
 import BlockProgressTable from '../components/BlockProgressTable'
 import ApprovalDialog from '../components/ApprovalDialog'
 import ReturnDialog from '../components/ReturnDialog'
@@ -132,32 +132,67 @@ export default function RunPage() {
         }
       }
 
-      // Hydrate completed blocks — only blocks that have a persisted output are shown.
-      // Pre-entry blocks added by runFrom() with no real injection are excluded.
-      const completedStatuses: BlockStatus[] = (data.completedBlocks ?? [])
-        .filter(blockId => outputMap.has(blockId))
-        .map(blockId => {
-          const output = outputMap.get(blockId)
-          const isSkipped = output?._skipped === true
-          return {
-            blockId,
-            status: (isSkipped ? 'skipped' : 'complete') as BlockStatus['status'],
-            output,
-            input: inputMap.get(blockId),
-          }
-        })
+      // Build block statuses. When events are present (new backend with timestamps),
+      // use them as the authoritative chronological order. Fall back to completedBlocks
+      // for historical runs or old backend responses without timestamp data.
+      let completedStatuses: BlockStatus[]
 
-      // Add current block if not already in completedBlocks. The status mapping must
-      // cover FAILED — without it, a failed run displayed after page refresh would show
-      // its failure block as "pending" (since there's no BlockOutput for an exception
-      // path), which renders as "Ожидание" instead of "Ошибка" — confusing for the user.
-      if (data.currentBlock && !data.completedBlocks?.includes(data.currentBlock)) {
-        const currentStatus: BlockStatus['status'] =
-          data.status === 'PAUSED_FOR_APPROVAL' ? 'awaiting_approval' :
-          data.status === 'RUNNING' ? 'running' :
-          data.status === 'FAILED' ? 'failed' :
-          'pending'
-        completedStatuses.push({ blockId: data.currentBlock, status: currentStatus })
+      if (data.events && data.events.length > 0) {
+        // Events are sorted by startedAt ASC from the backend
+        const eventBlockIds = new Set(data.events.map((e: BlockEvent) => e.blockId))
+        completedStatuses = data.events.map((event: BlockEvent) => {
+          const output = outputMap.get(event.blockId)
+          const isSkipped = output?._skipped === true
+          // A paused block has its output saved but isn't yet "complete" — override status below
+          const status: BlockStatus['status'] = isSkipped ? 'skipped' : 'complete'
+          const bs: BlockStatus = {
+            blockId: event.blockId,
+            status,
+            output,
+            input: inputMap.get(event.blockId),
+          }
+          if (event.durationMs != null) bs.durationMs = event.durationMs
+          if (event.startedAt) bs.startedAt = event.startedAt
+          if (event.completedAt) bs.completedAt = event.completedAt
+          return bs
+        })
+        // If the current block is already in events but run is paused/running, correct its status
+        if (data.currentBlock && eventBlockIds.has(data.currentBlock)) {
+          if (data.status === 'PAUSED_FOR_APPROVAL') {
+            completedStatuses = completedStatuses.map(b =>
+              b.blockId === data.currentBlock ? { ...b, status: 'awaiting_approval' } : b
+            )
+          }
+        } else if (data.currentBlock) {
+          // Current block not yet in events — append with live status
+          const currentStatus: BlockStatus['status'] =
+            data.status === 'PAUSED_FOR_APPROVAL' ? 'awaiting_approval' :
+            data.status === 'RUNNING' ? 'running' :
+            data.status === 'FAILED' ? 'failed' : 'pending'
+          completedStatuses.push({ blockId: data.currentBlock, status: currentStatus })
+        }
+      } else {
+        // Fallback: hydrate from completedBlocks (no events = old backend / legacy run)
+        completedStatuses = (data.completedBlocks ?? [])
+          .filter(blockId => outputMap.has(blockId))
+          .map(blockId => {
+            const output = outputMap.get(blockId)
+            const isSkipped = output?._skipped === true
+            return {
+              blockId,
+              status: (isSkipped ? 'skipped' : 'complete') as BlockStatus['status'],
+              output,
+              input: inputMap.get(blockId),
+            }
+          })
+        // Add current block if not already completed
+        if (data.currentBlock && !data.completedBlocks?.includes(data.currentBlock)) {
+          const currentStatus: BlockStatus['status'] =
+            data.status === 'PAUSED_FOR_APPROVAL' ? 'awaiting_approval' :
+            data.status === 'RUNNING' ? 'running' :
+            data.status === 'FAILED' ? 'failed' : 'pending'
+          completedStatuses.push({ blockId: data.currentBlock, status: currentStatus })
+        }
       }
 
       setBlockStatuses(completedStatuses)
