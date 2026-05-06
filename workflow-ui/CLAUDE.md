@@ -48,7 +48,7 @@ Single `api` object with typed methods. The underlying `request()` wrapper:
 - `/projects/:slug/*` → `ProjectWorkspacePage` (calls `setCurrentProjectSlug(slug)` on mount)
   - Nested tabs: `smart-start`, `launch`, `active`, `history`, `integrations`, `mcp`, `settings`
 - `/runs/:runId` → `RunPage` (live block progress + approval dialog)
-- `/runs/active` → `ActiveRunsPage` (global, uses `allProjects: true`)
+- `/runs/active` → `ActiveRunsPage allProjects` (global view — passes `allProjects={true}` prop; project-scoped `/projects/:slug/active` renders the same component without the prop, defaulting to `false` so only the current project's runs are shown)
 - `/system/*` → admin pages (users, integrations, audit, kill-switch, cost, projects)
 
 ### WebSocket (`src/services/websocket.ts`)

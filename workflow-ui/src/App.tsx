@@ -138,7 +138,7 @@ function AppLayout() {
             </Route>
 
             {/* Legacy pages */}
-            <Route path="/runs/active" element={<ActiveRunsPage />} />
+            <Route path="/runs/active" element={<ActiveRunsPage allProjects />} />
             <Route path="/pipelines" element={<Navigate to="/" replace />} />
 
             {/* Legacy redirects */}

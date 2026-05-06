@@ -14,13 +14,17 @@ import clsx from 'clsx'
 
 type ActiveFilter = 'all' | 'RUNNING' | 'PAUSED_FOR_APPROVAL'
 
+interface ActiveRunsPageProps {
+  allProjects?: boolean
+}
+
 const FILTERS: { key: ActiveFilter; label: string }[] = [
   { key: 'all', label: 'Все' },
   { key: 'RUNNING', label: 'Выполняются' },
   { key: 'PAUSED_FOR_APPROVAL', label: 'Ожидают одобрения' },
 ]
 
-export default function ActiveRunsPage() {
+export default function ActiveRunsPage({ allProjects = false }: ActiveRunsPageProps) {
   const { pathname } = useLocation()
   const [searchParams] = useSearchParams()
   const [runs, setRuns] = useState<PipelineRunSummary[]>([])
@@ -37,7 +41,7 @@ export default function ActiveRunsPage() {
 
   const load = useCallback(async () => {
     try {
-      const data = await api.listRuns({ status: ['RUNNING', 'PAUSED_FOR_APPROVAL'], size: 100, page: 0, allProjects: true })
+      const data = await api.listRuns({ status: ['RUNNING', 'PAUSED_FOR_APPROVAL'], size: 100, page: 0, allProjects })
       setRuns(data.content)
       const names = [...new Set(data.content.map(r => r.pipelineName))]
       setPipelines(names)
@@ -46,7 +50,7 @@ export default function ActiveRunsPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [allProjects])
 
   useEffect(() => {
     load()
