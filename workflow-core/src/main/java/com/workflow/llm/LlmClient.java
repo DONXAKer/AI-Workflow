@@ -70,6 +70,9 @@ public class LlmClient {
     @Autowired(required = false)
     private com.workflow.core.PipelineRunRepository runRepositoryForHeartbeat;
 
+    @Autowired(required = false)
+    private com.workflow.project.ProjectRepository projectRepositoryForCwd;
+
     public String complete(String model, String system, String user, int maxTokens, double temperature) {
         if (shouldUseCli(model)) {
             return completeViaCli(resolveCliModel(model), system, user);
@@ -589,13 +592,56 @@ public class LlmClient {
         // bypassPermissions is rejected when Claude CLI runs as root (security guard);
         // acceptEdits with an explicit --allowed-tools list works under root and matches
         // what the claude_code_shell block uses successfully.
-        argv.addAll(List.of("--allowed-tools", "Read,Write,Edit,Bash,Glob,Grep",
+        // Build --allowed-tools from the block's tool list when present so the CLI's
+        // permission floor matches what the block intends (e.g. agent_verify excludes
+        // Write/Edit). Falls back to the legacy 6-tool superset if request.tools is empty.
+        String allowedTools = "Read,Write,Edit,Bash,Glob,Grep";
+        if (request.tools() != null && !request.tools().isEmpty()) {
+            allowedTools = request.tools().stream()
+                .map(ToolDefinition::name)
+                .filter(n -> n != null && !n.isBlank())
+                .distinct()
+                .collect(java.util.stream.Collectors.joining(","));
+        }
+        argv.addAll(List.of("--allowed-tools", allowedTools,
                             "--permission-mode", "acceptEdits"));
 
-        log.info("Calling Claude CLI (tool-use): model={}", model);
+        // Without --add-dir + cwd inside the project, the CLI's Read/Glob/Grep see only
+        // /app (workflow-core's container cwd) — so any prompt referencing project files
+        // by relative path silently no-ops and the agent returns a placeholder verdict.
+        // Pin both the subprocess cwd and the CLI's allowed-dir list to the project root.
+        // Primary source: ToolUseRequest.workingDir (set explicitly by blocks).
+        // Fallback: ProjectContext slug → ProjectRepository (best-effort).
+        java.io.File subprocessCwd = null;
+        if (request.workingDir() != null) {
+            java.io.File dir = request.workingDir().toFile();
+            if (dir.isDirectory()) subprocessCwd = dir;
+            else log.warn("CLI tool-use: request.workingDir not a directory: {}", dir);
+        }
+        if (subprocessCwd == null) {
+            String slug = com.workflow.project.ProjectContext.get();
+            if (slug != null && !slug.isBlank() && projectRepositoryForCwd != null) {
+                try {
+                    java.util.Optional<com.workflow.project.Project> p = projectRepositoryForCwd.findBySlug(slug);
+                    if (p.isPresent() && p.get().getWorkingDir() != null && !p.get().getWorkingDir().isBlank()) {
+                        java.io.File dir = new java.io.File(p.get().getWorkingDir());
+                        if (dir.isDirectory()) subprocessCwd = dir;
+                    }
+                } catch (Exception e) {
+                    log.warn("CLI tool-use: failed to resolve project workingDir for slug={}: {}", slug, e.getMessage());
+                }
+            }
+        }
+        if (subprocessCwd != null) {
+            argv.add("--add-dir");
+            argv.add(subprocessCwd.getAbsolutePath());
+        }
+
+        log.info("Calling Claude CLI (tool-use): model={} tools={} cwd={}",
+            model, allowedTools, subprocessCwd != null ? subprocessCwd : "<inherit>");
         long startedAt = System.currentTimeMillis();
         try {
-            String stdout = runClaudeSubprocess(argv);
+            String stdout = runClaudeSubprocess(argv, subprocessCwd);
             recordCliUsage("cli/" + model, (int)(System.currentTimeMillis() - startedAt));
             return new ToolUseResponse(stripCodeFences(stdout.strip()), StopReason.END_TURN,
                 List.of(), 1, 0, 0, 0.0);
@@ -606,7 +652,12 @@ public class LlmClient {
     }
 
     private String runClaudeSubprocess(List<String> argv) throws Exception {
+        return runClaudeSubprocess(argv, null);
+    }
+
+    private String runClaudeSubprocess(List<String> argv, java.io.File workingDir) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(argv);
+        if (workingDir != null) pb.directory(workingDir);
         pb.redirectErrorStream(false);
         pb.redirectInput(ProcessBuilder.Redirect.from(new java.io.File("/dev/null")));
         Process proc = pb.start();

@@ -9,3 +9,12 @@ services:
     volumes:
       # - ${MY_PROJECT_PATH:-/path/to/project}:/mnt/myproject
       - ${WARCARD_PATH:-D:/WarCard}:/warcard
+
+      # ─── Windows-only ───
+      # Базовый docker-compose.yml использует ${HOME} для маунта Claude CLI auth,
+      # но в Windows-окружении ${HOME} не задан (есть только ${USERPROFILE}).
+      # Без этих оверрайдов CLI-провайдер не находит .credentials.json и
+      # вызовы CLAUDE_CODE_CLI возвращают пустой ответ. Раскомментируй на Windows:
+      # - ${USERPROFILE}/.claude:/home/claude/.claude:rw
+      # - ${USERPROFILE}/.claude.json:/home/claude/.claude.json:rw
+      # - ${USERPROFILE}/.local/share/claude:/home/claude/.local/share/claude:ro
