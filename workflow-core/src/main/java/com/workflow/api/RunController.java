@@ -805,9 +805,22 @@ public class RunController {
     /**
      * POST /api/pipelines/new
      *
-     * <p>Creates a new pipeline YAML in the project's config directory by cloning the
-     * built-in {@code feature.yaml} template. Replaces {@code name} and
-     * {@code description} with caller-supplied values. Returns the new file path.
+     * <p>Creates a new pipeline YAML in the project's config directory.
+     *
+     * <p>Two modes:
+     * <ul>
+     *   <li><b>Template mode</b> (default — backwards-compat) — clones the built-in
+     *       {@code feature.yaml} template, replacing {@code name} and {@code description}
+     *       with caller-supplied values.</li>
+     *   <li><b>Body mode</b> (PR-3 Creation Wizard, 2026-05-07) — if the request body
+     *       includes a {@code pipeline} array, the entire {@link PipelineConfig} is
+     *       constructed from the request (slug + displayName + description override the
+     *       wire-form name/description). Used by the wizard which has already assembled a
+     *       custom config and wants to save it as a new file.</li>
+     * </ul>
+     *
+     * <p>Both modes write through {@link PipelineConfigWriter#writeFull} so validation
+     * runs before disk I/O — invalid configs return 400 with the structured error list.
      */
     @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
     @PostMapping("/pipelines/new")
@@ -849,21 +862,37 @@ public class RunController {
                 "error", "Pipeline already exists: " + target));
         }
 
-        // Load the built-in feature.yaml template from classpath via a temp file
-        // so the writer's loader runs against a real Path (matches the rest of
-        // the load surface).
+        // Body-mode: use caller-supplied PipelineConfig directly (PR-3 wizard path).
+        // Detected via presence of a non-null `pipeline` array in the request body.
         PipelineConfig template;
-        try (java.io.InputStream is = new org.springframework.core.io.ClassPathResource(
-                "config/feature.yaml").getInputStream()) {
-            byte[] yaml = is.readAllBytes();
-            Path temp = java.nio.file.Files.createTempFile("feature-template-", ".yaml");
-            java.nio.file.Files.write(temp, yaml);
-            template = pipelineConfigLoader.loadRaw(temp);
-            try { java.nio.file.Files.deleteIfExists(temp); } catch (IOException ignored) {}
-        } catch (Exception e) {
-            return ResponseEntity.internalServerError().body(Map.of(
-                "error", "Failed to load template: " + e.getMessage()));
+        boolean bodyMode = request.get("pipeline") instanceof List<?> list && !list.isEmpty();
+        if (bodyMode) {
+            try {
+                // Re-deserialize the request body as a PipelineConfig (Jackson handles
+                // @JsonProperty mappings — `entry_points`, `phase_check`, etc.).
+                template = objectMapper.convertValue(request, PipelineConfig.class);
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().body(Map.of(
+                    "error", "Failed to parse pipeline body: " + e.getMessage()));
+            }
+        } else {
+            // Template mode: load the built-in feature.yaml template from classpath via
+            // a temp file so the writer's loader runs against a real Path (matches the
+            // rest of the load surface).
+            try (java.io.InputStream is = new org.springframework.core.io.ClassPathResource(
+                    "config/feature.yaml").getInputStream()) {
+                byte[] yaml = is.readAllBytes();
+                Path temp = java.nio.file.Files.createTempFile("feature-template-", ".yaml");
+                java.nio.file.Files.write(temp, yaml);
+                template = pipelineConfigLoader.loadRaw(temp);
+                try { java.nio.file.Files.deleteIfExists(temp); } catch (IOException ignored) {}
+            } catch (Exception e) {
+                return ResponseEntity.internalServerError().body(Map.of(
+                    "error", "Failed to load template: " + e.getMessage()));
+            }
         }
+        // slug+displayName always override the wire-form name/description so the
+        // wizard caller's intent (the form fields) is the source of truth.
         template.setName(displayName);
         template.setDescription(description);
 
@@ -874,10 +903,12 @@ public class RunController {
                 "name", target.getFileName().toString(),
                 "pipelineName", template.getName()));
         } catch (InvalidPipelineException e) {
-            log.error("Built-in template is invalid?! errors: {}",
-                e.getResult() != null ? e.getResult().errors() : List.of());
-            return ResponseEntity.internalServerError().body(Map.of(
-                "error", "Internal: built-in template failed validation"));
+            log.warn("Refused to create invalid pipeline {} (bodyMode={}): {} errors",
+                target, bodyMode, e.getResult() != null ? e.getResult().errors().size() : 0);
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("error", "Invalid pipeline config");
+            body.put("errors", e.getResult() != null ? e.getResult().errors() : List.of());
+            return ResponseEntity.badRequest().body(body);
         } catch (IOException e) {
             log.error("Failed to write new pipeline {}: {}", target, e.getMessage(), e);
             return ResponseEntity.internalServerError().body(Map.of(
@@ -901,6 +932,25 @@ public class RunController {
         } catch (IOException e) {
             return ResponseEntity.badRequest().body(Map.of("error", "Failed to load config: " + e.getMessage()));
         }
+    }
+
+    /**
+     * POST /api/pipelines/validate-body — validate an in-memory {@link PipelineConfig}
+     * without touching disk.
+     *
+     * <p>Used by the Creation Wizard (PR-3, 2026-05-07) to live-validate the assembled
+     * pipeline before saving it. Mirrors {@link #validatePipeline(String)} but takes the
+     * config in the request body instead of reading from a file path. Returns the same
+     * {@link ValidationResult} envelope so callers can render errors uniformly.
+     */
+    @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
+    @PostMapping("/pipelines/validate-body")
+    public ResponseEntity<?> validatePipelineBody(@RequestBody PipelineConfig config) {
+        if (config == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Request body is required"));
+        }
+        ValidationResult result = pipelineConfigValidator.validate(config);
+        return ResponseEntity.ok(result);
     }
 
     @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
