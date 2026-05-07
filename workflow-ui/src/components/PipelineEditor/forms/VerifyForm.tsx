@@ -1,6 +1,6 @@
 import { Plus, Trash2, ChevronDown, ChevronUp } from 'lucide-react'
 import { useState } from 'react'
-import { BlockConfigDto, FieldCheckConfigDto, OnFailConfigDto, PipelineConfigDto, VerifyConfigDto } from '../../../types'
+import { BlockConfigDto, FieldCheckConfigDto, PipelineConfigDto, VerifyConfigDto } from '../../../types'
 
 interface Props {
   block: BlockConfigDto
@@ -12,7 +12,11 @@ const RULES = ['min_length', 'max_length', 'min_items', 'max_items', 'one_of', '
 
 /**
  * Custom form for the {@code verify} block. Edits {@code block.verify} (NOT
- * {@code block.config}) — that's where subject, checks, llm_check, on_fail live.
+ * {@code block.config}) — that's where subject, checks, llm_check live.
+ *
+ * `on_fail` is no longer rendered here — it has been pulled into a freestanding
+ * {@link OnFailEditor} so the section-aware SidePanel can place it inside
+ * `Conditions & Retry` while keeping subject/checks/llm_check in Essentials.
  */
 export function VerifyForm({ block, config, onChange }: Props) {
   const verify: VerifyConfigDto = block.verify ?? {}
@@ -126,13 +130,6 @@ export function VerifyForm({ block, config, onChange }: Props) {
           </div>
         )}
       </div>
-
-      {/* on_fail */}
-      <OnFailEditor
-        onFail={verify.on_fail}
-        blockIds={blockIds.filter(i => i !== block.id)}
-        onChange={onFail => update({ on_fail: onFail })}
-      />
     </div>
   )
 }
@@ -175,59 +172,6 @@ function CheckRow({ check, onChange, onRemove }: {
       <button type="button" onClick={onRemove} className="p-1 text-slate-500 hover:text-red-400">
         <Trash2 className="w-3 h-3" />
       </button>
-    </div>
-  )
-}
-
-function OnFailEditor({ onFail, blockIds, onChange }: {
-  onFail: OnFailConfigDto | null | undefined
-  blockIds: string[]
-  onChange: (next: OnFailConfigDto | null) => void
-}) {
-  const action = onFail?.action ?? 'fail'
-  const update = (patch: Partial<OnFailConfigDto>) => onChange({ ...onFail, ...patch })
-
-  return (
-    <div className="border-t border-slate-800 pt-3">
-      <label className="block text-xs font-medium text-slate-300 mb-1">При провале</label>
-      <select
-        data-testid="verify-on-fail-action"
-        value={action}
-        onChange={e => update({ action: e.target.value })}
-        className="bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
-      >
-        <option value="fail">fail</option>
-        <option value="warn">warn</option>
-        <option value="loopback">loopback</option>
-      </select>
-      {action === 'loopback' && (
-        <div className="mt-2 pl-4 space-y-2 border-l border-slate-800">
-          <div>
-            <label className="block text-[10px] text-slate-400 mb-0.5">Target</label>
-            <select
-              data-testid="verify-on-fail-target"
-              value={onFail?.target ?? ''}
-              onChange={e => update({ target: e.target.value })}
-              className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            >
-              <option value="">— Не задано —</option>
-              {blockIds.map(i => <option key={i} value={i}>{i}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-[10px] text-slate-400 mb-0.5">Max iterations</label>
-            <input
-              type="number"
-              value={onFail?.max_iterations ?? ''}
-              placeholder="2"
-              onChange={e => update({
-                max_iterations: e.target.value === '' ? undefined : Number(e.target.value),
-              })}
-              className="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-          </div>
-        </div>
-      )}
     </div>
   )
 }

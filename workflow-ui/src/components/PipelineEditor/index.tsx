@@ -333,6 +333,7 @@ export function PipelineEditor() {
             block={selectedBlock}
             registryEntry={byType[selectedBlock.block]}
             config={editor.current}
+            byType={byType}
             errors={selectedBlockErrors}
             onClose={() => setSelectedBlockId(null)}
             onPatch={patch => editor.patchBlock(selectedBlock.id, patch)}

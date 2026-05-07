@@ -6,25 +6,34 @@ export const SAMPLE_REGISTRY: BlockRegistryEntry[] = [
     type: 'task_md_input',
     description: 'Парсит task.md',
     metadata: {
-      label: 'Task.md input', category: 'input', hasCustomForm: false,
+      label: 'Task.md input', category: 'input', phase: 'INTAKE', hasCustomForm: false,
       configFields: [
         { name: 'file_path', label: 'Путь', type: 'string', required: true,
-          description: 'task.md path', hints: {} },
+          description: 'task.md path', hints: {}, level: 'essential' },
       ],
+      outputs: [
+        { name: 'feat_id', label: 'feat_id', type: 'string' },
+        { name: 'title', label: 'title', type: 'string' },
+        { name: 'body', label: 'body', type: 'string' },
+        { name: 'acceptance', label: 'acceptance', type: 'string' },
+      ],
+      recommendedRank: 100,
     },
   },
   {
     type: 'shell_exec',
     description: 'Команда shell',
     metadata: {
-      label: 'Shell exec', category: 'infra', hasCustomForm: false,
+      label: 'Shell exec', category: 'infra', phase: 'ANY', hasCustomForm: false,
       configFields: [
         { name: 'command', label: 'Команда', type: 'string', required: true,
-          description: '...', hints: { multiline: true, monospace: true } },
+          description: '...', hints: { multiline: true, monospace: true }, level: 'essential' },
+        { name: 'working_dir', label: 'Working dir', type: 'string', required: false,
+          description: '', hints: {}, level: 'essential' },
         { name: 'timeout_sec', label: 'Таймаут', type: 'number', defaultValue: 300,
-          required: false, description: '', hints: {} },
+          required: false, description: '', hints: {}, level: 'advanced' },
         { name: 'allow_nonzero_exit', label: 'Non-zero', type: 'boolean', defaultValue: false,
-          required: false, description: '', hints: {} },
+          required: false, description: '', hints: {}, level: 'advanced' },
       ],
     },
   },
@@ -32,18 +41,24 @@ export const SAMPLE_REGISTRY: BlockRegistryEntry[] = [
     type: 'agent_with_tools',
     description: 'Агент',
     metadata: {
-      label: 'Agent (tool-use)', category: 'agent', hasCustomForm: true,
+      label: 'Agent (tool-use)', category: 'agent', phase: 'IMPLEMENT', hasCustomForm: true,
       configFields: [],
+      outputs: [
+        { name: 'final_text', label: 'final_text', type: 'string' },
+        { name: 'iterations_used', label: 'iterations_used', type: 'number' },
+        { name: 'total_cost_usd', label: 'total_cost_usd', type: 'number' },
+      ],
+      recommendedRank: 100,
     },
   },
   {
     type: 'orchestrator',
     description: 'Orchestrator',
     metadata: {
-      label: 'Orchestrator', category: 'agent', hasCustomForm: false,
+      label: 'Orchestrator', category: 'agent', phase: 'IMPLEMENT', hasCustomForm: false,
       configFields: [
         { name: 'mode', label: 'Mode', type: 'enum',
-          required: false, description: '', hints: { values: ['plan', 'review'] } },
+          required: false, description: '', hints: { values: ['plan', 'review'] }, level: 'essential' },
       ],
     },
   },
@@ -51,7 +66,7 @@ export const SAMPLE_REGISTRY: BlockRegistryEntry[] = [
     type: 'verify',
     description: 'Verify',
     metadata: {
-      label: 'Verify', category: 'verify', hasCustomForm: true,
+      label: 'Verify', category: 'verify', phase: 'VERIFY', hasCustomForm: true,
       configFields: [],
     },
   },

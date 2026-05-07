@@ -5,11 +5,30 @@ import { HelpPopover, InterpolationHelpBody } from '../HelpPopover'
 
 const NATIVE_TOOLS = ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash']
 
+export type LevelFilter = 'essential' | 'advanced' | 'all'
+
 interface Props {
   block: BlockConfigDto
   fields: FieldSchemaDto[]
   config: PipelineConfigDto
   onChange: (config: Record<string, unknown>) => void
+  /**
+   * Filter fields by their UI tier. `'all'` (default) keeps backwards-compat
+   * with existing call sites and tests. `'essential'` / `'advanced'` are used
+   * by the section-based side panel (PR-2). The effective level is
+   * `field.level ?? (field.required ? 'essential' : 'advanced')`.
+   */
+  levelFilter?: LevelFilter
+}
+
+/**
+ * Effective UI level for a field — falls back to `essential` for required
+ * fields and `advanced` for optional ones when the backend hasn't tagged the
+ * field explicitly. Mirrors the FE-side default applied by the backend's
+ * compact constructor.
+ */
+export function effectiveLevel(field: FieldSchemaDto): 'essential' | 'advanced' {
+  return field.level ?? (field.required ? 'essential' : 'advanced')
 }
 
 /**
@@ -17,8 +36,12 @@ interface Props {
  * that declare metadata but don't have a hand-written custom form (most of the
  * top-10).
  */
-export function GenericBlockForm({ block, fields, config, onChange }: Props) {
+export function GenericBlockForm({ block, fields, config, onChange, levelFilter = 'all' }: Props) {
   const cfg = (block.config ?? {}) as Record<string, unknown>
+
+  const filteredFields = levelFilter === 'all'
+    ? fields
+    : fields.filter(f => effectiveLevel(f) === levelFilter)
 
   const update = (name: string, value: unknown) => {
     const next = { ...cfg }
@@ -30,9 +53,11 @@ export function GenericBlockForm({ block, fields, config, onChange }: Props) {
     onChange(next)
   }
 
+  if (filteredFields.length === 0) return null
+
   return (
     <div className="space-y-4">
-      {fields.map(field => (
+      {filteredFields.map(field => (
         <FieldRow
           key={field.name}
           field={field}
