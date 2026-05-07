@@ -138,7 +138,26 @@ public class AnalysisBlock implements Block {
             Phase.ANALYZE,
             List.of(),
             false,
-            Map.of()
+            Map.of(),
+            List.of(
+                FieldSchema.output("summary", "Summary", "string",
+                    "Краткое резюме того, что нужно построить."),
+                FieldSchema.output("affected_components", "Affected components", "string_array",
+                    "Список затронутых компонентов (классы / таблицы / сервисы)."),
+                FieldSchema.output("technical_approach", "Technical approach", "string",
+                    "Рекомендуемый технический подход с обоснованием."),
+                FieldSchema.output("estimated_complexity", "Estimated complexity", "enum",
+                    "Оценка сложности: low | medium | high."),
+                FieldSchema.output("risks", "Risks", "string_array",
+                    "Список выявленных рисков."),
+                FieldSchema.output("open_questions", "Open questions", "string_array",
+                    "Открытые вопросы, требующие решения до реализации."),
+                FieldSchema.output("acceptance_checklist", "Acceptance checklist", "string_array",
+                    "Структурированный чек-лист приёмки (id/text/source/priority)."),
+                FieldSchema.output("needs_clarification", "Needs clarification", "boolean",
+                    "Флаг: требуется ли уточнение требования у оператора.")
+            ),
+            100
         );
     }
 

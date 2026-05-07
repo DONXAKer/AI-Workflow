@@ -58,6 +58,7 @@ public class PipelineConfigValidator {
     public static final String FORWARD_REF              = "FORWARD_REF";
     public static final String REF_UNKNOWN_BLOCK        = "REF_UNKNOWN_BLOCK";
     public static final String REF_DISABLED_BLOCK       = "REF_DISABLED_BLOCK";
+    public static final String REF_UNKNOWN_FIELD        = "REF_UNKNOWN_FIELD";
     public static final String INVALID_PHASE            = "INVALID_PHASE";
     public static final String PHASE_MONOTONICITY       = "PHASE_MONOTONICITY";
     public static final String PHASE_LOOPBACK_FORWARD   = "PHASE_LOOPBACK_FORWARD";
@@ -65,8 +66,13 @@ public class PipelineConfigValidator {
 
     /** Matches {@code ${...}} interpolations in YAML strings. */
     private static final Pattern DOLLAR_BRACE_REF = Pattern.compile("\\$\\{([^}]+)}");
-    /** Matches {@code $.block_id} (and the longer {@code $.block_id.field...}) form. */
-    private static final Pattern DOLLAR_DOT_REF = Pattern.compile("\\$\\.(\\w+)");
+    /**
+     * Matches {@code $.block_id.field.subfield} form. Captures the dot-path
+     * starting after {@code $.} up to the first non-identifier character. PR-1
+     * widened this from {@code \w+} to {@code [\w.]+} so the field-tail is
+     * preserved for {@link #REF_UNKNOWN_FIELD} checking.
+     */
+    private static final Pattern DOLLAR_DOT_REF = Pattern.compile("\\$\\.([\\w.]+)");
 
     private final BlockRegistry blockRegistry;
 
@@ -554,6 +560,7 @@ public class PipelineConfigValidator {
         for (String ref : refs) {
             String[] parts = ref.split("\\.", 2);
             String head = parts[0].trim();
+            String tail = parts.length > 1 ? parts[1].trim() : "";
             if (head.isEmpty()) continue;
             if ("input".equals(head)) continue; // ${input.X} — runtime only
 
@@ -572,7 +579,13 @@ public class PipelineConfigValidator {
                 continue;
             }
             if (head.equals(referrerId)) {
-                if (allowSelfRef) continue; // post-execution context (loopback inject_context)
+                if (allowSelfRef) {
+                    // Self-ref is legitimate (post-execution loopback inject_context). Still
+                    // surface field-level typos via REF_UNKNOWN_FIELD.
+                    checkOutputField(referenced, head, tail, ref, location, referrerId,
+                        usedPattern, errors);
+                    continue;
+                }
                 errors.add(new ValidationError(FORWARD_REF,
                     "Reference '" + formatRef(ref, usedPattern)
                         + "' is a self-reference — block '" + referrerId + "' cannot read its own output",
@@ -585,7 +598,55 @@ public class PipelineConfigValidator {
                     "Reference '" + formatRef(ref, usedPattern) + "' points at block '" + head
                         + "' which is not topologically before '" + referrerId + "'",
                     location, referrerId));
+                continue;
             }
+            // PR-1: WARN when the tail's first segment isn't in the referenced block's
+            // declared outputs. Backwards-compat: skip silently when outputs aren't
+            // declared (block hasn't migrated to the new metadata yet).
+            checkOutputField(referenced, head, tail, ref, location, referrerId,
+                usedPattern, errors);
+        }
+    }
+
+    /**
+     * Emits {@link #REF_UNKNOWN_FIELD} (severity {@link Severity#WARN}) when {@code tail}
+     * starts with a field name not present in the referenced block's declared
+     * {@code outputs}. Silently skips when:
+     * <ul>
+     *   <li>{@code tail} is empty (bare {@code $.block} or {@code ${block}}) — there's no
+     *       field to check;</li>
+     *   <li>the referenced block hasn't declared any outputs (legacy block without
+     *       updated metadata) — would produce false positives;</li>
+     *   <li>the block bean lookup fails — defensive against test stubs / unknown types
+     *       (those are surfaced separately as {@link #UNKNOWN_BLOCK_TYPE}).</li>
+     * </ul>
+     *
+     * <p>Only the first dot-segment of {@code tail} is checked. Nested paths
+     * ({@code $.X.field.subfield}) validate {@code field} but not {@code subfield} —
+     * declared outputs don't carry nested schemas (acceptable PR-1 trade-off).
+     */
+    private void checkOutputField(BlockConfig referenced, String head, String tail,
+                                  String ref, String location, String referrerId,
+                                  Pattern usedPattern, List<ValidationError> errors) {
+        if (tail == null || tail.isEmpty()) return;
+        String blockType = referenced.getBlock();
+        if (blockType == null || blockType.isBlank()) return;
+        Block bean = blockRegistry.get(blockType);
+        if (bean == null) return;
+        List<com.workflow.blocks.FieldSchema> outputs = bean.getMetadata().outputs();
+        if (outputs == null || outputs.isEmpty()) return;
+        String firstSegment = tail.split("\\.", 2)[0].trim();
+        if (firstSegment.isEmpty()) return;
+        boolean known = outputs.stream().anyMatch(f -> firstSegment.equals(f.name()));
+        if (!known) {
+            String knownNames = outputs.stream()
+                .map(com.workflow.blocks.FieldSchema::name)
+                .collect(java.util.stream.Collectors.joining(", "));
+            errors.add(new ValidationError(REF_UNKNOWN_FIELD,
+                "Reference '" + formatRef(ref, usedPattern) + "' points at field '"
+                    + firstSegment + "' which is not declared in block '" + head
+                    + "' (" + blockType + ") outputs. Known outputs: " + knownNames,
+                location, referrerId, Severity.WARN));
         }
     }
 

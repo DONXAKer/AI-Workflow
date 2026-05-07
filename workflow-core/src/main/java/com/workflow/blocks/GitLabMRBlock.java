@@ -25,6 +25,31 @@ public class GitLabMRBlock implements Block {
     }
 
     @Override
+    public BlockMetadata getMetadata() {
+        return new BlockMetadata(
+            "GitLab MR",
+            "output",
+            Phase.PUBLISH,
+            List.of(),  // configFields пусты — конфиг приходит через _gitlab_config + codegen output
+            false,
+            Map.of(),
+            List.of(
+                FieldSchema.output("mr_id", "MR id", "number",
+                    "Внутренний ID Merge Request (iid)."),
+                FieldSchema.output("mr_url", "MR URL", "string",
+                    "HTTPS-ссылка на созданный MR."),
+                FieldSchema.output("branch", "Branch", "string",
+                    "Имя ветки, с которой создан MR."),
+                FieldSchema.output("title", "Title", "string",
+                    "Заголовок MR (берётся из commit_message)."),
+                FieldSchema.output("youtrack_issues_linked", "YouTrack issues linked", "string_array",
+                    "ID задач YouTrack, на которые ссылается MR.")
+            ),
+            100
+        );
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
     public Map<String, Object> run(Map<String, Object> input, BlockConfig config, PipelineRun run) throws Exception {
         Map<String, Object> cfg = config.getConfig();

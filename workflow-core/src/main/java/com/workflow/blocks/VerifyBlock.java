@@ -48,7 +48,26 @@ public class VerifyBlock implements Block {
             Phase.VERIFY,
             List.of(),     // нет config-полей — все настройки в BlockConfig.verify
             true,          // hasCustomForm — UI uses dedicated VerifyForm
-            Map.of()
+            Map.of(),
+            List.of(
+                FieldSchema.output("passed", "Passed", "boolean",
+                    "Итоговый вердикт верификации (структурный + LLM)."),
+                FieldSchema.output("score", "LLM score", "number",
+                    "Балл LLM-проверки (0-10), null если LLM-check отключён."),
+                FieldSchema.output("checks_passed", "Checks passed", "number",
+                    "Число пройденных структурных проверок."),
+                FieldSchema.output("checks_failed", "Checks failed", "number",
+                    "Число проваленных структурных проверок."),
+                FieldSchema.output("issues", "Issues", "string_array",
+                    "Список проблем, обнаруженных верификатором."),
+                FieldSchema.output("subject_block", "Subject block", "string",
+                    "ID проверяемого блока."),
+                FieldSchema.output("iteration", "Iteration", "number",
+                    "Номер текущей итерации loopback-цикла."),
+                FieldSchema.output("recommendation", "Recommendation", "string",
+                    "Рекомендация LLM-ревьюера для downstream codegen.")
+            ),
+            80
         );
     }
 

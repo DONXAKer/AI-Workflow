@@ -122,12 +122,17 @@ public class OrchestratorBlock implements Block {
             "agent",
             Phase.ANY,
             List.of(
+                // ── Essentials ────────────────────────────────────────────────────
                 FieldSchema.enumField("mode", "Режим", List.of("plan", "review"),
-                    "plan", "plan — построить план; review — проверить результат относительно definition_of_done."),
+                    "plan", "plan — построить план; review — проверить результат относительно definition_of_done.")
+                    .withLevel("essential"),
                 FieldSchema.stringArray("context_blocks", "Контекстные блоки",
-                    "ID блоков, чьи выводы передаются в plan-режиме (обычно task_md)."),
+                    "ID блоков, чьи выводы передаются в plan-режиме (обычно task_md).")
+                    .withLevel("essential"),
                 FieldSchema.blockRef("plan_block", "Plan-блок",
-                    "ID orchestrator-блока с режимом plan; используется в review-режиме."),
+                    "ID orchestrator-блока с режимом plan; используется в review-режиме.")
+                    .withLevel("essential"),
+                // ── Advanced ──────────────────────────────────────────────────────
                 FieldSchema.string("working_dir", "Рабочая директория",
                     "Абсолютный путь; если пусто — workingDir проекта."),
                 FieldSchema.number("max_iterations", "Max iterations", DEFAULT_MAX_ITER_PLAN,
@@ -138,7 +143,48 @@ public class OrchestratorBlock implements Block {
                     "Дополнительный контекст проекта (стек, конвенции). Добавляется к встроенному.")
             ),
             false,
-            Map.of()
+            Map.of(),
+            // Outputs UNION: plan-mode and review-mode produce different keys, both
+            // declared here. False-positives on $.review_block.goal are acceptable
+            // for PR-1; PR-3 (creation wizard) may stratify by mode.
+            List.of(
+                // Plan-mode outputs
+                FieldSchema.output("goal", "Goal", "string",
+                    "[plan] Краткая цель плана (одно предложение)."),
+                FieldSchema.output("files_to_touch", "Files to touch", "string",
+                    "[plan] Newline-separated список файлов для модификации."),
+                FieldSchema.output("approach", "Approach", "string",
+                    "[plan] Пошаговый технический подход."),
+                FieldSchema.output("definition_of_done", "Definition of done", "string",
+                    "[plan] Критерии завершённости (newline-separated)."),
+                FieldSchema.output("tools_to_use", "Tools to use", "string",
+                    "[plan] Comma-separated имена tools для имплементора."),
+                FieldSchema.output("requirements_coverage", "Requirements coverage", "string_array",
+                    "[plan] Mapping requirement → approach + files."),
+                // Common
+                FieldSchema.output("mode", "Mode", "string",
+                    "Режим в котором отработал блок (plan | review)."),
+                FieldSchema.output("iterations_used", "Iterations used", "number",
+                    "Количество фактически использованных раундов."),
+                FieldSchema.output("total_cost_usd", "Total cost USD", "number",
+                    "Суммарная стоимость в USD."),
+                // Review-mode outputs
+                FieldSchema.output("passed", "Passed", "boolean",
+                    "[review] Финальный вердикт ревью (computed by runner)."),
+                FieldSchema.output("issues", "Issues", "string",
+                    "[review] Список найденных проблем (multiline string)."),
+                FieldSchema.output("action", "Action", "string",
+                    "[review] continue | retry | escalate."),
+                FieldSchema.output("retry_instruction", "Retry instruction", "string",
+                    "[review] Инструкция для retry на impl-блоке."),
+                FieldSchema.output("carry_forward", "Carry forward", "string",
+                    "[review] Краткое summary что было сделано."),
+                FieldSchema.output("checklist_status", "Checklist status", "string_array",
+                    "[review] Per-item статус по acceptance_checklist."),
+                FieldSchema.output("regressions", "Regressions", "string_array",
+                    "[review] Регрессии (build/test breakage).")
+            ),
+            70
         );
     }
 
@@ -621,6 +667,7 @@ public class OrchestratorBlock implements Block {
             .temperature(agent.getTemperatureOrDefault())
             .maxIterations(maxIter)
             .budgetUsdCap(budget)
+            .workingDir(workingDir)
             .progressCallback(wsHandler != null ? detail ->
                 wsHandler.sendBlockProgress(runId, blockId, detail) : null)
             .build();

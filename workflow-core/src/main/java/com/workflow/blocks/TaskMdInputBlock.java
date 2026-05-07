@@ -100,11 +100,43 @@ public class TaskMdInputBlock implements Block {
             "input",
             Phase.INTAKE,
             List.of(
+                // file_path is required → defaults to essential via level-from-required heuristic;
+                // explicit .withLevel("essential") for clarity.
                 FieldSchema.requiredString("file_path", "Путь к task.md",
                     "Абсолютный путь к файлу задачи или ${input.task_file} для подстановки из run inputs.")
+                    .withLevel("essential")
             ),
             false,
-            Map.of()
+            Map.of(),
+            List.of(
+                FieldSchema.output("feat_id", "Feat ID", "string",
+                    "Идентификатор фичи (например, FEAT-001), извлечённый из имени файла."),
+                FieldSchema.output("slug", "Slug", "string",
+                    "Slug-часть имени файла (kebab-case)."),
+                FieldSchema.output("title", "Title", "string",
+                    "Заголовок задачи (frontmatter title или первый H1 в body)."),
+                FieldSchema.output("body", "Body", "string",
+                    "Полное содержимое файла task.md."),
+                FieldSchema.output("as_is", "As-is", "string",
+                    "Содержимое секции `## Как сейчас` (или пустая строка)."),
+                FieldSchema.output("to_be", "To-be", "string",
+                    "Содержимое секции `## Как надо`."),
+                FieldSchema.output("out_of_scope", "Out of scope", "string",
+                    "Содержимое секции `## Вне scope`."),
+                FieldSchema.output("acceptance", "Acceptance", "string",
+                    "Содержимое секции `## Критерии приёмки`."),
+                FieldSchema.output("needs_bp", "Needs BP", "boolean",
+                    "Эвристический флаг: задача требует Blueprint-работы."),
+                FieldSchema.output("needs_server", "Needs server", "boolean",
+                    "Эвристический флаг: задача затрагивает серверную часть."),
+                FieldSchema.output("needs_client", "Needs client", "boolean",
+                    "Эвристический флаг: задача затрагивает клиентскую часть."),
+                FieldSchema.output("needs_contract_change", "Needs contract change", "boolean",
+                    "Эвристический флаг: задача меняет контракт API."),
+                FieldSchema.output("is_greenfield", "Is greenfield", "boolean",
+                    "Эвристический флаг: задача не привязана к существующим файлам.")
+            ),
+            100
         );
     }
 

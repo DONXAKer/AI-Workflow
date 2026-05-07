@@ -128,23 +128,57 @@ public class AgentVerifyBlock implements Block {
             "verify",
             Phase.VERIFY,
             List.of(
+                // ── Essentials ────────────────────────────────────────────────────
                 FieldSchema.string("subject", "Subject block",
-                    "ID блока чей acceptance_checklist проверяется (обычно analysis)."),
+                    "ID блока чей acceptance_checklist проверяется (обычно analysis).")
+                    .withLevel("essential"),
                 FieldSchema.string("working_dir", "Рабочая директория",
-                    "Абсолютный путь; пусто → workingDir проекта."),
+                    "Абсолютный путь; пусто → workingDir проекта.")
+                    .withLevel("essential"),
+                FieldSchema.string("pass_threshold", "Пороговая severity",
+                    "critical_only | critical_and_important (default) | all.")
+                    .withLevel("essential"),
+                // ── Advanced ──────────────────────────────────────────────────────
                 FieldSchema.toolList("allowed_tools", "Разрешённые инструменты",
                     "Подмножество read-only tools. Write/Edit отбрасываются автоматически."),
                 FieldSchema.stringArray("bash_allowlist", "Bash allowlist",
                     "Шаблоны Bash(gradle test*), Bash(npm test*) и т.п."),
-                FieldSchema.string("pass_threshold", "Пороговая severity",
-                    "critical_only | critical_and_important (default) | all."),
                 FieldSchema.number("max_iterations", "Max iterations", DEFAULT_MAX_ITERATIONS,
                     "Максимум раундов агента."),
                 FieldSchema.number("budget_usd_cap", "Бюджет USD", DEFAULT_BUDGET_USD_CAP,
                     "Лимит стоимости.")
             ),
             true,
-            Map.of()
+            Map.of(),
+            List.of(
+                FieldSchema.output("passed", "Passed", "boolean",
+                    "Итоговый вердикт верификации (учитывает pass_threshold)."),
+                FieldSchema.output("verification_results", "Verification results", "string_array",
+                    "Полный список item_id/text/priority/status/evidence по каждому пункту checklist."),
+                FieldSchema.output("failed_items", "Failed items", "string_array",
+                    "Подмножество verification_results со status=FAIL."),
+                FieldSchema.output("passed_items", "Passed items", "string_array",
+                    "Подмножество verification_results со status=PASS."),
+                FieldSchema.output("issues", "Issues", "string_array",
+                    "Legacy формат списка проблем для loopback-инфраструктуры."),
+                FieldSchema.output("iteration", "Iteration", "number",
+                    "Номер текущей итерации loopback-цикла."),
+                FieldSchema.output("recommendation", "Recommendation", "string",
+                    "Рекомендация ревьюера для downstream codegen."),
+                FieldSchema.output("regression_flags", "Regression flags", "string_array",
+                    "Items с регрессией (PASS → FAIL между итерациями)."),
+                FieldSchema.output("subject_block", "Subject block", "string",
+                    "Эхо ID проверяемого блока."),
+                FieldSchema.output("pass_threshold", "Pass threshold", "string",
+                    "Эхо использованного порога severity."),
+                FieldSchema.output("stop_reason", "Stop reason", "string",
+                    "Причина остановки агента."),
+                FieldSchema.output("iterations_used", "Iterations used", "number",
+                    "Количество фактически использованных раундов."),
+                FieldSchema.output("total_cost_usd", "Total cost USD", "number",
+                    "Суммарная стоимость в USD.")
+            ),
+            90
         );
     }
 
@@ -209,6 +243,7 @@ public class AgentVerifyBlock implements Block {
             .temperature(0.2)  // verifier should be deterministic
             .maxIterations(maxIterations)
             .budgetUsdCap(budgetUsdCap)
+            .workingDir(workingDir)
             .progressCallback(wsHandler != null ? detail ->
                 wsHandler.sendBlockProgress(runId, blockId, detail) : null)
             .build();

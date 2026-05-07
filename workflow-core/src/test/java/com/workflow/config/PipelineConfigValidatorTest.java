@@ -1,6 +1,9 @@
 package com.workflow.config;
 
 import com.workflow.blocks.Block;
+import com.workflow.blocks.BlockMetadata;
+import com.workflow.blocks.FieldSchema;
+import com.workflow.blocks.Phase;
 import com.workflow.core.BlockRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -486,5 +489,160 @@ class PipelineConfigValidatorTest {
         ValidationResult r = validator.validate(pipeline(sh));
         assertTrue(codes(r).contains(PipelineConfigValidator.INVALID_PHASE),
             () -> "expected INVALID_PHASE, got: " + r.errors());
+    }
+
+    // ── REF_UNKNOWN_FIELD (PR-1) ──────────────────────────────────────────────
+
+    /** Builds a validator backed by a registry that includes a stub with declared outputs. */
+    private PipelineConfigValidator validatorWithOutputsStub() throws Exception {
+        BlockRegistry registry = new BlockRegistry();
+        List<Block> stubs = new ArrayList<>();
+        for (String name : List.of("verify", "shell_exec")) {
+            stubs.add(stubBlock(name));
+        }
+        // Stub 'analysis' returning a real output schema so REF_UNKNOWN_FIELD can fire.
+        stubs.add(new Block() {
+            @Override public String getName() { return "analysis"; }
+            @Override public String getDescription() { return "analysis"; }
+            @Override public Map<String, Object> run(Map<String, Object> input, BlockConfig config,
+                                                     com.workflow.core.PipelineRun run) {
+                return Map.of();
+            }
+            @Override public BlockMetadata getMetadata() {
+                return new BlockMetadata("Analysis", "agent", Phase.ANALYZE, List.of(),
+                    false, Map.of(),
+                    List.of(
+                        FieldSchema.output("summary", "Summary", "string", "summary"),
+                        FieldSchema.output("estimated_complexity", "Complexity", "enum", "complexity")
+                    ),
+                    100);
+            }
+        });
+        // Stub 'agent_with_tools' — declares NO outputs, exercises backwards-compat skip.
+        stubs.add(new Block() {
+            @Override public String getName() { return "agent_with_tools"; }
+            @Override public String getDescription() { return "agent_with_tools"; }
+            @Override public Map<String, Object> run(Map<String, Object> input, BlockConfig config,
+                                                     com.workflow.core.PipelineRun run) {
+                return Map.of();
+            }
+        });
+        // task_md_input stub used as a reference target — empty outputs.
+        stubs.add(stubBlock("task_md_input"));
+        ReflectionTestUtils.setField(registry, "allBlocks", stubs);
+        Method init = BlockRegistry.class.getDeclaredMethod("init");
+        init.setAccessible(true);
+        init.invoke(registry);
+        return new PipelineConfigValidator(registry);
+    }
+
+    @Test
+    void refToKnownOutputField_noWarning() throws Exception {
+        PipelineConfigValidator v = validatorWithOutputsStub();
+        BlockConfig analysis = block("analysis", "analysis");
+        BlockConfig impl = block("impl", "agent_with_tools");
+        impl.setDependsOn(new ArrayList<>(List.of("analysis")));
+        Map<String, Object> conf = new HashMap<>();
+        conf.put("user_message", "Build ${analysis.summary}");
+        impl.setConfig(conf);
+        ValidationResult r = v.validate(pipeline(analysis, impl));
+        assertFalse(codes(r).contains(PipelineConfigValidator.REF_UNKNOWN_FIELD),
+            () -> "no warning expected for known field, got: " + r.errors());
+    }
+
+    @Test
+    void refToUnknownOutputField_emitsWarn() throws Exception {
+        PipelineConfigValidator v = validatorWithOutputsStub();
+        BlockConfig analysis = block("analysis", "analysis");
+        BlockConfig impl = block("impl", "agent_with_tools");
+        impl.setDependsOn(new ArrayList<>(List.of("analysis")));
+        Map<String, Object> conf = new HashMap<>();
+        conf.put("user_message", "Build ${analysis.nonsense_field}");
+        impl.setConfig(conf);
+        ValidationResult r = v.validate(pipeline(analysis, impl));
+        assertTrue(codes(r).contains(PipelineConfigValidator.REF_UNKNOWN_FIELD),
+            () -> "expected REF_UNKNOWN_FIELD, got: " + r.errors());
+        // WARN-only — must NOT make result invalid.
+        assertTrue(r.valid(),
+            () -> "REF_UNKNOWN_FIELD is WARN, result must stay valid: " + r.errors());
+    }
+
+    @Test
+    void refToUnknownField_inCondition_emitsWarn() throws Exception {
+        PipelineConfigValidator v = validatorWithOutputsStub();
+        BlockConfig analysis = block("analysis", "analysis");
+        BlockConfig impl = block("impl", "agent_with_tools");
+        impl.setDependsOn(new ArrayList<>(List.of("analysis")));
+        impl.setCondition("$.analysis.bogus_field == 'x'");
+        ValidationResult r = v.validate(pipeline(analysis, impl));
+        assertTrue(codes(r).contains(PipelineConfigValidator.REF_UNKNOWN_FIELD),
+            () -> "expected REF_UNKNOWN_FIELD on condition, got: " + r.errors());
+    }
+
+    @Test
+    void refToBlockWithoutDeclaredOutputs_skipsWarn() throws Exception {
+        PipelineConfigValidator v = validatorWithOutputsStub();
+        // agent_with_tools stub has no outputs declared — the field check must
+        // silently skip (backwards-compat for unmigrated blocks).
+        BlockConfig impl = block("impl", "agent_with_tools");
+        BlockConfig downstream = block("downstream", "agent_with_tools");
+        downstream.setDependsOn(new ArrayList<>(List.of("impl")));
+        Map<String, Object> conf = new HashMap<>();
+        conf.put("user_message", "Read ${impl.literally_anything}");
+        downstream.setConfig(conf);
+        ValidationResult r = v.validate(pipeline(impl, downstream));
+        assertFalse(codes(r).contains(PipelineConfigValidator.REF_UNKNOWN_FIELD),
+            () -> "block w/o declared outputs must skip field check, got: " + r.errors());
+    }
+
+    @Test
+    void bareBlockRefWithoutTail_skipsWarn() throws Exception {
+        // ${analysis} (no .field) — there's no field to check, must not warn.
+        PipelineConfigValidator v = validatorWithOutputsStub();
+        BlockConfig analysis = block("analysis", "analysis");
+        BlockConfig impl = block("impl", "agent_with_tools");
+        impl.setDependsOn(new ArrayList<>(List.of("analysis")));
+        Map<String, Object> conf = new HashMap<>();
+        conf.put("user_message", "${analysis}");
+        impl.setConfig(conf);
+        ValidationResult r = v.validate(pipeline(analysis, impl));
+        assertFalse(codes(r).contains(PipelineConfigValidator.REF_UNKNOWN_FIELD),
+            () -> "bare block ref must not trigger field check, got: " + r.errors());
+    }
+
+    @Test
+    void selfRefBogusField_inOnFailInjectContext_emitsWarn() throws Exception {
+        // Self-ref in verify.on_fail.inject_context is allowed (post-execution),
+        // BUT a typo in the field must still surface as REF_UNKNOWN_FIELD.
+        PipelineConfigValidator v = validatorWithOutputsStub();
+        BlockConfig impl = block("impl", "agent_with_tools");
+        BlockConfig analysis = block("analysis", "analysis");          // self-target
+        VerifyConfig vc = new VerifyConfig();
+        OnFailConfig of = new OnFailConfig();
+        of.setAction("loopback");
+        of.setTarget("impl");
+        of.setInjectContext(new HashMap<>(Map.of("issues", "$.analysis.no_such_field")));
+        vc.setOnFail(of);
+        analysis.setVerify(vc);
+        analysis.setDependsOn(new ArrayList<>(List.of("impl")));
+        ValidationResult r = v.validate(pipeline(impl, analysis));
+        assertTrue(codes(r).contains(PipelineConfigValidator.REF_UNKNOWN_FIELD),
+            () -> "self-ref bogus field should warn, got: " + r.errors());
+    }
+
+    @Test
+    void nestedFieldPath_validatesOnlyFirstSegment() throws Exception {
+        // $.analysis.summary.something — first segment 'summary' IS declared,
+        // 'something' is not validated (declared outputs don't carry nested schemas).
+        PipelineConfigValidator v = validatorWithOutputsStub();
+        BlockConfig analysis = block("analysis", "analysis");
+        BlockConfig impl = block("impl", "agent_with_tools");
+        impl.setDependsOn(new ArrayList<>(List.of("analysis")));
+        Map<String, Object> conf = new HashMap<>();
+        conf.put("user_message", "Read ${analysis.summary.length} chars");
+        impl.setConfig(conf);
+        ValidationResult r = v.validate(pipeline(analysis, impl));
+        assertFalse(codes(r).contains(PipelineConfigValidator.REF_UNKNOWN_FIELD),
+            () -> "nested-segment path on known field must not warn, got: " + r.errors());
     }
 }

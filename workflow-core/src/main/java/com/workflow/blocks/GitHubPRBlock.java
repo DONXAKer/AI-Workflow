@@ -26,6 +26,33 @@ public class GitHubPRBlock implements Block {
     }
 
     @Override
+    public BlockMetadata getMetadata() {
+        return new BlockMetadata(
+            "GitHub PR",
+            "output",
+            Phase.PUBLISH,
+            List.of(),  // configFields пусты — конфиг приходит через _github_config + codegen output
+            false,
+            Map.of(),
+            List.of(
+                FieldSchema.output("pr_number", "PR number", "number",
+                    "Номер созданного Pull Request."),
+                FieldSchema.output("pr_url", "PR URL", "string",
+                    "HTTPS-ссылка на созданный PR."),
+                FieldSchema.output("branch", "Branch", "string",
+                    "Имя ветки, с которой создан PR."),
+                FieldSchema.output("title", "Title", "string",
+                    "Заголовок PR (берётся из commit_message)."),
+                FieldSchema.output("youtrack_issues_linked", "YouTrack issues linked", "string_array",
+                    "ID задач YouTrack, на которые ссылается PR."),
+                FieldSchema.output("created_at", "Created at", "string",
+                    "ISO-timestamp создания PR.")
+            ),
+            100
+        );
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
     public Map<String, Object> run(Map<String, Object> input, BlockConfig config, PipelineRun run) throws Exception {
         Map<String, Object> cfg = config.getConfig();

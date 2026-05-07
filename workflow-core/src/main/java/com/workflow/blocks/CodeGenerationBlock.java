@@ -108,7 +108,22 @@ public class CodeGenerationBlock implements Block {
             Phase.IMPLEMENT,
             List.of(),
             false,
-            Map.of()
+            Map.of(),
+            List.of(
+                FieldSchema.output("branch_name", "Branch name", "string",
+                    "Имя ветки для применения изменений (feature/<issue-id>-<slug>)."),
+                FieldSchema.output("changes", "File changes", "string_array",
+                    "Список изменений файлов (file_path/action/content/description)."),
+                FieldSchema.output("test_changes", "Test changes", "string_array",
+                    "Изменения тестов в том же формате, что и changes."),
+                FieldSchema.output("commit_message", "Commit message", "string",
+                    "Conventional Commits сообщение для коммита."),
+                FieldSchema.output("tasks_generated", "Tasks generated", "string_array",
+                    "Сгенерированные подзадачи (если применимо)."),
+                FieldSchema.output("youtrack_issues", "YouTrack issues", "string_array",
+                    "Связанные YouTrack issues (id/url/summary).")
+            ),
+            100
         );
     }
 

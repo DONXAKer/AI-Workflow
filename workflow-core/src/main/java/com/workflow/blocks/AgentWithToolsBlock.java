@@ -134,13 +134,20 @@ public class AgentWithToolsBlock implements Block {
             "agent",
             Phase.IMPLEMENT,
             List.of(
+                // ── Essentials ────────────────────────────────────────────────────
+                // user_message — already required, defaults to essential, but stays explicit for clarity.
                 new FieldSchema("user_message", "User message", "string", true, null,
                     "Сообщение для модели. Поддерживает ${block.field} и {placeholder}.",
-                    Map.of("multiline", true, "monospace", true)),
+                    Map.of("multiline", true, "monospace", true), "essential"),
+                // working_dir — optional but conceptually essential (where agent operates).
                 FieldSchema.string("working_dir", "Рабочая директория",
-                    "Абсолютный путь к рабочей директории; если пусто — workingDir проекта."),
+                    "Абсолютный путь к рабочей директории; если пусто — workingDir проекта.")
+                    .withLevel("essential"),
+                // allowed_tools — defines agent capabilities, must be set per-block.
                 FieldSchema.toolList("allowed_tools", "Разрешённые инструменты",
-                    "Подмножество [Read, Write, Edit, Glob, Grep, Bash]."),
+                    "Подмножество [Read, Write, Edit, Glob, Grep, Bash].")
+                    .withLevel("essential"),
+                // ── Advanced ──────────────────────────────────────────────────────
                 FieldSchema.stringArray("bash_allowlist", "Bash allowlist",
                     "Шаблоны вида Bash(git *), Bash(gradle *). Пустой — Bash отключён."),
                 FieldSchema.number("max_iterations", "Max iterations", DEFAULT_MAX_ITERATIONS,
@@ -153,7 +160,24 @@ public class AgentWithToolsBlock implements Block {
                         + "exploration на impl-блоке.")
             ),
             true,   // hasCustomForm — UI uses dedicated AgentWithToolsForm
-            Map.of()
+            Map.of(),
+            List.of(
+                FieldSchema.output("final_text", "Final text", "string",
+                    "Финальный текст агента после end_turn / cap."),
+                FieldSchema.output("stop_reason", "Stop reason", "string",
+                    "Причина остановки: END_TURN | MAX_TOKENS | MAX_ITERATIONS | BUDGET_EXCEEDED."),
+                FieldSchema.output("iterations_used", "Iterations used", "number",
+                    "Количество фактически использованных раундов."),
+                FieldSchema.output("total_input_tokens", "Total input tokens", "number",
+                    "Суммарные входящие токены."),
+                FieldSchema.output("total_output_tokens", "Total output tokens", "number",
+                    "Суммарные исходящие токены."),
+                FieldSchema.output("total_cost_usd", "Total cost USD", "number",
+                    "Суммарная стоимость вызовов в USD."),
+                FieldSchema.output("tool_calls_made", "Tool calls made", "string_array",
+                    "Список имён tools, вызванных в порядке вызова.")
+            ),
+            100
         );
     }
 
@@ -212,6 +236,7 @@ public class AgentWithToolsBlock implements Block {
             .temperature(agent.getTemperatureOrDefault())
             .maxIterations(maxIterations)
             .budgetUsdCap(budgetUsdCap)
+            .workingDir(workingDir)
             .progressCallback(wsHandler != null ? detail ->
                 wsHandler.sendBlockProgress(runId, blockId, detail) : null)
             .build();

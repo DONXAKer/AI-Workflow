@@ -28,6 +28,52 @@ public class RunTestsBlock implements Block {
     }
 
     @Override
+    public BlockMetadata getMetadata() {
+        return new BlockMetadata(
+            "Run tests",
+            "verify",
+            Phase.VERIFY,
+            List.of(
+                FieldSchema.enumField("type", "Тип тестов",
+                    List.of("smoke", "acceptance", "integration", "e2e"),
+                    "smoke",
+                    "Тип запуска: smoke (быстрая проверка) | acceptance | integration | e2e."),
+                FieldSchema.string("environment", "Окружение",
+                    "Целевое окружение (test/stage/prod). Если не задано — берётся из upstream output или 'test'."),
+                FieldSchema.string("suite", "Test suite",
+                    "Имя набора тестов в CI/CD (default — все)."),
+                FieldSchema.number("timeout_seconds", "Timeout (сек)", 1200,
+                    "Максимальное время выполнения test job в секундах.")
+            ),
+            false,
+            Map.of(),
+            List.of(
+                FieldSchema.output("type", "Type", "string",
+                    "Эхо настроенного типа тестов."),
+                FieldSchema.output("environment", "Environment", "string",
+                    "Эхо использованного окружения."),
+                FieldSchema.output("suite", "Suite", "string",
+                    "Эхо имени suite."),
+                FieldSchema.output("tests_run", "Tests run", "number",
+                    "Общее число запущенных тестов."),
+                FieldSchema.output("tests_passed", "Tests passed", "number",
+                    "Число пройденных тестов."),
+                FieldSchema.output("tests_failed", "Tests failed", "number",
+                    "Число проваленных тестов."),
+                FieldSchema.output("failed_tests", "Failed tests", "string_array",
+                    "Список имён проваленных тестов."),
+                FieldSchema.output("status", "Status", "string",
+                    "Итоговый статус: passed | failed | timeout."),
+                FieldSchema.output("report_url", "Report URL", "string",
+                    "Ссылка на JUnit / Allure отчёт."),
+                FieldSchema.output("finished_at", "Finished at", "string",
+                    "ISO-timestamp завершения.")
+            ),
+            80
+        );
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
     public Map<String, Object> run(Map<String, Object> input, BlockConfig config, PipelineRun run) throws Exception {
         Map<String, Object> cfg = config.getConfig();

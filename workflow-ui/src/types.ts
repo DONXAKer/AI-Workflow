@@ -506,6 +506,14 @@ export interface FieldSchemaDto {
   defaultValue?: unknown
   description?: string
   hints?: Record<string, unknown>
+  /**
+   * UI tier for sectioned side-panel rendering (PR-1, 2026-05-07).
+   * `essential` — render in always-open Essentials section.
+   * `advanced`  — render in collapsed Advanced section.
+   * Backend defaults from `required` when absent: required → essential,
+   * optional → advanced. Optional on the wire so legacy responses keep parsing.
+   */
+  level?: 'essential' | 'advanced'
 }
 
 export type Phase =
@@ -522,6 +530,18 @@ export interface BlockMetadataDto {
   configFields: FieldSchemaDto[]
   hasCustomForm: boolean
   uiHints?: Record<string, unknown>
+  /**
+   * Fields the block produces in its run-output map (PR-1, 2026-05-07). Drives
+   * the OutputsRefPicker autocomplete and a WARN-level REF_UNKNOWN_FIELD validator
+   * check. Optional on the wire — empty / absent means the block hasn't declared
+   * its output schema yet (warn-only behaviour, never blocks save/run).
+   */
+  outputs?: FieldSchemaDto[]
+  /**
+   * Creation-wizard hint (PR-3): higher number = more typically chosen as the
+   * default block for this phase. `0` (or absent) = no preference declared.
+   */
+  recommendedRank?: number
 }
 
 export interface BlockRegistryEntry {
