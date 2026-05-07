@@ -1,4 +1,4 @@
-import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry, LlmCallEntry, McpServer, ValidationResult, PipelineConfigDto, BlockRegistryEntry } from '../types'
+import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry, LlmCallEntry, McpServer, ValidationResult, PipelineConfigDto, BlockRegistryEntry, BlockConfigDto, EntryPointConfigDto } from '../types'
 import { currentProjectSlug } from './projectContext'
 
 const BASE = '/api'
@@ -169,9 +169,33 @@ export const api = {
       { method: 'POST' }
     ),
 
-  /** Creates a new pipeline by cloning the built-in feature.yaml template. */
-  createPipeline: (body: { slug: string; displayName: string; description?: string }):
-    Promise<{ path: string; name: string; pipelineName: string }> =>
+  /**
+   * Validates an in-memory PipelineConfig WITHOUT touching disk. Used by the
+   * Creation Wizard for live validation as the user assembles a pipeline (PR-3,
+   * 2026-05-07). Mirrors the {@code /pipelines/validate} envelope.
+   */
+  validatePipelineBody: (config: PipelineConfigDto): Promise<ValidationResult> =>
+    request<ValidationResult>(
+      `${BASE}/pipelines/validate-body`,
+      { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(config) }
+    ),
+
+  /**
+   * Creates a new pipeline.
+   *
+   * - Template mode: pass only {@code slug + displayName + description}; backend
+   *   clones the built-in feature.yaml.
+   * - Body mode: include a non-empty {@code pipeline} array (and optionally
+   *   {@code entry_points}); backend uses the supplied PipelineConfig as-is.
+   *   Used by the Creation Wizard.
+   */
+  createPipeline: (body: {
+    slug: string
+    displayName: string
+    description?: string
+    pipeline?: BlockConfigDto[]
+    entry_points?: EntryPointConfigDto[]
+  }): Promise<{ path: string; name: string; pipelineName: string }> =>
     request(`${BASE}/pipelines/new`, {
       method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body),
     }),

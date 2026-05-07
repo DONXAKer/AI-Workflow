@@ -11,6 +11,7 @@ import Canvas from './Canvas'
 import BlockPalette from './BlockPalette'
 import SidePanel from './SidePanel'
 import PipelineSettingsModal from './PipelineSettingsModal'
+import CreationWizard from './Wizard/CreationWizard'
 import { effectivePhase, PHASE_LABEL, phaseOrder, phaseStripeClass } from '../../utils/phaseColors'
 
 interface PipelineInfo {
@@ -32,6 +33,7 @@ export function PipelineEditor() {
   const [pipelinesLoading, setPipelinesLoading] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showNewPipeline, setShowNewPipeline] = useState(false)
+  const [showWizard, setShowWizard] = useState(false)
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null)
   const [showAddPicker, setShowAddPicker] = useState<{ afterBlockId: string | null } | null>(null)
   const addPickerRef = useRef<HTMLDivElement>(null)
@@ -370,6 +372,24 @@ export function PipelineEditor() {
             editor.setConfigPath(p.path)
             setShowNewPipeline(false)
           }}
+          onCustom={() => {
+            setShowNewPipeline(false)
+            setShowWizard(true)
+          }}
+        />
+      )}
+
+      {/* Creation Wizard (full-screen modal) */}
+      {showWizard && (
+        <CreationWizard
+          registry={registry}
+          byType={byType}
+          onCancel={() => setShowWizard(false)}
+          onCreated={p => {
+            setPipelines(list => [...list, p])
+            editor.setConfigPath(p.path)
+            setShowWizard(false)
+          }}
         />
       )}
     </div>
@@ -378,9 +398,16 @@ export function PipelineEditor() {
 
 type PipelineTemplate = 'empty' | 'standard' | 'custom'
 
-function NewPipelineModal({ onClose, onCreated }: {
+function NewPipelineModal({ onClose, onCreated, onCustom }: {
   onClose: () => void
   onCreated: (info: { path: string; name: string; pipelineName: string }) => void
+  /**
+   * Invoked when the user picks the 'custom' template — the parent should close
+   * this modal and open the {@code CreationWizard} (PR-3, 2026-05-07). The
+   * wizard takes its own slug/displayName/description in its pre-step, so we
+   * intentionally don't forward those.
+   */
+  onCustom: () => void
 }) {
   const [slug, setSlug] = useState('')
   const [displayName, setDisplayName] = useState('')
@@ -391,6 +418,13 @@ function NewPipelineModal({ onClose, onCreated }: {
 
   const submit = async () => {
     setError(null)
+    // Custom template → hand off to the wizard. The wizard collects its own
+    // name fields (it gives users richer phase-by-phase composition), so the
+    // ones in this modal are ignored for that path.
+    if (template === 'custom') {
+      onCustom()
+      return
+    }
     if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) {
       setError('Slug должен быть kebab-case (a-z, 0-9, -)')
       return
@@ -401,9 +435,8 @@ function NewPipelineModal({ onClose, onCreated }: {
     }
     setSubmitting(true)
     try {
-      // Both 'empty' and 'standard' currently call the same createPipeline endpoint —
+      // Both 'empty' and 'standard' call the same createPipeline endpoint —
       // after the in-repo feature.yaml migration it IS the canonical 6-phase skeleton.
-      // 'custom' is reserved for a future phase-checkbox wizard (see plan §8 PR4).
       const result = await api.createPipeline({ slug, displayName, description })
       onCreated({ path: result.path, name: result.name, pipelineName: result.pipelineName })
     } catch (e) {
@@ -470,9 +503,8 @@ function NewPipelineModal({ onClose, onCreated }: {
               value="custom"
               current={template}
               onSelect={setTemplate}
-              label="Custom (по фазам)"
-              hint="Скоро: галочки фаз + выбор дефолтных блоков."
-              disabled
+              label="Custom (мастер по фазам)"
+              hint="Пошаговый мастер: фаза за фазой, рекомендуемые блоки."
             />
           </div>
         </div>

@@ -4,9 +4,8 @@ import {
   BlockConfigDto, BlockRegistryEntry, FieldSchemaDto, OnFailureConfigDto,
   PipelineConfigDto, ValidationError, VerifyConfigDto,
 } from '../../types'
-import GenericBlockForm, { effectiveLevel, LevelFilter } from './forms/GenericBlockForm'
-import AgentWithToolsForm from './forms/AgentWithToolsForm'
-import VerifyForm from './forms/VerifyForm'
+import GenericBlockForm, { effectiveLevel } from './forms/GenericBlockForm'
+import BlockForm from './forms/BlockForm'
 import RawJsonFallback from './forms/RawJsonFallback'
 import OnFailEditor from './forms/OnFailEditor'
 import OutputsRefPicker from './OutputsRefPicker'
@@ -638,49 +637,6 @@ function AgentOverrides({ block, onPatch }: {
       </div>
     </div>
   )
-}
-
-function BlockForm({ block, registryEntry, config, levelFilter, onConfigChange, onVerifyChange }: {
-  block: BlockConfigDto
-  registryEntry: BlockRegistryEntry | undefined
-  config: PipelineConfigDto
-  levelFilter: LevelFilter
-  onConfigChange: (cfg: Record<string, unknown>) => void
-  onVerifyChange: (v: VerifyConfigDto) => void
-}) {
-  // Custom forms first
-  if (block.block === 'agent_with_tools') {
-    return (
-      <AgentWithToolsForm
-        block={block}
-        config={config}
-        onChange={onConfigChange}
-        levelFilter={levelFilter}
-      />
-    )
-  }
-  if (block.block === 'verify') {
-    // VerifyForm renders subject / checks / llm_check (Essentials).
-    // It deliberately does NOT render on_fail — that lives in
-    // ConditionsAndRetrySection.
-    if (levelFilter === 'advanced') return null
-    return <VerifyForm block={block} config={config} onChange={onVerifyChange} />
-  }
-  // Generic from FieldSchema
-  if (registryEntry?.metadata?.configFields?.length) {
-    return (
-      <GenericBlockForm
-        block={block}
-        fields={registryEntry.metadata.configFields}
-        config={config}
-        onChange={onConfigChange}
-        levelFilter={levelFilter}
-      />
-    )
-  }
-  // No metadata at all + Essentials section → nothing to show; Advanced gets RawJsonFallback.
-  if (levelFilter === 'essential') return null
-  return null
 }
 
 export default SidePanel
