@@ -578,7 +578,10 @@ public class RunController {
                     Map.of("error", "Cannot resolve pipeline config for run " + runId));
             }
 
-            // Collect all completed block outputs (skip internal _ entries)
+            // Collect completed block outputs (skip internal _ entries).
+            // When loopbacks produced multiple outputs per block, prefer the last non-skipped
+            // output — a loopback may have left _skipped:true as the final entry, which would
+            // incorrectly mark that block as skipped in the retry run.
             List<BlockOutput> storedOutputs = blockOutputRepository.findByRunId(id);
             Map<String, Map<String, Object>> injectedOutputs = new LinkedHashMap<>();
             Map<String, java.time.Instant[]> blockTimestamps = new LinkedHashMap<>();
@@ -589,9 +592,16 @@ public class RunController {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> out = objectMapper.readValue(
                         bo.getOutputJson(), new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
-                    injectedOutputs.put(bo.getBlockId(), out);
-                    blockTimestamps.put(bo.getBlockId(),
-                        new java.time.Instant[]{bo.getStartedAt(), bo.getCompletedAt()});
+                    boolean newIsSkipped = Boolean.TRUE.equals(out.get("_skipped"));
+                    boolean existingIsSkipped = Boolean.TRUE.equals(
+                        injectedOutputs.getOrDefault(bo.getBlockId(), java.util.Map.of()).get("_skipped"));
+                    // Prefer non-skipped: overwrite existing skipped with non-skipped;
+                    // if both non-skipped, last iteration wins; skipped only fills an empty slot.
+                    if (!newIsSkipped || !injectedOutputs.containsKey(bo.getBlockId()) || existingIsSkipped) {
+                        injectedOutputs.put(bo.getBlockId(), out);
+                        blockTimestamps.put(bo.getBlockId(),
+                            new java.time.Instant[]{bo.getStartedAt(), bo.getCompletedAt()});
+                    }
                 } catch (Exception ignored) {}
             }
 
@@ -600,9 +610,12 @@ public class RunController {
             if (retryFrom == null || retryFrom.isBlank()) {
                 retryFrom = config.getPipeline().isEmpty() ? null : config.getPipeline().get(0).getId();
             }
-            // Don't inject output of the failed block — let it re-run
-            injectedOutputs.remove(retryFrom);
-            blockTimestamps.remove(retryFrom);
+            // Only keep outputs for blocks that strictly precede retryFrom in topological order.
+            // This prevents stale outputs from blocks after the failure point (written during
+            // earlier loopback iterations) from leaking into the retry run.
+            java.util.Set<String> preRetryIds = pipelineRunner.getBlockIdsBefore(config, retryFrom);
+            injectedOutputs.keySet().retainAll(preRetryIds);
+            blockTimestamps.keySet().retainAll(preRetryIds);
 
             // Restore named inputs
             @SuppressWarnings("unchecked")

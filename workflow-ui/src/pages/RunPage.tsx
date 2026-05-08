@@ -145,8 +145,9 @@ export default function RunPage() {
         completedStatuses = data.events.map((event: BlockEvent) => {
           const output = outputMap.get(event.blockId)
           const isSkipped = output?._skipped === true
+          const isReused = !isSkipped && output?._reused === true
           // A paused block has its output saved but isn't yet "complete" — override status below
-          const status: BlockStatus['status'] = isSkipped ? 'skipped' : 'complete'
+          const status: BlockStatus['status'] = isSkipped ? 'skipped' : isReused ? 'reused' : 'complete'
           const bs: BlockStatus = {
             blockId: event.blockId,
             iteration: event.iteration ?? 0,
@@ -181,9 +182,10 @@ export default function RunPage() {
           .map(blockId => {
             const output = outputMap.get(blockId)
             const isSkipped = output?._skipped === true
+            const isReused = !isSkipped && output?._reused === true
             return {
               blockId,
-              status: (isSkipped ? 'skipped' : 'complete') as BlockStatus['status'],
+              status: (isSkipped ? 'skipped' : isReused ? 'reused' : 'complete') as BlockStatus['status'],
               output,
               input: inputMap.get(blockId),
             }

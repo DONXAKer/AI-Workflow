@@ -326,6 +326,7 @@ const STATUS_CONFIG: Record<BlockStatus['status'], StatusConfig> = {
   complete: { label: 'Готово', badgeClass: 'bg-green-900/50 text-green-300', Icon: CheckCircle },
   failed: { label: 'Ошибка', badgeClass: 'bg-red-900/50 text-red-300', rowClass: 'bg-red-950/20', Icon: XCircle },
   skipped: { label: 'Пропущен', badgeClass: 'bg-amber-900/40 text-amber-400', Icon: SkipForward },
+  reused: { label: 'Унаследован', badgeClass: 'bg-slate-700/60 text-slate-400', Icon: RotateCcw },
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -602,6 +603,14 @@ function BlockSummaryChip({ block, spec }: { block: BlockStatus; spec?: BlockVie
     )
   }
 
+  if (out._reused === true) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-500" title="Результат унаследован из предыдущего запуска">
+        <RotateCcw className="w-3 h-3" /> inherited
+      </span>
+    )
+  }
+
   if (Array.isArray(out.failed_items) || Array.isArray(out.passed_items)) {
     const passed = Array.isArray(out.passed_items) ? out.passed_items.length : 0
     const failed = Array.isArray(out.failed_items) ? out.failed_items.length : 0
@@ -814,7 +823,7 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
     )
   }
 
-  const completedCount = blockStatuses.filter(b => b.status === 'complete' || b.status === 'skipped').length
+  const completedCount = blockStatuses.filter(b => b.status === 'complete' || b.status === 'skipped' || b.status === 'reused').length
   const hasApprovalPending = blockStatuses.some(b => b.status === 'awaiting_approval')
 
   return (

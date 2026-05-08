@@ -608,7 +608,7 @@ export interface BlockStatus {
   blockId: string
   iteration?: number
   blockType?: string
-  status: 'pending' | 'running' | 'awaiting_approval' | 'complete' | 'skipped' | 'failed'
+  status: 'pending' | 'running' | 'awaiting_approval' | 'complete' | 'skipped' | 'reused' | 'failed'
   output?: Record<string, unknown>
   input?: Record<string, unknown>
   /** ISO timestamp set when BLOCK_STARTED is received — used for per-step duration display */

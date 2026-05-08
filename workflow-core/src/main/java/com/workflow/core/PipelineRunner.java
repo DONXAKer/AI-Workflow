@@ -189,6 +189,7 @@ public class PipelineRunner {
         captureConfigSnapshot(pipelineRun, config);
 
         List<BlockConfig> sorted = topologicalSort(config.getPipeline());
+        boolean isRetry = fromBlockId != null;
         Instant preEntryNow = Instant.now();
         for (BlockConfig blockConfig : sorted) {
             if (blockConfig.getId().equals(fromBlockId)) break;
@@ -199,6 +200,13 @@ public class PipelineRunner {
             Map<String, Object> injected = injectedOutputs != null
                 ? injectedOutputs.getOrDefault(blockConfig.getId(), new HashMap<>())
                 : new HashMap<>();
+            // Mark pre-entry blocks as reused so the UI can distinguish them from
+            // condition-skipped blocks (_skipped) and show "Inherited" instead of "Skipped".
+            if (isRetry) {
+                injected = new java.util.LinkedHashMap<>(injected);
+                injected.remove("_skipped");
+                injected.put("_reused", true);
+            }
             try {
                 String outputJson = objectMapper.writeValueAsString(injected);
                 Instant[] ts = blockTimestamps != null ? blockTimestamps.get(blockConfig.getId()) : null;
@@ -315,6 +323,17 @@ public class PipelineRunner {
             // Run is already in a terminal state — nothing to do.
             return false;
         }).orElse(false);
+    }
+
+    /** Returns IDs of all blocks that appear strictly before {@code fromBlockId} in topological order. */
+    public java.util.Set<String> getBlockIdsBefore(PipelineConfig config, String fromBlockId) {
+        java.util.Set<String> result = new java.util.LinkedHashSet<>();
+        if (fromBlockId == null) return result;
+        for (BlockConfig bc : topologicalSortValidated(config.getPipeline())) {
+            if (bc.getId().equals(fromBlockId)) break;
+            result.add(bc.getId());
+        }
+        return result;
     }
 
     /**
