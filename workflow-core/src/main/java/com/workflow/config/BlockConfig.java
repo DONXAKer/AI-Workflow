@@ -1,5 +1,6 @@
 package com.workflow.config;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -62,6 +63,10 @@ public class BlockConfig {
      */
     @JsonProperty("phase")
     private String phase;
+
+    @JsonProperty("validate_output")
+    @JsonAlias({"validateOutput"})
+    private OutputValidationConfig validateOutput;
 
     public BlockConfig() {}
 
@@ -173,6 +178,9 @@ public class BlockConfig {
     public String getPhase() { return phase; }
     public void setPhase(String phase) { this.phase = phase; }
 
+    public OutputValidationConfig getValidateOutput() { return validateOutput; }
+    public void setValidateOutput(OutputValidationConfig validateOutput) { this.validateOutput = validateOutput; }
+
     /**
      * Returns a copy of this BlockConfig with a merged config map.
      */
@@ -195,6 +203,7 @@ public class BlockConfig {
         copy.setOnTimeout(this.onTimeout);
         copy.setRetry(this.retry);
         copy.setPhase(this.phase);
+        copy.setValidateOutput(this.validateOutput);
         Map<String, Object> mergedConfig = new HashMap<>(this.config);
         mergedConfig.putAll(extraConfig);
         copy.setConfig(mergedConfig);

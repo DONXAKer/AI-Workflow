@@ -376,7 +376,7 @@ public class PipelineRunner {
         if (blockConfig.getDependsOn() != null) {
             for (String depId : blockConfig.getDependsOn()) {
                 Optional<BlockOutput> depOutput = run.getOutputs().stream()
-                    .filter(o -> o.getBlockId().equals(depId)).findFirst();
+                    .filter(o -> o.getBlockId().equals(depId)).reduce((a, b) -> b);
                 if (depOutput.isPresent()) {
                     try {
                         @SuppressWarnings("unchecked")
@@ -397,7 +397,7 @@ public class PipelineRunner {
         // Inject loopback context if this block was the target of a loopback
         String loopbackKey = "_loopback_" + blockConfig.getId();
         Optional<BlockOutput> loopbackOutput = run.getOutputs().stream()
-            .filter(o -> o.getBlockId().equals(loopbackKey)).findFirst();
+            .filter(o -> o.getBlockId().equals(loopbackKey)).reduce((a, b) -> b);
         if (loopbackOutput.isPresent()) {
             try {
                 @SuppressWarnings("unchecked")
@@ -544,7 +544,7 @@ public class PipelineRunner {
                 fieldVal = inputs.get(field);
             } else {
                 Optional<BlockOutput> outputOpt = run.getOutputs().stream()
-                    .filter(o -> o.getBlockId().equals(blockId)).findFirst();
+                    .filter(o -> o.getBlockId().equals(blockId)).reduce((a, b) -> b);
                 if (outputOpt.isEmpty()) return true;
 
                 Map<String, Object> blockOutput = objectMapper.readValue(
@@ -644,7 +644,7 @@ public class PipelineRunner {
                 String blockId = parts[0];
                 String field = parts[1];
                 Optional<BlockOutput> outputOpt = run.getOutputs().stream()
-                    .filter(o -> o.getBlockId().equals(blockId)).findFirst();
+                    .filter(o -> o.getBlockId().equals(blockId)).reduce((a, b) -> b);
                 if (outputOpt.isEmpty()) continue;
                 Map<String, Object> blockOutput = objectMapper.readValue(
                     outputOpt.get().getOutputJson(), new TypeReference<Map<String, Object>>() {});
@@ -829,6 +829,7 @@ public class PipelineRunner {
                 com.workflow.llm.LlmCallContext.set(run.getId(), blockId, resolveRunProvider(run));
                 try {
                     output = runWithRetry(block, inputs, effectiveBlockConfig, run);
+                    OutputValidator.validate(output, effectiveBlockConfig.getValidateOutput(), blockId);
                 } finally {
                     com.workflow.llm.LlmCallContext.clear();
                     if (prodDeploy) prodDeployMutex.release(run.getId());
@@ -1190,22 +1191,29 @@ public class PipelineRunner {
         try {
             String outputJson = objectMapper.writeValueAsString(output);
             String inputJson = inputs != null ? objectMapper.writeValueAsString(inputs) : null;
-            Optional<BlockOutput> existing = run.getOutputs().stream()
-                .filter(o -> o.getBlockId().equals(blockId)).findFirst();
-            if (existing.isPresent()) {
-                BlockOutput bo = existing.get();
-                bo.setOutputJson(outputJson);
-                if (inputJson != null) bo.setInputJson(inputJson);
-                if (startedAt != null && bo.getStartedAt() == null) bo.setStartedAt(startedAt);
-                if (completedAt != null) bo.setCompletedAt(completedAt);
-                blockOutputRepository.save(bo);
-            } else {
-                BlockOutput blockOutput = BlockOutput.builder()
-                    .run(run).blockId(blockId).outputJson(outputJson).inputJson(inputJson)
-                    .startedAt(startedAt).completedAt(completedAt).build();
-                blockOutputRepository.save(blockOutput);
-                run.getOutputs().add(blockOutput);
+            // Internal bookkeeping keys (_loopback_*, etc.) are always overwritten — there is
+            // only ever one per blockId and they carry no user-visible history.
+            if (blockId.startsWith("_")) {
+                Optional<BlockOutput> existing = run.getOutputs().stream()
+                    .filter(o -> o.getBlockId().equals(blockId)).reduce((a, b) -> b);
+                if (existing.isPresent()) {
+                    BlockOutput bo = existing.get();
+                    bo.setOutputJson(outputJson);
+                    if (inputJson != null) bo.setInputJson(inputJson);
+                    if (startedAt != null && bo.getStartedAt() == null) bo.setStartedAt(startedAt);
+                    if (completedAt != null) bo.setCompletedAt(completedAt);
+                    blockOutputRepository.save(bo);
+                    return;
+                }
             }
+            // For regular blocks always create a new row so every loopback iteration is preserved.
+            int nextIteration = (int) run.getOutputs().stream()
+                .filter(o -> o.getBlockId().equals(blockId)).count();
+            BlockOutput blockOutput = BlockOutput.builder()
+                .run(run).blockId(blockId).outputJson(outputJson).inputJson(inputJson)
+                .startedAt(startedAt).completedAt(completedAt).iteration(nextIteration).build();
+            blockOutputRepository.save(blockOutput);
+            run.getOutputs().add(blockOutput);
         } catch (Exception e) {
             log.error("Failed to save output for block {}: {}", blockId, e.getMessage(), e);
         }
