@@ -202,7 +202,10 @@ public class OrchestratorBlock implements Block {
             .collect(Collectors.joining("\n\n"));
 
         AgentConfig agent = blockConfig.getAgent() != null ? blockConfig.getAgent() : new AgentConfig();
-        String agentSystemPrompt = agent.getSystemPrompt() != null ? agent.getSystemPrompt().strip() : "";
+        String rawSystemPrompt = agent.getSystemPrompt() != null ? agent.getSystemPrompt().strip() : "";
+        String agentSystemPrompt = stringInterpolator != null && !rawSystemPrompt.isEmpty()
+            ? stringInterpolator.interpolate(rawSystemPrompt, run, input, workingDir, agent.getPromptContextAllow())
+            : rawSystemPrompt;
 
         if ("review".equals(mode)) {
             return runReview(cfg, input, blockConfig, run, workingDir, combinedExtra, agentSystemPrompt);

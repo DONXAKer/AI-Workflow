@@ -32,6 +32,9 @@ workflow:
   # Root directory for the filesystem browser. Override via BROWSE_ROOT_PATH env var.
   # In Docker: set to the mounted projects volume (e.g. /projects).
   browse-root: ${BROWSE_ROOT_PATH:#{systemProperties['user.home']}}
+  prompt-context:
+    allow: ["git *", "find", "ls", "cat", "head", "tail", "tree"]
+    timeout-ms: 5000
 
 logging:
   level:

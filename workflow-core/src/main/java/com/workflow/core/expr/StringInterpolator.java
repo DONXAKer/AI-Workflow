@@ -4,6 +4,8 @@ import com.workflow.core.PipelineRun;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -28,6 +30,9 @@ public class StringInterpolator {
 
     private final PathResolver pathResolver;
 
+    @Autowired(required = false)
+    private PromptContextExecutor promptContextExecutor;
+
     @Autowired
     public StringInterpolator(PathResolver pathResolver) {
         this.pathResolver = pathResolver;
@@ -39,6 +44,24 @@ public class StringInterpolator {
      */
     public String interpolate(String template, PipelineRun run) {
         return interpolate(template, run, Map.of());
+    }
+
+    /**
+     * Expand {@code ${sh: command}} placeholders by running each command in
+     * {@code workingDir}, then resolve {@code ${block.field}} and {@code ${input.key}}
+     * in the resulting string.
+     *
+     * <p>{@code extraAllow} is merged with the global allowlist from
+     * {@link com.workflow.config.PromptContextConfig}. Pass {@code null} or empty to
+     * use only the global list.
+     */
+    public String interpolate(String template, PipelineRun run, Map<String, Object> input,
+                              Path workingDir, List<String> extraAllow) {
+        if (template == null) return null;
+        String expanded = promptContextExecutor != null
+            ? promptContextExecutor.expand(template, workingDir, extraAllow)
+            : template;
+        return interpolate(expanded, run, input);
     }
 
     /**

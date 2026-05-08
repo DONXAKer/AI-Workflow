@@ -5,15 +5,19 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.workflow.config.AgentConfig;
 import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
+import com.workflow.core.expr.StringInterpolator;
 import com.workflow.knowledge.KnowledgeBase;
 import com.workflow.llm.LlmClient;
+import com.workflow.project.Project;
 import com.workflow.project.ProjectClaudeMd;
+import com.workflow.project.ProjectContext;
 import com.workflow.project.ProjectRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -117,6 +121,9 @@ public class AnalysisBlock implements Block {
 
     @Autowired(required = false)
     private ProjectRepository projectRepository;
+
+    @Autowired(required = false)
+    private StringInterpolator stringInterpolator;
 
     @Override
     public String getName() {
@@ -229,6 +236,11 @@ public class AnalysisBlock implements Block {
         }
 
         String yamlPrompt = config.getAgent() != null ? config.getAgent().getSystemPrompt() : null;
+        if (yamlPrompt != null && stringInterpolator != null) {
+            Path wd = resolveWorkingDir();
+            List<String> extraAllow = config.getAgent() != null ? config.getAgent().getPromptContextAllow() : null;
+            yamlPrompt = stringInterpolator.interpolate(yamlPrompt, run, input, wd, extraAllow);
+        }
         String effectiveSystemPrompt = AgentConfig.buildSystemPrompt(
             SYSTEM_PROMPT_HEADER, yamlPrompt, SYSTEM_PROMPT_FOOTER);
 
@@ -308,5 +320,16 @@ public class AnalysisBlock implements Block {
             normalized.add(item);
         }
         result.put("acceptance_checklist", normalized);
+    }
+
+    private Path resolveWorkingDir() {
+        if (projectRepository == null) return null;
+        String slug = ProjectContext.get();
+        if (slug == null || slug.isBlank()) return null;
+        return projectRepository.findBySlug(slug)
+            .map(Project::getWorkingDir)
+            .filter(wd -> wd != null && !wd.isBlank())
+            .map(Path::of)
+            .orElse(null);
     }
 }

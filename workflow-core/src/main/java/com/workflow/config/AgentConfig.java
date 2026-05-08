@@ -5,6 +5,8 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.util.List;
+
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class AgentConfig {
 
@@ -32,6 +34,10 @@ public class AgentConfig {
 
     @JsonAlias({"temperatureOrDefault"})
     private Double temperature;
+
+    @JsonProperty("promptContextAllow")
+    @JsonAlias({"prompt_context_allow"})
+    private List<String> promptContextAllow;
 
     public AgentConfig() {}
 
@@ -86,6 +92,14 @@ public class AgentConfig {
 
     public void setTemperature(Double temperature) {
         this.temperature = temperature;
+    }
+
+    public List<String> getPromptContextAllow() {
+        return promptContextAllow;
+    }
+
+    public void setPromptContextAllow(List<String> promptContextAllow) {
+        this.promptContextAllow = promptContextAllow;
     }
 
     /** Returns maxTokens with a fallback default. Not serialised — derived from {@link #maxTokens}. */

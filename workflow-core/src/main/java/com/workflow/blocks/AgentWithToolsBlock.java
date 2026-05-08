@@ -219,8 +219,12 @@ public class AgentWithToolsBlock implements Block {
 
         AgentConfig agent = blockConfig.getAgent() != null ? blockConfig.getAgent() : new AgentConfig();
         String model = agent.getModel() != null ? agent.getModel() : "fast";
+        String rawAgentPrompt = agent.getSystemPrompt();
+        String expandedAgentPrompt = stringInterpolator != null && rawAgentPrompt != null
+            ? stringInterpolator.interpolate(rawAgentPrompt, run, input, workingDir, agent.getPromptContextAllow())
+            : rawAgentPrompt;
         String systemPrompt = AgentConfig.buildSystemPrompt(
-            FALLBACK_PROMPT_HEADER, agent.getSystemPrompt(), FALLBACK_PROMPT_FOOTER);
+            FALLBACK_PROMPT_HEADER, expandedAgentPrompt, FALLBACK_PROMPT_FOOTER);
 
         int maxIterations = asInt(cfg, "max_iterations", DEFAULT_MAX_ITERATIONS);
         double budgetUsdCap = asDouble(cfg, "budget_usd_cap", DEFAULT_BUDGET_USD_CAP);
