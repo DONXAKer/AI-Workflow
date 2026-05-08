@@ -3,6 +3,8 @@ import { CheckCircle, Edit3, XCircle, SkipForward, ArrowRight, AlertCircle, X, S
 import { WsMessage, ApprovalDecision, ApprovalDecisionType } from '../types'
 import clsx from 'clsx'
 import BlockOutputViewer from './BlockOutputViewer'
+import { StructuredOutput } from './BlockProgressTable'
+import { getBlockView } from '../blockViews/index'
 import { blockIdLabel } from '../utils/blockLabels'
 
 interface VerifyFailedItem {
@@ -264,7 +266,13 @@ export default function ApprovalDialog({ approval, remainingBlocks = [], onDecis
               </div>
             ) : (
               <div className="bg-slate-950 border border-slate-700/60 rounded-lg px-4 py-3 overflow-auto max-h-80">
-                <BlockOutputViewer output={approval.output ?? {}} />
+                {(() => {
+                  const out = (approval.output ?? {}) as Record<string, unknown>
+                  const spec = getBlockView(blockId)
+                  if (spec?.renderOutput) return spec.renderOutput(out)
+                  if (spec?.fields) return <StructuredOutput output={out} specFields={spec.fields} />
+                  return <BlockOutputViewer output={out} />
+                })()}
               </div>
             )}
           </div>

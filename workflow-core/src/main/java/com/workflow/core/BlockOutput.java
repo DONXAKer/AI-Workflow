@@ -32,6 +32,9 @@ public class BlockOutput {
     @Column(name = "completed_at")
     private Instant completedAt;
 
+    @Column(name = "iteration")
+    private Integer iteration;
+
     public BlockOutput() {}
 
     public BlockOutput(PipelineRun run, String blockId, String outputJson) {
@@ -50,6 +53,7 @@ public class BlockOutput {
         public Builder inputJson(String inputJson) { bo.inputJson = inputJson; return this; }
         public Builder startedAt(Instant startedAt) { bo.startedAt = startedAt; return this; }
         public Builder completedAt(Instant completedAt) { bo.completedAt = completedAt; return this; }
+        public Builder iteration(Integer iteration) { bo.iteration = iteration; return this; }
         public BlockOutput build() { return bo; }
     }
 
@@ -68,4 +72,6 @@ public class BlockOutput {
     public void setStartedAt(Instant startedAt) { this.startedAt = startedAt; }
     public Instant getCompletedAt() { return completedAt; }
     public void setCompletedAt(Instant completedAt) { this.completedAt = completedAt; }
+    public Integer getIteration() { return iteration; }
+    public void setIteration(Integer iteration) { this.iteration = iteration; }
 }

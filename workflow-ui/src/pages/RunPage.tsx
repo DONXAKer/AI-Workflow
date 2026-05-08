@@ -138,7 +138,8 @@ export default function RunPage() {
       let completedStatuses: BlockStatus[]
 
       if (data.events && data.events.length > 0) {
-        // Events are sorted by startedAt ASC from the backend
+        // Events are sorted by startedAt ASC from the backend.
+        // Multiple events per blockId are possible when a block ran more than once (loopbacks).
         const eventBlockIds = new Set(data.events.map((e: BlockEvent) => e.blockId))
         completedStatuses = data.events.map((event: BlockEvent) => {
           const output = outputMap.get(event.blockId)
@@ -147,6 +148,7 @@ export default function RunPage() {
           const status: BlockStatus['status'] = isSkipped ? 'skipped' : 'complete'
           const bs: BlockStatus = {
             blockId: event.blockId,
+            iteration: event.iteration ?? 0,
             status,
             output,
             input: inputMap.get(event.blockId),

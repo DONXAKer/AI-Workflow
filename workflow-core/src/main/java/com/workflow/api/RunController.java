@@ -487,6 +487,7 @@ public class RunController {
                     }
                     Map<String, Object> event = new LinkedHashMap<>();
                     event.put("blockId", b.getBlockId());
+                    event.put("iteration", b.getIteration());
                     event.put("startedAt", b.getStartedAt());
                     event.put("completedAt", b.getCompletedAt());
                     event.put("durationMs", durationMs);

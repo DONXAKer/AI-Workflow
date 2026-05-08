@@ -53,6 +53,7 @@ export interface StoredBlockOutput {
 
 export interface BlockEvent {
   blockId: string
+  iteration: number
   startedAt: string | null
   completedAt: string | null
   durationMs: number | null
@@ -605,6 +606,7 @@ export interface ApprovalDecision {
 
 export interface BlockStatus {
   blockId: string
+  iteration?: number
   blockType?: string
   status: 'pending' | 'running' | 'awaiting_approval' | 'complete' | 'skipped' | 'failed'
   output?: Record<string, unknown>
