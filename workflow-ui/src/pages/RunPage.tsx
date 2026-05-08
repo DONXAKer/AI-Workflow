@@ -84,6 +84,7 @@ export default function RunPage() {
   const [bashApprovalLoading, setBashApprovalLoading] = useState(false)
   const [bashApprovalError, setBashApprovalError] = useState<string | null>(null)
   const [restartLoading, setRestartLoading] = useState(false)
+  const [retryLoading, setRetryLoading] = useState(false)
   const { show: showToast } = useToast()
 
   // Keep a stable ref to the latest run so reconnect handler can read current state
@@ -497,6 +498,19 @@ export default function RunPage() {
     }
   }, [run, navigate, addLog])
 
+  const handleRetry = useCallback(async () => {
+    if (!run || !runId) return
+    setRetryLoading(true)
+    try {
+      const result = await api.retryRun(runId)
+      navigate(`/runs/${result.id ?? result.runId}`)
+    } catch (e) {
+      addLog(`Ошибка retry: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setRetryLoading(false)
+    }
+  }, [run, runId, navigate, addLog])
+
   const handleReturn = useCallback(async (targetBlock: string, comment: string) => {
     if (!runId || !run) return
     const pipelines = await api.listPipelines()
@@ -602,6 +616,20 @@ export default function RunPage() {
               >
                 <Undo2 className="w-3.5 h-3.5" />
                 Вернуть на доработку
+              </button>
+            )}
+
+            {/* Retry from failure button — only for FAILED runs */}
+            {run?.status === 'FAILED' && runId && (
+              <button
+                type="button"
+                onClick={handleRetry}
+                disabled={retryLoading}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-red-900/40 hover:bg-red-900/60 border border-red-800 text-red-300 transition-colors disabled:opacity-50"
+                title="Повторить с упавшего блока, пропустив уже выполненные"
+              >
+                <RotateCcw className={`w-3.5 h-3.5 ${retryLoading ? 'animate-spin' : ''}`} />
+                {retryLoading ? 'Запуск...' : 'Повторить с ошибки'}
               </button>
             )}
 

@@ -560,6 +560,75 @@ public class RunController {
     }
 
     @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
+    @PostMapping("/runs/{runId}/retry")
+    public ResponseEntity<Map<String, Object>> retryRun(@PathVariable String runId) {
+        try {
+            UUID id = UUID.fromString(runId);
+            PipelineRun failed = pipelineRunRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Run not found: " + runId));
+
+            if (failed.getStatus() != RunStatus.FAILED) {
+                return ResponseEntity.badRequest().body(
+                    Map.of("error", "Run is not in FAILED state, cannot retry"));
+            }
+
+            PipelineConfig config = resolveConfigForRun(failed);
+            if (config == null) {
+                return ResponseEntity.internalServerError().body(
+                    Map.of("error", "Cannot resolve pipeline config for run " + runId));
+            }
+
+            // Collect all completed block outputs (skip internal _ entries)
+            List<BlockOutput> storedOutputs = blockOutputRepository.findByRunId(id);
+            Map<String, Map<String, Object>> injectedOutputs = new LinkedHashMap<>();
+            for (BlockOutput bo : storedOutputs) {
+                if (bo.getBlockId().startsWith("_")) continue;
+                if (bo.getOutputJson() == null) continue;
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> out = objectMapper.readValue(
+                        bo.getOutputJson(), new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                    injectedOutputs.put(bo.getBlockId(), out);
+                } catch (Exception ignored) {}
+            }
+
+            // Retry from the failed block (or first block if currentBlock is unknown)
+            String retryFrom = failed.getCurrentBlock();
+            if (retryFrom == null || retryFrom.isBlank()) {
+                retryFrom = config.getPipeline().isEmpty() ? null : config.getPipeline().get(0).getId();
+            }
+            // Don't inject output of the failed block — let it re-run
+            injectedOutputs.remove(retryFrom);
+
+            // Restore named inputs
+            @SuppressWarnings("unchecked")
+            Map<String, Object> namedInputs = failed.getRunInputsJson() != null
+                ? objectMapper.readValue(failed.getRunInputsJson(), new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {})
+                : new HashMap<>();
+
+            UUID newRunId = UUID.randomUUID();
+            pipelineRunner.runFrom(config, failed.getRequirement(), retryFrom, injectedOutputs, newRunId, namedInputs);
+
+            auditService.record("RUN_RETRY", "run", newRunId.toString(),
+                Map.of("sourceRunId", runId, "retryFrom", retryFrom != null ? retryFrom : ""));
+
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("runId", newRunId.toString());
+            response.put("id", newRunId.toString());
+            response.put("status", "RUNNING");
+            response.put("retryFrom", retryFrom);
+            response.put("sourceRunId", runId);
+            return ResponseEntity.ok(response);
+
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Failed to retry run {}: {}", runId, e.getMessage(), e);
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
     @PostMapping("/runs/{runId}/approval")
     public ResponseEntity<Map<String, Object>> resolveApproval(@PathVariable String runId,
                                                                 @RequestBody Map<String, Object> request) {

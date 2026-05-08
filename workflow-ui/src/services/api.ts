@@ -127,6 +127,9 @@ export const api = {
   cancelRun: (runId: string): Promise<void> =>
     request<void>(`${BASE}/runs/${runId}/cancel`, { method: 'POST' }),
 
+  retryRun: (runId: string): Promise<{ runId: string; id: string; retryFrom: string }> =>
+    request(`${BASE}/runs/${runId}/retry`, { method: 'POST' }),
+
   returnRun: (runId: string, body: { targetBlock: string; comment: string; configPath: string }) =>
     request<{ success: boolean; runId: string; targetBlock: string; status: string }>(
       `${BASE}/runs/${runId}/return`,
