@@ -61,6 +61,9 @@ public class PipelineRunner {
     @Autowired(required = false)
     private RunWebSocketHandler wsHandler;
 
+    @Autowired(required = false)
+    private com.workflow.notifications.NotificationChannelRegistry notificationChannelRegistry;
+
     @Autowired
     private AgentProfileResolver agentProfileResolver;
 
@@ -871,6 +874,7 @@ public class PipelineRunner {
                 runRepository.save(run);
 
                 if (wsHandler != null) wsHandler.sendApprovalRequest(run.getId(), blockId, block.getDescription(), output);
+                broadcastApprovalNotification(run, blockId, block.getDescription());
 
                 try {
                     ApprovalResult approvalResult = approvalGate.request(
@@ -1159,6 +1163,45 @@ public class PipelineRunner {
             }
         }
         throw last != null ? last : new RuntimeException("Retry exhausted with no exception captured");
+    }
+
+    private void broadcastApprovalNotification(PipelineRun run, String blockId, String description) {
+        if (notificationChannelRegistry == null) return;
+        try {
+            String runLink = "http://localhost:5120/runs/" + run.getId();
+            String body = "Block **" + blockId + "** is waiting for approval.\n" +
+                (description != null ? description + "\n" : "") +
+                "Run: " + run.getId();
+            var msg = new com.workflow.notifications.NotificationMessage(
+                com.workflow.notifications.NotificationMessage.Severity.HIGH,
+                "Approval required — pipeline paused",
+                body,
+                runLink,
+                Map.of("runId", run.getId().toString(), "blockId", blockId)
+            );
+
+            // UI channel — no extra config needed
+            if (notificationChannelRegistry.supports("ui")) {
+                notificationChannelRegistry.get("ui").send(msg, Map.of());
+            }
+
+            // Slack — driven by SLACK_WEBHOOK_URL env var
+            String slackWebhook = System.getenv("SLACK_WEBHOOK_URL");
+            if (slackWebhook != null && !slackWebhook.isBlank() && notificationChannelRegistry.supports("slack")) {
+                notificationChannelRegistry.get("slack").send(msg, Map.of("webhookUrl", slackWebhook));
+            }
+
+            // Telegram — driven by TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID env vars
+            String tgToken = System.getenv("TELEGRAM_BOT_TOKEN");
+            String tgChatId = System.getenv("TELEGRAM_CHAT_ID");
+            if (tgToken != null && !tgToken.isBlank() && tgChatId != null && !tgChatId.isBlank()
+                    && notificationChannelRegistry.supports("telegram")) {
+                notificationChannelRegistry.get("telegram").send(msg,
+                    Map.of("botToken", tgToken, "chatId", tgChatId));
+            }
+        } catch (Exception e) {
+            log.warn("Failed to broadcast approval notification for run={} block={}: {}", run.getId(), blockId, e.getMessage());
+        }
     }
 
     private boolean isProdDeployBlock(BlockConfig blockConfig) {

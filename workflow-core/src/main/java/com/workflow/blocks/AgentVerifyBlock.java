@@ -385,6 +385,10 @@ public class AgentVerifyBlock implements Block {
     private List<Map<String, Object>> computeRegressionFlags(Map<String, Object> input,
                                                               List<Map<String, Object>> current) {
         Object prevRaw = input.get("_previous_verification_results");
+        // Loopback context nests injected values under _loopback — check there too
+        if (prevRaw == null && input.get("_loopback") instanceof Map<?, ?> lb) {
+            prevRaw = lb.get("_previous_verification_results");
+        }
         if (!(prevRaw instanceof List<?> prevList)) return List.of();
         Map<String, String> prevStatus = new HashMap<>();
         for (Object o : prevList) {

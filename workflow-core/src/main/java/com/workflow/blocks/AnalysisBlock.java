@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 @Component
 public class AnalysisBlock implements Block {
@@ -300,6 +301,18 @@ public class AnalysisBlock implements Block {
      * synthesized (a1, a2, ...), missing source/priority get conservative defaults
      * ("derived" / "important"). Items that aren't a Map at all are dropped.
      */
+    // Items whose text matches these patterns cannot be verified inside the pipeline
+    // (require UE Editor, full game-engine build, post-pipeline git ops, binary assets).
+    // Drop them with a warn log rather than letting them cause guaranteed-FAIL loopbacks.
+    private static final Pattern UNVERIFIABLE_PATTERN = Pattern.compile(
+        "(?i)unreal.?(editor|build|compil)|ue.?(build|compil|editor)|blueprint.?(compil|build)" +
+        "|task.*(moved?|archiv|done/)|(done/|tasks/done)" +
+        "|\\.uasset|\\.umap|\\.uproject" +
+        "|manual.?(test|gameplay|qa)|gameplay.?(test|valid)" +
+        "|пользователь.?уведомлён|project.?compil" +
+        "|diceroll.?rename.*bp|bp.?compil"
+    );
+
     @SuppressWarnings("unchecked")
     private void normalizeChecklist(Map<String, Object> result) {
         Object raw = result.get("acceptance_checklist");
@@ -317,6 +330,14 @@ public class AnalysisBlock implements Block {
             item.putIfAbsent("source", "derived");
             item.putIfAbsent("priority", "important");
             if (item.get("text") == null) item.put("text", "");
+
+            String text = String.valueOf(item.get("text"));
+            String itemId = String.valueOf(item.get("id"));
+            if (UNVERIFIABLE_PATTERN.matcher(text).find() || UNVERIFIABLE_PATTERN.matcher(itemId).find()) {
+                log.warn("Dropping unverifiable checklist item '{}': '{}' — requires external tool or post-pipeline step",
+                    itemId, text);
+                continue;
+            }
             normalized.add(item);
         }
         result.put("acceptance_checklist", normalized);
