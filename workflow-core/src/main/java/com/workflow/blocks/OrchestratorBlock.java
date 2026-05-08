@@ -860,6 +860,10 @@ PRINCIPLES (важно — иначе уйдёшь в патологически
   ранее работавший feature теперь сломан. НЕ субъективные "стало хуже" / "можно красивее".
   Если build_test context показывает успех — regressions=[].
 - Если предыдущая итерация уже учла твоё замечание разумно (даже не идеально) — passed=true.
+- UNVERIFIABLE ITEMS: если пункт требует инструментов/контекста, недоступных в pipeline
+  (UE Editor, полный UE build, post-pipeline шаги вроде архивации task файла, внешние GUI) —
+  ставь passed=true с evidence="Not verifiable in pipeline context: <причина>".
+  Никогда не ставь passed=false для того, что физически невозможно проверить.
 
 MANDATORY FINAL RESPONSE FORMAT — output ONLY this JSON block when done:
 ```json

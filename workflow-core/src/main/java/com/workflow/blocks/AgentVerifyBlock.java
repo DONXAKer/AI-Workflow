@@ -86,6 +86,11 @@ public class AgentVerifyBlock implements Block {
            your job is to report — not to fix.
         6. Use Bash sparingly: only when a structural check (file exists, contains pattern) is \
            insufficient — e.g. running tests to confirm they pass.
+        7. UNVERIFIABLE ITEMS: If an item requires tools or context unavailable in this pipeline \
+           (UE Editor, full Unreal/game-engine builds, post-pipeline file moves like task archiving, \
+           external GUI, manual gameplay testing), mark it PASS with evidence \
+           "Not verifiable in pipeline context: <reason>. Deferred to manual QA." \
+           Do NOT FAIL items you physically cannot check — that creates useless loopbacks.
 
         ## Output Contract
         When done, respond with ONE JSON object on the LAST line of your response. No preamble \

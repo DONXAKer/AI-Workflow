@@ -938,7 +938,9 @@ public class PipelineRunner {
 
                         @SuppressWarnings("unchecked")
                         List<String> issues = output.get("issues") instanceof List<?> l
-                            ? (List<String>) l : List.of();
+                            ? (List<String>) l
+                            : output.get("issues") instanceof String s && !s.isBlank()
+                                ? List.of(s) : List.of();
                         Map<String, Object> extraCtx = resolveInjectContext(
                             verifyConfig.getOnFail().getInjectContext(), run);
 
@@ -974,7 +976,9 @@ public class PipelineRunner {
 
                         @SuppressWarnings("unchecked")
                         List<String> issues = output.get("issues") instanceof List<?> l
-                            ? (List<String>) l : List.of();
+                            ? (List<String>) l
+                            : output.get("issues") instanceof String s && !s.isBlank()
+                                ? List.of(s) : List.of();
                         Map<String, Object> extraCtx = resolveInjectContext(vFail.getInjectContext(), run);
 
                         runRepository.save(run);
@@ -1032,7 +1036,9 @@ public class PipelineRunner {
 
                 @SuppressWarnings("unchecked")
                 List<String> issues = output.get("issues") instanceof List<?> l
-                    ? (List<String>) l : List.of();
+                    ? (List<String>) l
+                    : output.get("issues") instanceof String s && !s.isBlank()
+                        ? List.of(s) : List.of();
                 Map<String, Object> extraCtx = resolveInjectContext(onFailure.getInjectContext(), run);
                 // Pass CI stages as extra context if present
                 if (output.containsKey("stages")) extraCtx.put("ci_stages", output.get("stages"));
