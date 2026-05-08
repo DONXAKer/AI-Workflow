@@ -241,6 +241,7 @@ public class AgentWithToolsBlock implements Block {
             .maxIterations(maxIterations)
             .budgetUsdCap(budgetUsdCap)
             .workingDir(workingDir)
+            .completionSignal(agent.getCompletionSignal())
             .progressCallback(wsHandler != null ? detail ->
                 wsHandler.sendBlockProgress(runId, blockId, detail) : null)
             .build();

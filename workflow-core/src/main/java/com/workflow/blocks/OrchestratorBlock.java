@@ -671,6 +671,7 @@ public class OrchestratorBlock implements Block {
             .maxIterations(maxIter)
             .budgetUsdCap(budget)
             .workingDir(workingDir)
+            .completionSignal(agent.getCompletionSignal())
             .progressCallback(wsHandler != null ? detail ->
                 wsHandler.sendBlockProgress(runId, blockId, detail) : null)
             .build();

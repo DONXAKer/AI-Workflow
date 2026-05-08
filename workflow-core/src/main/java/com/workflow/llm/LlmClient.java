@@ -420,6 +420,17 @@ public class LlmClient {
                 finalText = content;
             }
 
+            // Completion signal — agent explicitly wrote the configured sentinel in its response.
+            if (request.completionSignal() != null && !request.completionSignal().isBlank()
+                    && finalText.contains(request.completionSignal())) {
+                String cleanText = finalText.replace(request.completionSignal(), "").strip();
+                log.info("Tool-use loop finished: COMPLETION_SIGNAL at iteration={} cost=${}",
+                    iterations, totalCostUsd);
+                return new ToolUseResponse(stripCodeFences(cleanText),
+                    StopReason.COMPLETION_SIGNAL, history,
+                    iterations, totalTokensIn, totalTokensOut, totalCostUsd);
+            }
+
             boolean hasToolCalls = "tool_calls".equals(finishReason)
                 && toolCalls.isArray() && toolCalls.size() > 0;
 

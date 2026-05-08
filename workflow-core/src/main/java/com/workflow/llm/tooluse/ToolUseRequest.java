@@ -29,7 +29,8 @@ public record ToolUseRequest(
     int maxIterations,
     double budgetUsdCap,
     Consumer<String> progressCallback,
-    java.nio.file.Path workingDir
+    java.nio.file.Path workingDir,
+    String completionSignal
 ) {
 
     public static Builder builder() {
@@ -47,6 +48,7 @@ public record ToolUseRequest(
         private double budgetUsdCap = 5.0;
         private Consumer<String> progressCallback;
         private java.nio.file.Path workingDir;
+        private String completionSignal;
 
         public Builder model(String v) { this.model = v; return this; }
         public Builder systemPrompt(String v) { this.systemPrompt = v; return this; }
@@ -58,12 +60,14 @@ public record ToolUseRequest(
         public Builder budgetUsdCap(double v) { this.budgetUsdCap = v; return this; }
         public Builder progressCallback(Consumer<String> v) { this.progressCallback = v; return this; }
         public Builder workingDir(java.nio.file.Path v) { this.workingDir = v; return this; }
+        public Builder completionSignal(String v) { this.completionSignal = v; return this; }
 
         public ToolUseRequest build() {
             if (model == null || model.isBlank()) throw new IllegalArgumentException("model required");
             if (userMessage == null) throw new IllegalArgumentException("userMessage required");
             return new ToolUseRequest(model, systemPrompt, userMessage, tools,
-                maxTokens, temperature, maxIterations, budgetUsdCap, progressCallback, workingDir);
+                maxTokens, temperature, maxIterations, budgetUsdCap, progressCallback, workingDir,
+                completionSignal);
         }
     }
 }

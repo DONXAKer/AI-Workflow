@@ -13,5 +13,7 @@ public enum StopReason {
     /** Cumulative cost exceeded {@code budgetUsdCap}. */
     BUDGET_EXCEEDED,
     /** Executor threw / loop aborted externally. */
-    ERROR
+    ERROR,
+    /** Agent wrote the configured {@code completionSignal} string in its text response. */
+    COMPLETION_SIGNAL
 }

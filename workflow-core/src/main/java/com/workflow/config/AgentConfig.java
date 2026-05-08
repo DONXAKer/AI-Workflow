@@ -39,6 +39,10 @@ public class AgentConfig {
     @JsonAlias({"prompt_context_allow"})
     private List<String> promptContextAllow;
 
+    @JsonProperty("completionSignal")
+    @JsonAlias({"completion_signal"})
+    private String completionSignal;
+
     public AgentConfig() {}
 
     public String getModel() {
@@ -100,6 +104,14 @@ public class AgentConfig {
 
     public void setPromptContextAllow(List<String> promptContextAllow) {
         this.promptContextAllow = promptContextAllow;
+    }
+
+    public String getCompletionSignal() {
+        return completionSignal;
+    }
+
+    public void setCompletionSignal(String completionSignal) {
+        this.completionSignal = completionSignal;
     }
 
     /** Returns maxTokens with a fallback default. Not serialised — derived from {@link #maxTokens}. */
