@@ -581,6 +581,7 @@ public class RunController {
             // Collect all completed block outputs (skip internal _ entries)
             List<BlockOutput> storedOutputs = blockOutputRepository.findByRunId(id);
             Map<String, Map<String, Object>> injectedOutputs = new LinkedHashMap<>();
+            Map<String, java.time.Instant[]> blockTimestamps = new LinkedHashMap<>();
             for (BlockOutput bo : storedOutputs) {
                 if (bo.getBlockId().startsWith("_")) continue;
                 if (bo.getOutputJson() == null) continue;
@@ -589,6 +590,8 @@ public class RunController {
                     Map<String, Object> out = objectMapper.readValue(
                         bo.getOutputJson(), new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
                     injectedOutputs.put(bo.getBlockId(), out);
+                    blockTimestamps.put(bo.getBlockId(),
+                        new java.time.Instant[]{bo.getStartedAt(), bo.getCompletedAt()});
                 } catch (Exception ignored) {}
             }
 
@@ -599,6 +602,7 @@ public class RunController {
             }
             // Don't inject output of the failed block — let it re-run
             injectedOutputs.remove(retryFrom);
+            blockTimestamps.remove(retryFrom);
 
             // Restore named inputs
             @SuppressWarnings("unchecked")
@@ -607,7 +611,7 @@ public class RunController {
                 : new HashMap<>();
 
             UUID newRunId = UUID.randomUUID();
-            pipelineRunner.runFrom(config, failed.getRequirement(), retryFrom, injectedOutputs, newRunId, namedInputs);
+            pipelineRunner.runFrom(config, failed.getRequirement(), retryFrom, injectedOutputs, newRunId, namedInputs, blockTimestamps);
 
             auditService.record("RUN_RETRY", "run", newRunId.toString(),
                 Map.of("sourceRunId", runId, "retryFrom", retryFrom != null ? retryFrom : ""));

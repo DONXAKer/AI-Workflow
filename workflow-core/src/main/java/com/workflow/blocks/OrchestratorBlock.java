@@ -300,15 +300,15 @@ public class OrchestratorBlock implements Block {
             userMsg.append('\n');
         }
 
-        if (!planOut.isEmpty()) {
+        if (!planOut.isEmpty() && !haveChecklist) {
+            // When acceptance_checklist is present it is the single source of truth.
+            // Injecting goal/DoD alongside it causes the reviewer to drift from the
+            // checklist and evaluate things outside it. Only expose plan context in
+            // legacy freeform mode (no structured checklist).
             Object goal = planOut.get("goal");
             Object dod  = planOut.get("definition_of_done");
             if (goal != null) userMsg.append("## Plan goal\n").append(goal).append("\n\n");
-            if (!haveChecklist && dod != null) {
-                // Without an acceptance_checklist, expose plan's DoD so the reviewer still has
-                // a target to verify. With a checklist, DoD is redundant and clutters the prompt.
-                userMsg.append("## Definition of Done\n").append(dod).append("\n\n");
-            }
+            if (dod != null) userMsg.append("## Definition of Done\n").append(dod).append("\n\n");
         }
 
         // Inject context blocks (e.g. build_test results, run_tests output)

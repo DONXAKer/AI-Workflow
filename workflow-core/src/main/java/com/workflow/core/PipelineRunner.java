@@ -158,6 +158,14 @@ public class PipelineRunner {
     public CompletableFuture<Void> runFrom(PipelineConfig config, String requirement,
                                             String fromBlockId, Map<String, Map<String, Object>> injectedOutputs,
                                             UUID runId, Map<String, Object> runInputs) {
+        return runFrom(config, requirement, fromBlockId, injectedOutputs, runId, runInputs, null);
+    }
+
+    /** Extended overload that preserves original block timestamps for retry runs. */
+    public CompletableFuture<Void> runFrom(PipelineConfig config, String requirement,
+                                            String fromBlockId, Map<String, Map<String, Object>> injectedOutputs,
+                                            UUID runId, Map<String, Object> runInputs,
+                                            Map<String, Instant[]> blockTimestamps) {
         PipelineRun pipelineRun = PipelineRun.builder()
             .id(runId)
             .pipelineName(config.getName())
@@ -193,9 +201,12 @@ public class PipelineRunner {
                 : new HashMap<>();
             try {
                 String outputJson = objectMapper.writeValueAsString(injected);
+                Instant[] ts = blockTimestamps != null ? blockTimestamps.get(blockConfig.getId()) : null;
+                Instant bStart = (ts != null && ts.length > 0 && ts[0] != null) ? ts[0] : preEntryNow;
+                Instant bEnd   = (ts != null && ts.length > 1 && ts[1] != null) ? ts[1] : preEntryNow;
                 BlockOutput blockOutput = BlockOutput.builder()
                     .run(pipelineRun).blockId(blockConfig.getId()).outputJson(outputJson)
-                    .startedAt(preEntryNow).completedAt(preEntryNow).build();
+                    .startedAt(bStart).completedAt(bEnd).build();
                 pipelineRun.getOutputs().add(blockOutput);
             } catch (Exception e) {
                 log.warn("Failed to serialize injected output for block {}: {}", blockConfig.getId(), e.getMessage());
