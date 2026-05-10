@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Play, AlertCircle, Loader2 } from 'lucide-react'
+import { Play, AlertCircle, Loader2, Trash2 } from 'lucide-react'
 import { api } from '../../services/api'
 import { EntryPoint } from '../../types'
 import { runHref } from '../../utils/runHref'
@@ -14,6 +14,8 @@ export default function LaunchTab() {
   const [pipelines, setPipelines] = useState<PipelineInfo[]>([])
   const [loadingPipelines, setLoadingPipelines] = useState(true)
   const [pipelinesError, setPipelinesError] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<PipelineInfo | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const [selectedPipeline, setSelectedPipeline] = useState('')
   const [entryPoints, setEntryPoints] = useState<EntryPoint[]>([])
@@ -107,6 +109,24 @@ export default function LaunchTab() {
     f => f.required && !fieldValues[f.name]?.trim()
   )
 
+  const handleDelete = async () => {
+    if (!confirmDelete) return
+    setDeleting(true)
+    try {
+      await api.deletePipeline(confirmDelete.path)
+      const next = pipelines.filter(p => p.path !== confirmDelete.path)
+      setPipelines(next)
+      if (selectedPipeline === confirmDelete.path) {
+        setSelectedPipeline(next[0]?.path ?? '')
+      }
+    } catch {
+      // ignore — backend returns error details but we just close
+    } finally {
+      setDeleting(false)
+      setConfirmDelete(null)
+    }
+  }
+
   if (loadingPipelines) {
     return (
       <div className="flex items-center gap-2 text-slate-400 p-8">
@@ -134,18 +154,48 @@ export default function LaunchTab() {
 
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 py-8 space-y-6">
-      {/* Pipeline selector (if multiple) */}
-      {pipelines.length > 1 && (
-        <div>
-          <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-2">
-            Пайплайн
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {pipelines.map(p => (
+      {/* Confirm delete dialog */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl">
+            <h3 className="text-white font-semibold mb-2">Удалить пайплайн?</h3>
+            <p className="text-slate-400 text-sm mb-1">
+              <span className="text-slate-200 font-medium">{confirmDelete.pipelineName || confirmDelete.name}</span>
+            </p>
+            <p className="text-slate-500 text-xs mb-5 break-all">{confirmDelete.path}</p>
+            <div className="flex gap-3">
               <button
-                key={p.path}
+                onClick={() => setConfirmDelete(null)}
+                disabled={deleting}
+                className="flex-1 px-4 py-2 text-sm rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors"
+              >
+                Отмена
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                className="flex-1 px-4 py-2 text-sm rounded-lg bg-red-700 hover:bg-red-600 text-white font-medium transition-colors flex items-center justify-center gap-2"
+              >
+                {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                Удалить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pipeline selector */}
+      <div>
+        <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-2">
+          Пайплайн
+        </label>
+        <div className="flex flex-wrap gap-2">
+          {pipelines.map(p => (
+            <div key={p.path} className="flex items-center gap-1 group">
+              <button
                 type="button"
                 onClick={() => setSelectedPipeline(p.path)}
+                title={p.path}
                 className={clsx(
                   'px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors',
                   selectedPipeline === p.path
@@ -155,10 +205,33 @@ export default function LaunchTab() {
               >
                 {p.pipelineName || p.name}
               </button>
-            ))}
-          </div>
+              {pipelines.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(p)}
+                  title="Удалить пайплайн"
+                  className="opacity-0 group-hover:opacity-100 p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-950/40 transition-all"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          ))}
         </div>
-      )}
+        {pipelines.length === 1 && (
+          <div className="mt-1.5 flex items-center justify-between">
+            <p className="text-xs text-slate-600 truncate" title={pipelines[0].path}>{pipelines[0].path}</p>
+            <button
+              type="button"
+              onClick={() => setConfirmDelete(pipelines[0])}
+              title="Удалить пайплайн"
+              className="ml-2 p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-950/40 transition-colors flex-shrink-0"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Entry point cards */}
       {loadingEntryPoints ? (

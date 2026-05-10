@@ -166,6 +166,9 @@ export const api = {
       { method: 'PUT', headers: JSON_HEADERS, body: JSON.stringify(config) }
     ),
 
+  deletePipeline: (configPath: string): Promise<{ deleted: boolean; path: string }> =>
+    request(`${BASE}/pipelines?configPath=${encodeURIComponent(configPath)}`, { method: 'DELETE' }),
+
   validatePipeline: (configPath: string): Promise<ValidationResult> =>
     request<ValidationResult>(
       `${BASE}/pipelines/validate?configPath=${encodeURIComponent(configPath)}`,

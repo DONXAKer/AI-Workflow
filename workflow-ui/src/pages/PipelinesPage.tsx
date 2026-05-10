@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom'
-import { Play, AlertCircle, Loader2, ChevronRight } from 'lucide-react'
+import { Play, AlertCircle, Loader2, ChevronRight, Trash2 } from 'lucide-react'
 import { api } from '../services/api'
 import { EntryPoint } from '../types'
 import clsx from 'clsx'
@@ -25,6 +25,8 @@ export default function PipelinesPage() {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [dryRun, setDryRun] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<PipelineInfo | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   // Load pipelines on mount
   useEffect(() => {
@@ -139,9 +141,50 @@ export default function PipelinesPage() {
     f => f.required && !fieldValues[f.name]?.trim()
   )
 
+  const handleDelete = async () => {
+    if (!confirmDelete) return
+    setDeleting(true)
+    try {
+      await api.deletePipeline(confirmDelete.path)
+      const next = pipelines.filter(p => p.path !== confirmDelete.path)
+      setPipelines(next)
+      if (selectedPipeline === confirmDelete.path) {
+        setSelectedPipeline(next[0]?.path ?? '')
+      }
+    } catch {
+      // ignore
+    } finally {
+      setDeleting(false)
+      setConfirmDelete(null)
+    }
+  }
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
       <PageHeader title="Пайплайны" description="Запуск нового пайплайна" />
+
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl">
+            <h3 className="text-white font-semibold mb-2">Удалить пайплайн?</h3>
+            <p className="text-slate-400 text-sm mb-1">
+              <span className="text-slate-200 font-medium">{confirmDelete.pipelineName || confirmDelete.name}</span>
+            </p>
+            <p className="text-slate-500 text-xs mb-5 break-all">{confirmDelete.path}</p>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirmDelete(null)} disabled={deleting}
+                className="flex-1 px-4 py-2 text-sm rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors">
+                Отмена
+              </button>
+              <button onClick={handleDelete} disabled={deleting}
+                className="flex-1 px-4 py-2 text-sm rounded-lg bg-red-700 hover:bg-red-600 text-white font-medium transition-colors flex items-center justify-center gap-2">
+                {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                Удалить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* New Run Form */}
@@ -319,12 +362,12 @@ export default function PipelinesPage() {
             ) : (
               <ul className="divide-y divide-slate-800">
                 {pipelines.map(p => (
-                  <li key={p.path}>
+                  <li key={p.path} className="group flex items-center">
                     <button
                       type="button"
                       onClick={() => setSelectedPipeline(p.path)}
                       className={clsx(
-                        'w-full flex items-center justify-between px-5 py-3.5 text-left transition-colors group',
+                        'flex-1 flex items-center justify-between px-5 py-3.5 text-left transition-colors',
                         selectedPipeline === p.path
                           ? 'bg-blue-950/40 text-blue-300'
                           : 'hover:bg-slate-800/50 text-slate-300 hover:text-white'
@@ -332,12 +375,21 @@ export default function PipelinesPage() {
                     >
                       <div>
                         <span className="text-sm font-medium">{p.pipelineName || p.name}</span>
-                        {p.description && <p className="text-xs text-slate-500 mt-0.5">{p.description}</p>}
+                        {p.description && <p className="text-xs text-slate-500 mt-0.5 line-clamp-1">{p.description}</p>}
+                        <p className="text-xs text-slate-700 mt-0.5 font-mono">{p.path}</p>
                       </div>
                       <ChevronRight className={clsx(
-                        'w-4 h-4 transition-colors flex-shrink-0',
+                        'w-4 h-4 transition-colors flex-shrink-0 ml-2',
                         selectedPipeline === p.path ? 'text-blue-400' : 'text-slate-600 group-hover:text-slate-400'
                       )} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDelete(p)}
+                      title="Удалить пайплайн"
+                      className="opacity-0 group-hover:opacity-100 mr-3 p-1.5 rounded text-slate-600 hover:text-red-400 hover:bg-red-950/40 transition-all flex-shrink-0"
+                    >
+                      <Trash2 className="w-4 h-4" />
                     </button>
                   </li>
                 ))}

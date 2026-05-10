@@ -29,6 +29,7 @@ import org.springframework.web.bind.annotation.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
@@ -886,6 +887,41 @@ public class RunController {
         } catch (IOException e) {
             log.error("Failed to save pipeline config {}: {}", configPath, e.getMessage(), e);
             return ResponseEntity.badRequest().body(Map.of("error", "Failed to save: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * DELETE /api/pipelines?configPath=...
+     *
+     * <p>Deletes a pipeline YAML file from the project's config directory.
+     * Restricted to files within the effective configDir to prevent path traversal.
+     */
+    @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
+    @DeleteMapping("/pipelines")
+    public ResponseEntity<?> deletePipeline(@RequestParam String configPath) {
+        try {
+            String effectiveConfigDir = configDir;
+            String projectSlug = ProjectContext.get();
+            if (projectSlug != null && projectRepository != null) {
+                var project = projectRepository.findBySlug(projectSlug);
+                if (project.isPresent() && project.get().getConfigDir() != null) {
+                    effectiveConfigDir = project.get().getConfigDir();
+                }
+            }
+            Path dir = Paths.get(effectiveConfigDir).toAbsolutePath().normalize();
+            Path target = Paths.get(configPath).toAbsolutePath().normalize();
+            if (!target.startsWith(dir)) {
+                return ResponseEntity.status(403).body(Map.of("error", "Access denied: path outside project configDir"));
+            }
+            String name = target.getFileName().toString().toLowerCase();
+            if (!name.endsWith(".yaml") && !name.endsWith(".yml")) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Only .yaml/.yml files can be deleted"));
+            }
+            Files.delete(target);
+            log.info("Deleted pipeline config: {}", configPath);
+            return ResponseEntity.ok(Map.of("deleted", true, "path", configPath));
+        } catch (IOException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Failed to delete: " + e.getMessage()));
         }
     }
 
