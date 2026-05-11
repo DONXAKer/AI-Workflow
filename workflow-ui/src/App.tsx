@@ -143,7 +143,7 @@ function AppLayout() {
 
             {/* Legacy redirects */}
             <Route path="/settings/*" element={<Navigate to="/system/users" replace />} />
-            <Route path="/runs/history" element={<RunHistoryPage />} />
+            <Route path="/runs/history" element={<RunHistoryPage allProjects />} />
             <Route path="/cost" element={<Navigate to="/system/cost" replace />} />
 
             <Route path="*" element={<Navigate to="/" replace />} />
