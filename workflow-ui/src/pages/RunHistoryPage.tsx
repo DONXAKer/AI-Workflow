@@ -9,7 +9,11 @@ import PageHeader from '../components/layout/PageHeader'
 
 const PAGE_SIZE = 25
 
-export default function RunHistoryPage() {
+interface RunHistoryPageProps {
+  allProjects?: boolean
+}
+
+export default function RunHistoryPage({ allProjects = false }: RunHistoryPageProps) {
   const { filters, setFilter, resetFilters } = useRunsFilter()
   const [runs, setRuns] = useState<PipelineRunSummary[]>([])
   const [totalElements, setTotalElements] = useState(0)
@@ -39,6 +43,7 @@ export default function RunHistoryPage() {
       to: to || undefined,
       page,
       size: PAGE_SIZE,
+      allProjects,
     }).then(data => {
       if (cancelled) return
       setRuns(data.content)
