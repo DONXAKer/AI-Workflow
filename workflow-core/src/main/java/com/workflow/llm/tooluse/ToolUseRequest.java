@@ -30,7 +30,8 @@ public record ToolUseRequest(
     double budgetUsdCap,
     Consumer<String> progressCallback,
     java.nio.file.Path workingDir,
-    String completionSignal
+    String completionSignal,
+    String responseFormat
 ) {
 
     public static Builder builder() {
@@ -49,6 +50,7 @@ public record ToolUseRequest(
         private Consumer<String> progressCallback;
         private java.nio.file.Path workingDir;
         private String completionSignal;
+        private String responseFormat;
 
         public Builder model(String v) { this.model = v; return this; }
         public Builder systemPrompt(String v) { this.systemPrompt = v; return this; }
@@ -61,13 +63,16 @@ public record ToolUseRequest(
         public Builder progressCallback(Consumer<String> v) { this.progressCallback = v; return this; }
         public Builder workingDir(java.nio.file.Path v) { this.workingDir = v; return this; }
         public Builder completionSignal(String v) { this.completionSignal = v; return this; }
+        /** Forces the provider to return JSON. Ollama supports {@code "json"} (free-form JSON);
+         * passed through as the {@code format} field on Ollama requests. Null/blank = unconstrained. */
+        public Builder responseFormat(String v) { this.responseFormat = v; return this; }
 
         public ToolUseRequest build() {
             if (model == null || model.isBlank()) throw new IllegalArgumentException("model required");
             if (userMessage == null) throw new IllegalArgumentException("userMessage required");
             return new ToolUseRequest(model, systemPrompt, userMessage, tools,
                 maxTokens, temperature, maxIterations, budgetUsdCap, progressCallback, workingDir,
-                completionSignal);
+                completionSignal, responseFormat);
         }
     }
 }

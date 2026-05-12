@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { Save, Loader2, AlertCircle, Trash2, Plug, FileCode, FolderOpen, Brain, Globe, Terminal } from 'lucide-react'
+import { Save, Loader2, AlertCircle, Trash2, Plug, FileCode, FolderOpen, Brain, Globe, Terminal, Cpu } from 'lucide-react'
 import { api } from '../../services/api'
 import { ProjectInfo, IntegrationConfig, LlmProvider } from '../../types'
 import PathInput from '../../components/PathInput'
@@ -210,16 +210,23 @@ export default function SettingsTab() {
           <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">
             LLM-провайдер по умолчанию
           </label>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             {([
-              ['OPENROUTER', 'OpenRouter', 'Платный API, оплачивается по токенам', Globe, 'emerald'],
-              ['CLAUDE_CODE_CLI', 'Claude Code CLI', 'Локальный claude -p, ваша Max-подписка', Terminal, 'orange'],
+              ['OPENROUTER',    'OpenRouter',      'Платный API, оплачивается по токенам',    Globe,    'emerald'],
+              ['AITUNNEL',      'AITunnel',        'Российский OpenAI-шлюз (aitunnel.ru)',    Globe,    'cyan'],
+              ['CLAUDE_CODE_CLI','Claude Code CLI', 'Локальный claude -p, ваша Max-подписка',  Terminal, 'orange'],
+              ['OLLAMA',        'Ollama',           'Локальный Ollama, бесплатно',             Cpu,      'purple'],
             ] as const).map(([value, title, hint, Icon, accent]) => {
               const active = defaultProvider === value
-              const accentBorder = accent === 'emerald'
-                ? (active ? 'border-emerald-600 bg-emerald-950/40' : 'border-slate-700 hover:border-emerald-800/60')
-                : (active ? 'border-orange-600 bg-orange-950/40' : 'border-slate-700 hover:border-orange-800/60')
-              const iconColor = accent === 'emerald' ? 'text-emerald-400' : 'text-orange-400'
+              const accentBorder =
+                accent === 'emerald' ? (active ? 'border-emerald-600 bg-emerald-950/40' : 'border-slate-700 hover:border-emerald-800/60') :
+                accent === 'cyan'    ? (active ? 'border-cyan-600 bg-cyan-950/40'       : 'border-slate-700 hover:border-cyan-800/60')    :
+                accent === 'orange'  ? (active ? 'border-orange-600 bg-orange-950/40'   : 'border-slate-700 hover:border-orange-800/60')  :
+                                       (active ? 'border-purple-600 bg-purple-950/40'   : 'border-slate-700 hover:border-purple-800/60')
+              const iconColor =
+                accent === 'emerald' ? 'text-emerald-400' :
+                accent === 'cyan'    ? 'text-cyan-400'    :
+                accent === 'orange'  ? 'text-orange-400'  : 'text-purple-400'
               return (
                 <button
                   key={value}

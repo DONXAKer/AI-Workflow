@@ -6,7 +6,9 @@ import jakarta.persistence.*;
 import java.time.Instant;
 
 @Entity
-@Table(name = "block_output")
+@Table(name = "block_output", indexes = {
+    @Index(name = "idx_block_output_cache", columnList = "cache_scope, cache_key")
+})
 public class BlockOutput {
 
     @Id
@@ -34,6 +36,22 @@ public class BlockOutput {
 
     @Column(name = "iteration")
     private Integer iteration;
+
+    /** SHA-256 hex of the block fingerprint. Null for blocks that are not cacheable or for legacy rows. */
+    @Column(name = "cache_key", length = 64)
+    private String cacheKey;
+
+    /** Composite scope: {@code <projectSlug>:<blockType>:<blockId>}. Indexed alongside cache_key. */
+    @Column(name = "cache_scope", length = 128)
+    private String cacheScope;
+
+    /** True if this output may be reused as a cache source by later runs. False for cache hits and operator-edited outputs. Null = legacy. */
+    @Column(name = "cacheable")
+    private Boolean cacheable;
+
+    /** When this row is a cache-hit copy, points to the original BlockOutput.id (informational; outputJson is still duplicated for query simplicity). */
+    @Column(name = "source_output_id")
+    private Long sourceOutputId;
 
     public BlockOutput() {}
 
@@ -74,4 +92,12 @@ public class BlockOutput {
     public void setCompletedAt(Instant completedAt) { this.completedAt = completedAt; }
     public Integer getIteration() { return iteration; }
     public void setIteration(Integer iteration) { this.iteration = iteration; }
+    public String getCacheKey() { return cacheKey; }
+    public void setCacheKey(String cacheKey) { this.cacheKey = cacheKey; }
+    public String getCacheScope() { return cacheScope; }
+    public void setCacheScope(String cacheScope) { this.cacheScope = cacheScope; }
+    public Boolean getCacheable() { return cacheable; }
+    public void setCacheable(Boolean cacheable) { this.cacheable = cacheable; }
+    public Long getSourceOutputId() { return sourceOutputId; }
+    public void setSourceOutputId(Long sourceOutputId) { this.sourceOutputId = sourceOutputId; }
 }

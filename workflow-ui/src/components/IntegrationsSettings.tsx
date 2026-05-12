@@ -10,15 +10,17 @@ import clsx from 'clsx'
 import IntegrationSlideOver from './integrations/IntegrationSlideOver'
 import PageHeader from './layout/PageHeader'
 
-const INTEGRATION_TYPES: IntegrationType[] = ['YOUTRACK', 'GITLAB', 'GITHUB', 'OPENROUTER', 'UNREAL', 'CLAUDE_CODE_CLI']
+const INTEGRATION_TYPES: IntegrationType[] = ['YOUTRACK', 'GITLAB', 'GITHUB', 'OPENROUTER', 'AITUNNEL', 'UNREAL', 'CLAUDE_CODE_CLI', 'OLLAMA']
 
 const TYPE_LABELS: Record<IntegrationType, string> = {
   YOUTRACK:        'YouTrack',
   GITLAB:          'GitLab',
   GITHUB:          'GitHub',
   OPENROUTER:      'OpenRouter',
+  AITUNNEL:        'AITunnel',
   UNREAL:          'Unreal Engine',
   CLAUDE_CODE_CLI: 'Claude Agent',
+  OLLAMA:          'Ollama',
 }
 
 const TYPE_BADGE: Record<IntegrationType, string> = {
@@ -26,8 +28,10 @@ const TYPE_BADGE: Record<IntegrationType, string> = {
   GITLAB:          'bg-orange-900/50 text-orange-300 border-orange-800/50',
   GITHUB:          'bg-slate-700/60 text-slate-300 border-slate-600/50',
   OPENROUTER:      'bg-blue-900/50 text-blue-300 border-blue-800/50',
+  AITUNNEL:        'bg-cyan-900/50 text-cyan-300 border-cyan-800/50',
   UNREAL:          'bg-emerald-900/50 text-emerald-300 border-emerald-800/50',
   CLAUDE_CODE_CLI: 'bg-amber-900/50 text-amber-300 border-amber-800/50',
+  OLLAMA:          'bg-purple-900/50 text-purple-300 border-purple-800/50',
 }
 
 const TYPE_META: Record<IntegrationType, { description: string; icon: LucideIcon; accent: string }> = {
@@ -35,8 +39,10 @@ const TYPE_META: Record<IntegrationType, { description: string; icon: LucideIcon
   GITLAB:          { description: 'Репозитории и CI/CD',            icon: GitBranch,   accent: 'text-orange-400' },
   GITHUB:          { description: 'Репозитории и PR',               icon: Github,      accent: 'text-slate-300'  },
   OPENROUTER:      { description: 'Маршрутизация AI-моделей',       icon: Cpu,         accent: 'text-blue-400'   },
+  AITUNNEL:        { description: 'AITunnel.ru — российский AI-шлюз', icon: Cpu,       accent: 'text-cyan-400'   },
   UNREAL:          { description: 'Unreal MCP + Blueprint роутинг', icon: Layers,      accent: 'text-emerald-400' },
   CLAUDE_CODE_CLI: { description: 'Claude CLI — подписка Max/API',  icon: Terminal,    accent: 'text-amber-400'  },
+  OLLAMA:          { description: 'Локальный Ollama — без API-ключа', icon: Cpu,       accent: 'text-purple-400' },
 }
 
 const DEFAULT_UNREAL_EXTRA = JSON.stringify({
@@ -68,6 +74,21 @@ const EMPTY_FORM: Omit<IntegrationConfig, 'id'> = {
   isDefault: false,
 }
 
+function getOllamaDisableReasoning(extraConfigJson: string | undefined | null): boolean {
+  if (!extraConfigJson || !extraConfigJson.trim()) return false
+  try { return Boolean(JSON.parse(extraConfigJson).disableReasoning) } catch { return false }
+}
+
+function setOllamaDisableReasoning(extraConfigJson: string | undefined | null, value: boolean): string {
+  let obj: Record<string, unknown> = {}
+  if (extraConfigJson && extraConfigJson.trim()) {
+    try { obj = JSON.parse(extraConfigJson) } catch { obj = {} }
+  }
+  if (value) obj.disableReasoning = true
+  else delete obj.disableReasoning
+  return Object.keys(obj).length === 0 ? '' : JSON.stringify(obj)
+}
+
 function typeHasField(type: IntegrationType, field: 'baseUrl' | 'project' | 'owner' | 'repo'): boolean {
   switch (field) {
     case 'baseUrl': return type !== 'UNREAL'
@@ -78,7 +99,7 @@ function typeHasField(type: IntegrationType, field: 'baseUrl' | 'project' | 'own
 }
 
 function typeRequiresToken(type: IntegrationType): boolean {
-  return type !== 'UNREAL' && type !== 'CLAUDE_CODE_CLI'
+  return type !== 'UNREAL' && type !== 'CLAUDE_CODE_CLI' && type !== 'OLLAMA'
 }
 
 function TokenCell({ token }: { token: string }) {
@@ -226,7 +247,7 @@ function IntegrationForm({ initial, lockedType = false, onSave, onCancel }: Form
             </select>
           )}
         </div>
-        {form.type !== 'CLAUDE_CODE_CLI' && (
+        {form.type !== 'CLAUDE_CODE_CLI' && form.type !== 'OLLAMA' && (
           <div>
             <label className={labelCls}>
               Токен {typeRequiresToken(form.type) && <span className="text-red-400">*</span>}
@@ -241,8 +262,31 @@ function IntegrationForm({ initial, lockedType = false, onSave, onCancel }: Form
             Убедитесь, что <code>claude</code> доступен в PATH или укажите путь в поле Base URL ниже.
           </div>
         )}
+        {form.type === 'OLLAMA' && (
+          <>
+            <div className="sm:col-span-2 rounded-lg bg-purple-950/30 border border-purple-800/40 px-3 py-2.5 text-xs text-purple-300/80">
+              Локальный Ollama-сервер. Токен не нужен.{' '}
+              В Docker используйте <code>http://host.docker.internal:11434</code>.
+              Модели по умолчанию: <code>smart=qwen3:8b</code>, <code>flash=qwen3:8b</code>.
+            </div>
+            <label className="sm:col-span-2 flex items-start gap-3 rounded-lg bg-slate-800/40 border border-slate-700/60 px-3 py-2.5 cursor-pointer hover:bg-slate-800/60 transition-colors">
+              <input
+                type="checkbox"
+                checked={getOllamaDisableReasoning(form.extraConfigJson)}
+                onChange={e => set('extraConfigJson', setOllamaDisableReasoning(form.extraConfigJson, e.target.checked))}
+                className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+              />
+              <div className="text-xs">
+                <div className="text-slate-200 font-medium">Отключить reasoning (qwen3 <code>/no_think</code>)</div>
+                <div className="text-slate-400 mt-0.5">
+                  Для моделей qwen3-семейства добавляет <code>/no_think</code> в user-промпт — модель пропускает chain-of-thought и сразу возвращает ответ. Без этого reasoning часто съедает весь max_tokens.
+                </div>
+              </div>
+            </label>
+          </>
+        )}
         {typeHasField(form.type, 'baseUrl') && (
-          <div className={clsx((form.type === 'OPENROUTER' || form.type === 'CLAUDE_CODE_CLI') ? 'sm:col-span-2' : '')}>
+          <div className={clsx((form.type === 'OPENROUTER' || form.type === 'AITUNNEL' || form.type === 'CLAUDE_CODE_CLI' || form.type === 'OLLAMA') ? 'sm:col-span-2' : '')}>
             <label className={labelCls}>
               {form.type === 'CLAUDE_CODE_CLI' ? 'Путь к claude' : 'Base URL'}
               {' '}<span className="text-slate-500">(необязательно)</span>
@@ -255,7 +299,9 @@ function IntegrationForm({ initial, lockedType = false, onSave, onCancel }: Form
                 form.type === 'YOUTRACK' ? 'https://youtrack.example.com' :
                 form.type === 'GITLAB' ? 'https://gitlab.com' :
                 form.type === 'OPENROUTER' ? 'https://openrouter.ai/api/v1' :
+                form.type === 'AITUNNEL' ? 'https://api.aitunnel.ru/v1' :
                 form.type === 'CLAUDE_CODE_CLI' ? '/usr/local/bin/claude (по умолчанию: claude из PATH)' :
+                form.type === 'OLLAMA' ? 'http://host.docker.internal:11434' :
                 'https://api.github.com'
               }
               className={inputCls}

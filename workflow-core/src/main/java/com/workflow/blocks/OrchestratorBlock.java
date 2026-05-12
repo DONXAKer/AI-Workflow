@@ -111,6 +111,14 @@ public class OrchestratorBlock implements Block {
 
     @Override public String getName() { return "orchestrator"; }
 
+    @Override
+    public boolean isCacheable(BlockConfig config) {
+        if (config == null || config.getConfig() == null) return false;
+        // Only mode=plan is cacheable. Review verdict depends on the impl attempt's diff —
+        // never reuse a review across runs.
+        return "plan".equals(String.valueOf(config.getConfig().get("mode")));
+    }
+
     @Override public String getDescription() {
         return "Агент-супервайзер: в режиме plan формирует структурированный план реализации; в режиме review сверяет результат с definition_of_done из плана.";
     }
@@ -369,6 +377,13 @@ public class OrchestratorBlock implements Block {
                 .append("```\n").append(tree).append("```\n\n");
         }
 
+        // Pre-inject git diff snapshot so reviewer sees changes upfront instead of burning
+        // 10+ iterations on Read/Bash to discover what was modified.
+        String diffSnapshot = collectGitDiffSnapshot(workingDir.toString());
+        if (!diffSnapshot.isEmpty()) {
+            userMsg.append(diffSnapshot);
+        }
+
         Map<String, Object> result = runLoop(blockConfig, run, workingDir, userMsg.toString(),
             buildReviewSystemPrompt(extra, agentSystemPrompt, haveChecklist), REVIEW_TOOLS, REVIEW_BASH,
             asInt(cfg, "max_iterations", DEFAULT_MAX_ITER_REVIEW),
@@ -500,6 +515,84 @@ public class OrchestratorBlock implements Block {
      * invocation of {@code targetBlockId} (codegen). "Most recent invocation" =
      * audit records since the latest {@code iteration=1} marker.
      */
+    /**
+     * Collects a compact "what changed on this branch" snapshot — git log + diff --stat + full diff
+     * — and returns it as a Markdown block ready for injection into the reviewer's user message.
+     * Without this, glm-4.6/sonnet typically burn 10-20 tool-use iterations discovering the diff
+     * via Read/Bash before they even start evaluating. Returns empty string on any failure
+     * (non-git dir, git not on PATH, no upstream base found).
+     */
+    private String collectGitDiffSnapshot(String workingDir) {
+        if (workingDir == null || workingDir.isBlank()) return "";
+        if (execGit(workingDir, 5, "rev-parse", "--is-inside-work-tree").trim().isEmpty()) return "";
+
+        String base = findGitBase(workingDir);
+        StringBuilder sb = new StringBuilder();
+
+        if (base != null) {
+            String commitLog = execGit(workingDir, 5, "log", base + "..HEAD", "--oneline").trim();
+            String diffStat  = execGit(workingDir, 10, "diff", base + "..HEAD", "--stat").trim();
+            String diff      = execGit(workingDir, 15, "diff", base + "..HEAD");
+            if (!commitLog.isEmpty() || !diffStat.isEmpty() || !diff.isBlank()) {
+                sb.append("## Branch changes vs `").append(base).append("`\n\n");
+                if (!commitLog.isEmpty()) sb.append("### Commits\n```\n").append(commitLog).append("\n```\n\n");
+                if (!diffStat.isEmpty())  sb.append("### Files changed\n```\n").append(diffStat).append("\n```\n\n");
+                if (!diff.isBlank()) {
+                    if (diff.length() > 30_000) {
+                        diff = diff.substring(0, 30_000) + "\n... [truncated " + (diff.length() - 30_000) + " bytes — use `git diff` tool for full content]";
+                    }
+                    sb.append("### Full diff\n```diff\n").append(diff).append("\n```\n\n");
+                }
+            }
+        }
+
+        // Uncommitted working-tree changes (codegen may not have committed yet).
+        String unstaged = execGit(workingDir, 10, "diff").trim();
+        if (!unstaged.isEmpty()) {
+            if (unstaged.length() > 15_000) unstaged = unstaged.substring(0, 15_000) + "\n... [truncated]";
+            sb.append("### Uncommitted (working tree)\n```diff\n").append(unstaged).append("\n```\n\n");
+        }
+        String staged = execGit(workingDir, 10, "diff", "--cached").trim();
+        if (!staged.isEmpty()) {
+            if (staged.length() > 15_000) staged = staged.substring(0, 15_000) + "\n... [truncated]";
+            sb.append("### Staged (index)\n```diff\n").append(staged).append("\n```\n\n");
+        }
+
+        return sb.toString();
+    }
+
+    /** Returns the first existing ref among origin/main, main, origin/master, master, or null. */
+    private String findGitBase(String workingDir) {
+        for (String candidate : new String[]{"origin/main", "main", "origin/master", "master"}) {
+            if (!execGit(workingDir, 5, "rev-parse", "--verify", "--quiet", candidate).trim().isEmpty()) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /** Runs git with given args in workingDir, returns stdout (errors suppressed). */
+    private String execGit(String workingDir, int timeoutSec, String... args) {
+        try {
+            List<String> cmd = new ArrayList<>(args.length + 1);
+            cmd.add("git");
+            for (String a : args) cmd.add(a);
+            ProcessBuilder pb = new ProcessBuilder(cmd);
+            pb.directory(new java.io.File(workingDir));
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            boolean finished = p.waitFor(timeoutSec, java.util.concurrent.TimeUnit.SECONDS);
+            if (!finished) {
+                p.destroyForcibly();
+                return "";
+            }
+            return new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            log.debug("git {} failed: {}", String.join(" ", args), e.getMessage());
+            return "";
+        }
+    }
+
     private List<String> findFilesChangedByLastInvocation(UUID runId, String targetBlockId) {
         if (auditRepository == null || runId == null || targetBlockId == null) return List.of();
         List<com.workflow.tools.ToolCallAudit> records;
@@ -656,7 +749,10 @@ public class OrchestratorBlock implements Block {
         ToolContext toolCtx = new ToolContext(workingDir, bashAllowlist);
 
         AgentConfig agent = blockConfig.getAgent() != null ? blockConfig.getAgent() : new AgentConfig();
-        String model = agent.getModel() != null ? agent.getModel() : resolveProjectModel(defaultModel);
+        // Project.orchestratorModel wins over tier-resolved agent.model (AgentProfileResolver
+        // copies tier="smart" into model="smart", which would otherwise short-circuit the
+        // project-level override). Pass agent.model as fallback if project has none.
+        String model = resolveProjectModel(agent.getModel() != null ? agent.getModel() : defaultModel);
 
         final String blockId = blockConfig.getId();
         final UUID   runId   = run.getId();
@@ -672,6 +768,10 @@ public class OrchestratorBlock implements Block {
             .budgetUsdCap(budget)
             .workingDir(workingDir)
             .completionSignal(agent.getCompletionSignal())
+            // NOTE: response_format=json_object causes Ollama models to skip tool_calls
+            // entirely (they output a single JSON immediately without exploring the codebase).
+            // For the orchestrator we need tool exploration, so leave format unconstrained
+            // and rely on the system prompt's JSON-shape instructions.
             .progressCallback(wsHandler != null ? detail ->
                 wsHandler.sendBlockProgress(runId, blockId, detail) : null)
             .build();
@@ -680,6 +780,10 @@ public class OrchestratorBlock implements Block {
             toolRegistry, toolCtx, objectMapper, auditRepository);
 
         log.info("orchestrator[{}] mode={} model={} workingDir={}", blockId, mode, model, workingDir);
+        // Previously we force-routed OLLAMA orchestrator calls through OpenRouter because
+        // qwen2.5:7b lapsed into prose. With Ollama's `format: "json"` grammar constraint set
+        // above and pre-loaded git diff in the review user-message, we keep the project's
+        // chosen provider intact — no more split-brain billing.
         ToolUseResponse response = llmClient.completeWithTools(request, executor);
 
         Map<String, Object> parsed = extractJson(response.finalText());
@@ -883,6 +987,30 @@ MANDATORY FINAL RESPONSE FORMAT — output ONLY this JSON block when done:
   "action": "retry"
 }
 ```
+
+CONCRETE EXAMPLE — for an acceptance checklist with ids `dod-1`, `dod-2`, `dod-3`,
+your FINAL message must look exactly like this (one `checklist_status` entry per checklist id):
+```json
+{
+  "checklist_status": [
+    {"id": "dod-1", "passed": true,
+     "evidence": "Source/WarCard/UI/UnitTooltipWidget.cpp:24-58 implements OnHoverChanged + ShowTooltip; git diff shows new file added in this branch",
+     "fix": ""},
+    {"id": "dod-2", "passed": false,
+     "evidence": "No tests added: Tests/UI/ has no new files in git diff and grep for UnitTooltipWidget in Tests/ returned 0 results",
+     "fix": "Add at least one test in Tests/UI/UnitTooltipWidgetTest.cpp covering both visible and hidden tooltip states"},
+    {"id": "dod-3", "passed": true,
+     "evidence": "StrategyPlayerController.cpp:142 hooks HandleHoverUnit -> UnitTooltipWidget; verified via grep and Read of the changed file",
+     "fix": ""}
+  ],
+  "regressions": [],
+  "carry_forward": "UnitTooltipWidget added with hover wiring in StrategyPlayerController; tests still missing.",
+  "action": "retry"
+}
+```
+Notice in the example: every checklist id appears exactly once in `checklist_status`,
+evidence cites concrete `file:line` or `grep` results, fix is a one-sentence actionable
+instruction for the implementor. Copy this shape exactly, substituting your real ids/evidence.
 Rules:
 - One entry in checklist_status per item from the acceptance checklist table — same exact ids.
 - "regressions": [] if build/tests are green. Use only for objective functional breakage.

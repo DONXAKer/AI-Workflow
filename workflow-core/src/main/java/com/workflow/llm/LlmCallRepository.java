@@ -16,6 +16,8 @@ public interface LlmCallRepository extends JpaRepository<LlmCall, Long> {
 
     java.util.List<LlmCall> findByRunIdOrderByTimestampAsc(UUID runId);
 
+    java.util.List<LlmCall> findByRunIdAndBlockId(UUID runId, String blockId);
+
     @Query("""
         SELECT new com.workflow.llm.LlmCostSummary(
           c.model,

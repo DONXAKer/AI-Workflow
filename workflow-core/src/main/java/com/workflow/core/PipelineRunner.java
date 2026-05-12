@@ -46,6 +46,12 @@ public class PipelineRunner {
     @Autowired
     private BlockOutputRepository blockOutputRepository;
 
+    @Autowired(required = false)
+    private BlockCacheService blockCacheService;
+
+    @Autowired(required = false)
+    private com.workflow.llm.LlmCallRepository llmCallRepository;
+
     @Autowired
     private ApprovalGate approvalGate;
 
@@ -855,8 +861,40 @@ public class PipelineRunner {
             }
 
             boolean prodDeploy = isProdDeployBlock(blockConfig);
-            Map<String, Object> output;
-            try {
+            Map<String, Object> output = null;
+            // Block-output cache: reuse prior runs' outputs for deterministic blocks (analysis,
+            // task_md_input, orchestrator mode=plan) when the fingerprint matches. Loopback
+            // iterations always re-execute — the whole point of loopback is fresh evaluation.
+            boolean inLoopback = run.getLoopIterations().getOrDefault(blockId, 0) > 0;
+            boolean blockCacheable = blockCacheService != null && block.isCacheable(effectiveBlockConfig);
+            String cacheKey = null;
+            String cacheScope = null;
+            Long cacheHitSourceId = null;
+            boolean cacheHit = false;
+            boolean operatorEdited = false;
+            if (blockCacheable && !inLoopback) {
+                cacheKey = blockCacheService.computeKey(effectiveBlockConfig, inputs, run);
+                cacheScope = blockCacheService.scopeOf(run, effectiveBlockConfig);
+                java.util.Optional<BlockOutput> hit = blockCacheService.lookup(cacheScope, cacheKey);
+                if (hit.isPresent()) {
+                    try {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> cachedOut = objectMapper.readValue(
+                            hit.get().getOutputJson(), Map.class);
+                        cachedOut.put("_cached", true);
+                        cachedOut.put("_cacheSourceRunId", hit.get().getRun().getId().toString());
+                        output = cachedOut;
+                        cacheHit = true;
+                        cacheHitSourceId = hit.get().getId();
+                        log.info("Block {} cache HIT (source run {}, key {})",
+                            blockId, hit.get().getRun().getId(), cacheKey != null ? cacheKey.substring(0, 12) : "?");
+                    } catch (Exception e) {
+                        log.warn("Block {} cache hit but failed to deserialize output: {}",
+                            blockId, e.getMessage());
+                    }
+                }
+            }
+            if (!cacheHit) try {
                 log.info("Running block: {} ({})", blockId, blockConfig.getBlock());
                 if (prodDeploy) prodDeployMutex.acquire(run.getId());
                 com.workflow.llm.LlmCallContext.set(run.getId(), blockId, resolveRunProvider(run));
@@ -911,7 +949,10 @@ public class PipelineRunner {
                         blockId, blockConfig.getBlock(), block.getDescription(), inputs, output, remainingBlockIds);
 
                     if (approvalResult.isSkipFuture()) run.getAutoApprove().add("*");
-                    if (approvalResult.getOutput() != null) output = approvalResult.getOutput();
+                    if (approvalResult.getOutput() != null) {
+                        output = approvalResult.getOutput();
+                        operatorEdited = true;
+                    }
                     clearApprovalTimeout(run);
 
                 } catch (JumpToBlockException jumpEx) {
@@ -940,7 +981,18 @@ public class PipelineRunner {
                 }
             }
 
-            saveBlockOutput(run, blockId, output, inputs, blockStart, Instant.now());
+            // Inject per-block LLM summary (models used, tokens, cost) so operators see at a
+            // glance how expensive each block was. Pulls live data from LlmCall audit rows.
+            if (!cacheHit) {
+                injectLlmSummary(output, run.getId(), blockId);
+            }
+
+            // Persist cache metadata only on the final save: operator-edited outputs and cache
+            // hits must not become future cache sources. cacheKey/scope are stored for both
+            // cache-source rows and cache-hit copies so admin UI can trace provenance.
+            boolean finalCacheable = blockCacheable && !cacheHit && !operatorEdited;
+            saveBlockOutput(run, blockId, output, inputs, blockStart, Instant.now(),
+                cacheKey, cacheScope, finalCacheable, cacheHitSourceId);
             if (!run.getCompletedBlocks().contains(blockId)) run.getCompletedBlocks().add(blockId);
             if (output.containsKey("requirement") && output.get("requirement") instanceof String newReq) {
                 currentRequirement = newReq;
@@ -1251,6 +1303,66 @@ public class PipelineRunner {
         }
     }
 
+    /**
+     * Aggregates LlmCall audit rows for the given (run, block) and stamps a {@code _llm} summary
+     * object into the block output. UI reads this to show per-block LLM usage and cost.
+     */
+    private void injectLlmSummary(Map<String, Object> output, UUID runId, String blockId) {
+        if (llmCallRepository == null) {
+            log.warn("injectLlmSummary({}): llmCallRepository is null — skipping", blockId);
+            return;
+        }
+        if (output == null) {
+            log.warn("injectLlmSummary({}): output is null — skipping", blockId);
+            return;
+        }
+        try {
+            java.util.List<com.workflow.llm.LlmCall> calls = llmCallRepository.findByRunIdAndBlockId(runId, blockId);
+            log.info("injectLlmSummary({}): found {} LlmCall rows", blockId, calls == null ? 0 : calls.size());
+            if (calls == null || calls.isEmpty()) return;
+            java.util.Map<String, long[]> perModel = new java.util.LinkedHashMap<>(); // model -> [calls, tokensIn, tokensOut]
+            long totalCalls = 0;
+            long totalIn = 0;
+            long totalOut = 0;
+            double totalCost = 0.0;
+            for (com.workflow.llm.LlmCall c : calls) {
+                String key = c.getModel() != null ? c.getModel() : "unknown";
+                long[] agg = perModel.computeIfAbsent(key, k -> new long[]{0, 0, 0});
+                agg[0]++;
+                agg[1] += c.getTokensIn();
+                agg[2] += c.getTokensOut();
+                totalIn  += c.getTokensIn();
+                totalOut += c.getTokensOut();
+                totalCost += c.getCostUsd();
+                totalCalls++;
+            }
+            java.util.List<java.util.Map<String, Object>> modelsList = new java.util.ArrayList<>();
+            for (Map.Entry<String, long[]> e : perModel.entrySet()) {
+                java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+                m.put("model", e.getKey());
+                m.put("calls", e.getValue()[0]);
+                m.put("tokens_in", e.getValue()[1]);
+                m.put("tokens_out", e.getValue()[2]);
+                modelsList.add(m);
+            }
+            java.util.Map<String, Object> summary = new java.util.LinkedHashMap<>();
+            summary.put("calls", totalCalls);
+            summary.put("tokens_in", totalIn);
+            summary.put("tokens_out", totalOut);
+            summary.put("cost_usd", Math.round(totalCost * 100000.0) / 100000.0);
+            summary.put("models", modelsList);
+            try {
+                output.put("_llm", summary);
+                log.info("injectLlmSummary({}): wrote _llm summary (calls={}, tok={}↑/{}↓, ${})",
+                    blockId, totalCalls, totalIn, totalOut, totalCost);
+            } catch (UnsupportedOperationException uoe) {
+                log.warn("injectLlmSummary({}): output map is immutable — can't inject _llm", blockId);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to inject LLM summary for block {}: {}", blockId, e.getMessage());
+        }
+    }
+
     private void saveBlockOutput(PipelineRun run, String blockId, Map<String, Object> output) {
         saveBlockOutput(run, blockId, output, null, null, null);
     }
@@ -1267,6 +1379,12 @@ public class PipelineRunner {
 
     private void saveBlockOutput(PipelineRun run, String blockId, Map<String, Object> output,
                                   Map<String, Object> inputs, Instant startedAt, Instant completedAt) {
+        saveBlockOutput(run, blockId, output, inputs, startedAt, completedAt, null, null, null, null);
+    }
+
+    private void saveBlockOutput(PipelineRun run, String blockId, Map<String, Object> output,
+                                  Map<String, Object> inputs, Instant startedAt, Instant completedAt,
+                                  String cacheKey, String cacheScope, Boolean cacheable, Long sourceOutputId) {
         try {
             String outputJson = objectMapper.writeValueAsString(output);
             String inputJson = inputs != null ? objectMapper.writeValueAsString(inputs) : null;
@@ -1291,6 +1409,10 @@ public class PipelineRunner {
             BlockOutput blockOutput = BlockOutput.builder()
                 .run(run).blockId(blockId).outputJson(outputJson).inputJson(inputJson)
                 .startedAt(startedAt).completedAt(completedAt).iteration(nextIteration).build();
+            blockOutput.setCacheKey(cacheKey);
+            blockOutput.setCacheScope(cacheScope);
+            blockOutput.setCacheable(cacheable);
+            blockOutput.setSourceOutputId(sourceOutputId);
             blockOutputRepository.save(blockOutput);
             run.getOutputs().add(blockOutput);
         } catch (Exception e) {

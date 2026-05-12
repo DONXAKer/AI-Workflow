@@ -13,5 +13,10 @@ package com.workflow.llm;
  */
 public enum LlmProvider {
     OPENROUTER,
-    CLAUDE_CODE_CLI
+    CLAUDE_CODE_CLI,
+    OLLAMA,
+    /** AITunnel.ru — OpenAI-compatible Russian aggregator. Same call shape as OpenRouter,
+     * different baseUrl + token. Useful when OpenRouter is geoblocked or operator prefers
+     * a domestic provider. */
+    AITUNNEL
 }

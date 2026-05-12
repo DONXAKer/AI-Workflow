@@ -137,6 +137,9 @@ public class AnalysisBlock implements Block {
     }
 
     @Override
+    public boolean isCacheable(com.workflow.config.BlockConfig config) { return true; }
+
+    @Override
     public BlockMetadata getMetadata() {
         // analysis-блок не имеет настраиваемых config-полей: всё управляется через
         // agent (model/temperature/systemPrompt) и через текст требования.

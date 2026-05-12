@@ -6,5 +6,7 @@ public enum IntegrationType {
     GITHUB,
     OPENROUTER,
     UNREAL,
-    CLAUDE_CODE_CLI
+    CLAUDE_CODE_CLI,
+    OLLAMA,
+    AITUNNEL
 }

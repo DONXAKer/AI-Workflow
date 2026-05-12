@@ -74,11 +74,16 @@ public class LlmClient {
     private com.workflow.project.ProjectRepository projectRepositoryForCwd;
 
     public String complete(String model, String system, String user, int maxTokens, double temperature) {
+        if (shouldUseOllama(model)) {
+            return completeViaOllama(resolveOllamaModel(model), system, user, maxTokens, temperature);
+        }
         if (shouldUseCli(model)) {
             return completeViaCli(resolveCliModel(model), system, user);
         }
         String resolvedModel = resolveModel(model);
-        WebClient client = buildOpenRouterClient();
+        boolean useAITunnel = shouldUseAITunnel();
+        WebClient client = useAITunnel ? buildAITunnelClient() : buildOpenRouterClient();
+        LlmProvider activeProvider = useAITunnel ? LlmProvider.AITUNNEL : LlmProvider.OPENROUTER;
 
         ObjectNode requestBody = objectMapper.createObjectNode();
         requestBody.put("model", resolvedModel);
@@ -123,7 +128,7 @@ public class LlmClient {
                 throw new RuntimeException("Empty content in OpenRouter response");
             }
 
-            recordUsage(responseJson, resolvedModel, (int) (System.currentTimeMillis() - startedAt));
+            recordUsage(responseJson, resolvedModel, (int) (System.currentTimeMillis() - startedAt), activeProvider);
 
             return stripCodeFences(content.strip());
 
@@ -188,7 +193,47 @@ public class LlmClient {
             .build();
     }
 
+    /** AITunnel.ru OpenAI-compat gateway. Same request shape as OpenRouter, different baseUrl/token. */
+    private WebClient buildAITunnelClient() {
+        String baseUrl = "https://api.aitunnel.ru/v1";
+        String apiKey = null;
+        Optional<IntegrationConfig> cfg = integrationConfigRepository
+            .findByTypeAndIsDefaultTrue(IntegrationType.AITUNNEL);
+        if (cfg.isPresent()) {
+            IntegrationConfig c = cfg.get();
+            if (c.getBaseUrl() != null && !c.getBaseUrl().isBlank()) baseUrl = c.getBaseUrl();
+            apiKey = c.getToken();
+        }
+        if (apiKey == null || apiKey.isBlank()) apiKey = System.getenv("AITUNNEL_API_KEY");
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new RuntimeException("No AITunnel API key configured. Configure via /api/integrations (type=AITUNNEL) or set AITUNNEL_API_KEY env var.");
+        }
+        return webClientBuilder
+            .baseUrl(baseUrl)
+            .defaultHeader("Authorization", "Bearer " + apiKey)
+            .defaultHeader("Content-Type", "application/json")
+            .clientConnector(new org.springframework.http.client.reactive.ReactorClientHttpConnector(
+                reactor.netty.http.client.HttpClient.create()
+                    .responseTimeout(java.time.Duration.ofSeconds(120))))
+            .build();
+    }
+
+    /** True when this thread's LlmCallContext pins provider=AITUNNEL (set from Project.defaultProvider). */
+    private boolean shouldUseAITunnel() {
+        try {
+            return LlmCallContext.current()
+                .map(LlmCallContext.Context::preferredProvider)
+                .orElse(null) == LlmProvider.AITUNNEL;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private void recordUsage(JsonNode responseJson, String model, int durationMs) {
+        recordUsage(responseJson, model, durationMs, LlmProvider.OPENROUTER);
+    }
+
+    private void recordUsage(JsonNode responseJson, String model, int durationMs, LlmProvider provider) {
         if (llmCallRepository == null) return;
         try {
             JsonNode usage = responseJson.path("usage");
@@ -207,7 +252,7 @@ public class LlmClient {
             call.setCostUsd(cost);
             call.setDurationMs(durationMs);
             call.setProjectSlug(com.workflow.project.ProjectContext.get());
-            call.setProvider(LlmProvider.OPENROUTER);
+            call.setProvider(provider);
             if (!finishReason.isBlank()) call.setFinishReason(finishReason);
             LlmCallContext.current().ifPresent(ctx -> {
                 call.setRunId(ctx.runId());
@@ -241,12 +286,17 @@ public class LlmClient {
         if (request == null) throw new IllegalArgumentException("request required");
         if (executor == null) throw new IllegalArgumentException("executor required");
 
+        if (shouldUseOllama(request.model())) {
+            return completeWithToolsViaOllama(request, executor);
+        }
         if (shouldUseCli(request.model())) {
             return completeWithToolsViaCli(request);
         }
 
         String resolvedModel = resolveModel(request.model());
-        WebClient client = buildOpenRouterClient();
+        boolean useAITunnel = shouldUseAITunnel();
+        WebClient client = useAITunnel ? buildAITunnelClient() : buildOpenRouterClient();
+        LlmProvider activeProvider = useAITunnel ? LlmProvider.AITUNNEL : LlmProvider.OPENROUTER;
 
         ArrayNode messages = objectMapper.createArrayNode();
         if (request.systemPrompt() != null && !request.systemPrompt().isBlank()) {
@@ -270,19 +320,40 @@ public class LlmClient {
         log.info("Starting tool-use loop: model={} tools={} maxIterations={} budget=${}",
             resolvedModel, toolsJson.size(), request.maxIterations(), request.budgetUsdCap());
 
-        // Whether we've already injected the "wrap up" reminder. The reminder is a
-        // synthetic user message appended once near the end of the loop so the model
-        // knows to emit a final answer instead of continuing to explore. Role:user
-        // (NOT system) — the system message must stay stable for future prompt-cache
-        // compatibility; mutating it would invalidate the cached prefix.
+        // Whether we've already injected the "wrap up" reminders. Two reminders nudge
+        // the model toward producing a final answer:
+        //   - early (~max/3): "you've explored enough, start converging"
+        //   - hard (max-3):   "3 iterations left, emit final JSON now"
+        // Both are role:user (NOT system) — the system message must stay stable for
+        // future prompt-cache compatibility; mutating it would invalidate the cache prefix.
+        boolean earlyReminderSent  = false;
         boolean softCapReminderSent = false;
+        int earlyReminderAt = Math.max(5, request.maxIterations() / 3);
 
         while (iterations < request.maxIterations()) {
             iterations++;
 
             pruneContextIfNeeded(messages);
 
-            // Inject the soft-cap reminder at iter == max - 3 so the model has 3 more
+            // Early reminder at ~1/3 of the iteration budget. Encourages the agent to start
+            // converging on a final answer instead of indefinitely exploring the codebase.
+            if (!earlyReminderSent
+                && request.maxIterations() >= 9
+                && iterations == earlyReminderAt) {
+                ObjectNode reminder = messages.addObject();
+                reminder.put("role", "user");
+                reminder.put("content", String.format(
+                    "PROGRESS CHECK: you've used %d of %d iterations and $%.2f of $%.2f budget. "
+                        + "If you already have enough evidence to answer, emit the final JSON now. "
+                        + "Otherwise focus remaining iterations on filling concrete gaps — avoid re-exploring "
+                        + "files you've already read.",
+                    iterations, request.maxIterations(), totalCostUsd, request.budgetUsdCap()));
+                earlyReminderSent = true;
+                log.info("orchestrator early reminder injected at iter {}/{}",
+                    iterations, request.maxIterations());
+            }
+
+            // Hard soft-cap reminder at iter == max - 3 so the model has 3 more
             // round-trips to wrap up. Skip if max is too small for this to help.
             if (!softCapReminderSent
                 && request.maxIterations() >= 6
@@ -408,7 +479,7 @@ public class LlmClient {
             }
             recordToolUseUsage(resolvedModel, iterations,
                 (int) (System.currentTimeMillis() - startedAt),
-                tokensIn, tokensOut, cost, toolNames, finishReason);
+                tokensIn, tokensOut, cost, toolNames, finishReason, activeProvider);
 
             // For reasoning models the content field includes <think>...</think> blocks;
             // strip them so callers (e.g. OrchestratorBlock) see only the actual output.
@@ -525,12 +596,324 @@ public class LlmClient {
      * and {@code anthropic/*} or bare {@code claude-*} names go through CLI when
      * the integration is configured.
      */
+    private boolean shouldUseOllama(String model) {
+        try {
+            LlmProvider preferred = LlmCallContext.current()
+                .map(LlmCallContext.Context::preferredProvider)
+                .orElse(null);
+            if (preferred == LlmProvider.OLLAMA) return true;
+            return false;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private String resolveOllamaModel(String model) {
+        return presetResolver != null ? presetResolver.resolveOllama(model) : (model != null ? model : "qwen3:8b");
+    }
+
+    private WebClient buildOllamaClient() {
+        String baseUrl = "http://localhost:11434";
+        Optional<IntegrationConfig> ollamaConfig =
+            integrationConfigRepository.findByTypeAndIsDefaultTrue(IntegrationType.OLLAMA);
+        if (ollamaConfig.isPresent()) {
+            IntegrationConfig cfg = ollamaConfig.get();
+            if (cfg.getBaseUrl() != null && !cfg.getBaseUrl().isBlank()) {
+                baseUrl = cfg.getBaseUrl().replaceAll("/+$", "");
+            }
+        }
+        if (!baseUrl.endsWith("/v1")) baseUrl = baseUrl + "/v1";
+        return webClientBuilder
+            .baseUrl(baseUrl)
+            .defaultHeader("Content-Type", "application/json")
+            .clientConnector(new org.springframework.http.client.reactive.ReactorClientHttpConnector(
+                reactor.netty.http.client.HttpClient.create()
+                    .responseTimeout(java.time.Duration.ofSeconds(900))))
+            .build();
+    }
+
+    // Reasonable upper bound for local Ollama models: longer outputs are rarely useful and push past
+    // both context window and timeout on consumer GPUs.
+    private static final int OLLAMA_MAX_TOKENS_CAP = 3000;
+    private static final int OLLAMA_NUM_CTX = 8192;
+
+    private static boolean isQwen3Model(String model) {
+        return model != null && model.toLowerCase().startsWith("qwen3");
+    }
+
+    private boolean isOllamaReasoningDisabled() {
+        Optional<IntegrationConfig> cfg =
+            integrationConfigRepository.findByTypeAndIsDefaultTrue(IntegrationType.OLLAMA);
+        if (cfg.isEmpty()) return false;
+        String extra = cfg.get().getExtraConfigJson();
+        if (extra == null || extra.isBlank()) return false;
+        try {
+            return objectMapper.readTree(extra).path("disableReasoning").asBoolean(false);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private String injectNoThink(String userMessage, String model) {
+        if (!isQwen3Model(model) || !isOllamaReasoningDisabled()) return userMessage;
+        return "/no_think\n\n" + (userMessage == null ? "" : userMessage);
+    }
+
+    private String completeViaOllama(String model, String system, String user, int maxTokens, double temperature) {
+        WebClient client = buildOllamaClient();
+
+        int cappedMaxTokens = Math.min(maxTokens, OLLAMA_MAX_TOKENS_CAP);
+
+        ObjectNode requestBody = objectMapper.createObjectNode();
+        requestBody.put("model", model);
+        requestBody.put("max_tokens", cappedMaxTokens);
+        requestBody.put("temperature", temperature);
+        if (isQwen3Model(model)) requestBody.put("think", false);
+        requestBody.putObject("options").put("num_ctx", OLLAMA_NUM_CTX);
+
+        ArrayNode messages = requestBody.putArray("messages");
+        if (system != null && !system.isBlank()) {
+            messages.addObject().put("role", "system").put("content", system);
+        }
+        messages.addObject().put("role", "user").put("content", injectNoThink(user, model));
+
+        log.info("Calling Ollama model: {} (maxTokens={}, temperature={})", model, maxTokens, temperature);
+        long startedAt = System.currentTimeMillis();
+        try {
+            String responseBody = client.post()
+                .uri("/chat/completions")
+                .bodyValue(requestBody)
+                .retrieve()
+                .bodyToMono(String.class)
+                .block();
+
+            if (responseBody == null) throw new RuntimeException("Empty response from Ollama");
+
+            JsonNode responseJson = objectMapper.readTree(responseBody);
+            String content = responseJson.path("choices").path(0).path("message").path("content").asText();
+            if (content == null || content.isBlank()) {
+                log.warn("Ollama returned empty content. Full response: {}", responseBody);
+                throw new RuntimeException("Empty content in Ollama response");
+            }
+            recordOllamaUsage(model, (int)(System.currentTimeMillis() - startedAt));
+            return stripCodeFences(stripThinkingBlocks(content.strip()));
+        } catch (Exception e) {
+            log.error("Ollama call failed: {}", e.getMessage(), e);
+            throw new RuntimeException("Ollama call failed: " + e.getMessage(), e);
+        }
+    }
+
+    private ToolUseResponse completeWithToolsViaOllama(ToolUseRequest request, ToolExecutor executor) {
+        String resolvedModel = resolveOllamaModel(request.model());
+        WebClient client = buildOllamaClient();
+
+        ArrayNode messages = objectMapper.createArrayNode();
+        if (request.systemPrompt() != null && !request.systemPrompt().isBlank()) {
+            messages.addObject().put("role", "system").put("content", request.systemPrompt());
+        }
+        messages.addObject().put("role", "user").put("content", injectNoThink(request.userMessage(), resolvedModel));
+
+        ArrayNode toolsJson = buildToolsJson(request.tools());
+
+        List<ToolUseResponse.ToolCallTrace> history = new ArrayList<>();
+        int iterations = 0;
+        int totalTokensIn = 0;
+        int totalTokensOut = 0;
+        String finalText = "";
+        boolean earlyReminderSent = false;
+        boolean softCapReminderSent = false;
+        int earlyReminderAt = Math.max(5, request.maxIterations() / 3);
+
+        log.info("Starting Ollama tool-use loop: model={} tools={} maxIterations={}",
+            resolvedModel, toolsJson.size(), request.maxIterations());
+
+        while (iterations < request.maxIterations()) {
+            iterations++;
+            pruneContextIfNeeded(messages);
+
+            // Early reminder at ~1/3 of the iteration budget — see OpenRouter loop comments.
+            if (!earlyReminderSent && request.maxIterations() >= 9
+                    && iterations == earlyReminderAt) {
+                messages.addObject().put("role", "user").put("content", String.format(
+                    "PROGRESS CHECK: you've used %d of %d iterations. If you already have enough "
+                        + "evidence, emit the final JSON now. Otherwise focus on concrete gaps — "
+                        + "avoid re-reading files you've already seen.",
+                    iterations, request.maxIterations()));
+                earlyReminderSent = true;
+            }
+
+            if (!softCapReminderSent && request.maxIterations() >= 6
+                    && iterations == request.maxIterations() - 3) {
+                messages.addObject().put("role", "user").put("content", String.format(
+                    "REMINDER: 3 iterations remaining. If you have enough information, emit the final answer now."));
+                softCapReminderSent = true;
+            }
+
+            if (request.progressCallback() != null) {
+                request.progressCallback().accept(
+                    "[" + resolvedModel + "] Итерация " + iterations + "/" + request.maxIterations());
+            }
+
+            ObjectNode body = objectMapper.createObjectNode();
+            body.put("model", resolvedModel);
+            body.put("max_tokens", Math.min(request.maxTokens(), OLLAMA_MAX_TOKENS_CAP));
+            body.put("temperature", request.temperature());
+            body.set("messages", messages);
+            if (isQwen3Model(resolvedModel)) body.put("think", false);
+            body.putObject("options").put("num_ctx", OLLAMA_NUM_CTX);
+            if (toolsJson.size() > 0) {
+                body.set("tools", toolsJson);
+                body.put("tool_choice", "auto");
+            }
+            // Caller-requested response format. We hit Ollama's OpenAI-compat endpoint
+            // (/v1/chat/completions), which ignores the native `format` field but honours
+            // OpenAI's `response_format: {type: "json_object"}`. Used by OrchestratorBlock
+            // to make small local models reliably emit final-state JSON.
+            if ("json".equalsIgnoreCase(request.responseFormat())) {
+                body.putObject("response_format").put("type", "json_object");
+            }
+
+            long startedAt = System.currentTimeMillis();
+            JsonNode responseJson;
+            try {
+                String responseBody = client.post()
+                    .uri("/chat/completions")
+                    .bodyValue(body)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block();
+                if (responseBody == null) throw new RuntimeException("Empty response from Ollama");
+                responseJson = objectMapper.readTree(responseBody);
+            } catch (Exception e) {
+                log.error("Ollama tool-use iteration {} failed: {}", iterations, e.getMessage());
+                throw new RuntimeException("Ollama completeWithTools iteration " + iterations + " failed: " + e.getMessage(), e);
+            }
+
+            JsonNode choice = responseJson.path("choices").path(0);
+            JsonNode messageNode = choice.path("message");
+            String finishReason = choice.path("finish_reason").asText("");
+            String content = messageNode.path("content").isNull() ? "" : messageNode.path("content").asText("");
+            JsonNode toolCalls = messageNode.path("tool_calls");
+
+            JsonNode usage = responseJson.path("usage");
+            totalTokensIn += usage.path("prompt_tokens").asInt(0);
+            totalTokensOut += usage.path("completion_tokens").asInt(0);
+
+            List<String> toolNames = new ArrayList<>();
+            if (toolCalls.isArray()) {
+                for (JsonNode tc : toolCalls) toolNames.add(tc.path("function").path("name").asText(""));
+            }
+            recordOllamaToolUseUsage(resolvedModel, iterations,
+                (int)(System.currentTimeMillis() - startedAt),
+                usage.path("prompt_tokens").asInt(0), usage.path("completion_tokens").asInt(0),
+                toolNames, finishReason);
+
+            String strippedContent = stripThinkingBlocks(content);
+            if (!strippedContent.isBlank()) finalText = strippedContent;
+            else if (!content.isBlank()) finalText = content;
+
+            if (request.completionSignal() != null && !request.completionSignal().isBlank()
+                    && finalText.contains(request.completionSignal())) {
+                return new ToolUseResponse(stripCodeFences(finalText.replace(request.completionSignal(), "").strip()),
+                    StopReason.COMPLETION_SIGNAL, history, iterations, totalTokensIn, totalTokensOut, 0.0);
+            }
+
+            boolean hasToolCalls = "tool_calls".equals(finishReason) && toolCalls.isArray() && toolCalls.size() > 0;
+            if (!hasToolCalls) {
+                StopReason stop = "length".equals(finishReason) ? StopReason.MAX_TOKENS : StopReason.END_TURN;
+                log.info("Ollama tool-use loop finished: iterations={} stop={} tokens={}/{}",
+                    iterations, stop, totalTokensIn, totalTokensOut);
+                return new ToolUseResponse(stripCodeFences(finalText.strip()), stop, history,
+                    iterations, totalTokensIn, totalTokensOut, 0.0);
+            }
+
+            ObjectNode historyMsg = messageNode.deepCopy();
+            historyMsg.remove("reasoning_content");
+            historyMsg.remove("reasoning");
+            if (historyMsg.has("content") && !historyMsg.path("content").isNull()) {
+                String stripped = stripThinkingBlocks(historyMsg.path("content").asText(""));
+                if (!stripped.isBlank()) historyMsg.put("content", stripped);
+            }
+            messages.add(historyMsg);
+
+            for (JsonNode tc : toolCalls) {
+                String callId = tc.path("id").asText("");
+                String toolName = tc.path("function").path("name").asText("");
+                String argsStr = tc.path("function").path("arguments").asText("{}");
+                JsonNode input;
+                try {
+                    input = objectMapper.readTree(argsStr == null || argsStr.isBlank() ? "{}" : argsStr);
+                } catch (Exception e) {
+                    input = objectMapper.createObjectNode();
+                }
+                ToolCall call = new ToolCall(callId, toolName, input);
+                ToolResult result;
+                ToolCallIteration.set(iterations);
+                try {
+                    result = executor.execute(call);
+                    if (result == null) result = ToolResult.error(callId, "executor returned null");
+                } catch (Exception e) {
+                    log.warn("Tool executor threw for {}: {}", toolName, e.getMessage());
+                    result = ToolResult.error(callId, "executor_failure: " + e.getMessage());
+                } finally {
+                    ToolCallIteration.clear();
+                }
+                history.add(new ToolUseResponse.ToolCallTrace(iterations, call, result));
+                messages.addObject()
+                    .put("role", "tool")
+                    .put("tool_call_id", callId)
+                    .put("content", result.content() == null ? "" : result.content());
+            }
+        }
+
+        log.warn("Ollama tool-use loop hit maxIterations={}", request.maxIterations());
+        return new ToolUseResponse(stripCodeFences(finalText.strip()),
+            StopReason.MAX_ITERATIONS, history, iterations, totalTokensIn, totalTokensOut, 0.0);
+    }
+
+    private void recordOllamaUsage(String model, int durationMs) {
+        if (llmCallRepository == null) return;
+        try {
+            LlmCall call = new LlmCall();
+            call.setTimestamp(java.time.Instant.now());
+            call.setModel(model);
+            call.setTokensIn(0); call.setTokensOut(0); call.setCostUsd(0.0);
+            call.setDurationMs(durationMs);
+            call.setProjectSlug(com.workflow.project.ProjectContext.get());
+            call.setProvider(LlmProvider.OLLAMA);
+            LlmCallContext.current().ifPresent(ctx -> { call.setRunId(ctx.runId()); call.setBlockId(ctx.blockId()); });
+            llmCallRepository.save(call);
+        } catch (Exception e) { log.debug("LlmCall persist failed (Ollama): {}", e.getMessage()); }
+    }
+
+    private void recordOllamaToolUseUsage(String model, int iteration, int durationMs,
+                                           int tokensIn, int tokensOut, List<String> toolNames, String finishReason) {
+        if (llmCallRepository == null) return;
+        try {
+            LlmCall call = new LlmCall();
+            call.setTimestamp(java.time.Instant.now());
+            call.setModel(model);
+            call.setTokensIn(tokensIn); call.setTokensOut(tokensOut); call.setCostUsd(0.0);
+            call.setDurationMs(durationMs);
+            call.setIteration(iteration);
+            call.setProjectSlug(com.workflow.project.ProjectContext.get());
+            call.setProvider(LlmProvider.OLLAMA);
+            if (finishReason != null && !finishReason.isBlank()) call.setFinishReason(finishReason);
+            LlmCallContext.current().ifPresent(ctx -> { call.setRunId(ctx.runId()); call.setBlockId(ctx.blockId()); });
+            if (toolNames != null && !toolNames.isEmpty())
+                call.setToolCallsMadeJson(objectMapper.writeValueAsString(toolNames));
+            llmCallRepository.save(call);
+        } catch (Exception e) { log.debug("LlmCall persist failed (Ollama tool-use iter {}): {}", iteration, e.getMessage()); }
+    }
+
     private boolean shouldUseCli(String model) {
         try {
             LlmProvider preferred = LlmCallContext.current()
                 .map(LlmCallContext.Context::preferredProvider)
                 .orElse(null);
             if (preferred == LlmProvider.OPENROUTER) return false;
+            if (preferred == LlmProvider.OLLAMA) return false;
+            if (preferred == LlmProvider.AITUNNEL) return false;
 
             // Explicit run-level CLI preference (from Project.defaultProvider) bypasses
             // the integration check — the operator picked CLI in project settings, that's
@@ -837,6 +1220,12 @@ public class LlmClient {
     private void recordToolUseUsage(String model, int iteration, int durationMs,
                                     int tokensIn, int tokensOut, double cost,
                                     List<String> toolNames, String finishReason) {
+        recordToolUseUsage(model, iteration, durationMs, tokensIn, tokensOut, cost, toolNames, finishReason, LlmProvider.OPENROUTER);
+    }
+
+    private void recordToolUseUsage(String model, int iteration, int durationMs,
+                                    int tokensIn, int tokensOut, double cost,
+                                    List<String> toolNames, String finishReason, LlmProvider provider) {
         if (llmCallRepository == null) return;
         try {
             LlmCall call = new LlmCall();
@@ -848,7 +1237,7 @@ public class LlmClient {
             call.setDurationMs(durationMs);
             call.setIteration(iteration);
             call.setProjectSlug(com.workflow.project.ProjectContext.get());
-            call.setProvider(LlmProvider.OPENROUTER);
+            call.setProvider(provider);
             if (finishReason != null && !finishReason.isBlank()) call.setFinishReason(finishReason);
             LlmCallContext.current().ifPresent(ctx -> {
                 call.setRunId(ctx.runId());

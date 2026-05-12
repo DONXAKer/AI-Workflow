@@ -1,4 +1,4 @@
-import { Loader2, CheckCircle, XCircle, SkipForward, Clock, AlertCircle, Copy, Check, Bell, ChevronDown, ChevronRight, Hand, Zap, BellRing, RotateCcw, Globe, Terminal } from 'lucide-react'
+import { Loader2, CheckCircle, XCircle, SkipForward, Clock, AlertCircle, Copy, Check, Bell, ChevronDown, ChevronRight, Hand, Zap, BellRing, RotateCcw, Globe, Terminal, Cpu } from 'lucide-react'
 import { BlockStatus, BlockSnapshot, ApprovalMode, ToolCallEntry, LlmCallEntry, LlmProvider } from '../types'
 import { effectiveApprovalMode } from '../utils/configSnapshot'
 import { blockIdLabel } from '../utils/blockLabels'
@@ -86,6 +86,18 @@ const PROVIDER_BADGE: Record<LlmProvider, { label: string; Icon: React.Component
     Icon: Terminal,
     cls: 'bg-orange-950/50 border-orange-800/50 text-orange-300',
     tooltip: 'Локальный claude -p, ваша Max-подписка',
+  },
+  OLLAMA: {
+    label: 'Ollama',
+    Icon: Cpu,
+    cls: 'bg-purple-950/50 border-purple-800/50 text-purple-300',
+    tooltip: 'Локальный Ollama-сервер',
+  },
+  AITUNNEL: {
+    label: 'AITunnel',
+    Icon: Globe,
+    cls: 'bg-cyan-950/50 border-cyan-800/50 text-cyan-300',
+    tooltip: 'AITunnel.ru — российский AI-шлюз',
   },
 }
 
@@ -611,6 +623,23 @@ function BlockSummaryChip({ block, spec }: { block: BlockStatus; spec?: BlockVie
     )
   }
 
+  if (out._cached === true) {
+    const sourceRunId = typeof out._cacheSourceRunId === 'string' ? out._cacheSourceRunId : null
+    const title = sourceRunId
+      ? `Результат взят из кеша (source run: ${sourceRunId.substring(0, 8)})`
+      : 'Результат взят из кеша'
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-teal-950/40 border border-teal-800/50 text-teal-300" title={title}>
+        <RotateCcw className="w-3 h-3" /> cached
+        {sourceRunId && (
+          <a href={`/runs/${sourceRunId}`} className="underline ml-1 hover:text-teal-200" onClick={e => e.stopPropagation()}>
+            src
+          </a>
+        )}
+      </span>
+    )
+  }
+
   if (Array.isArray(out.failed_items) || Array.isArray(out.passed_items)) {
     const passed = Array.isArray(out.passed_items) ? out.passed_items.length : 0
     const failed = Array.isArray(out.failed_items) ? out.failed_items.length : 0
@@ -848,6 +877,7 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Статус</th>
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Время</th>
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Результат</th>
+              <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">LLM</th>
               {(onReviewApproval || onRelaunchFromBlock) && (
                 <th className="px-5 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">Действия</th>
               )}
@@ -874,13 +904,16 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                 ? lastLlmCall.finishReason.toUpperCase() : null
               const isExpanded = expandedBlocks.has(rowKey)
               const hasActionsCol = !!(onReviewApproval || onRelaunchFromBlock)
-              const colSpan = hasActionsCol ? 6 : 5
+              const colSpan = hasActionsCol ? 7 : 6
               const spec = getBlockView(block.blockId)
               const hasDetails = iterCalls.length > 0 || !!block.output || !!block.input
 
               return (
                 <Fragment key={rowKey}>
-                  <tr className={clsx('transition-colors', cfg.rowClass)}>
+                  <tr
+                    className={clsx('transition-colors', cfg.rowClass, hasDetails && 'cursor-pointer hover:bg-slate-800/30')}
+                    onClick={hasDetails ? () => toggleBlock(rowKey) : undefined}
+                  >
                     <td className="px-5 py-3.5 text-slate-600 text-xs">{index + 1}</td>
                     <td className="px-5 py-3.5">
                       <div className="flex items-start gap-2 flex-wrap">
@@ -962,8 +995,51 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                         )}
                       </div>
                     </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      {(() => {
+                        // Aggregate from llmCalls prop (LlmCall rows) — works whether or not
+                        // backend injects _llm into output.
+                        if (!blockLlmCalls || blockLlmCalls.length === 0) {
+                          return <span className="text-xs text-slate-600">—</span>
+                        }
+                        const tokIn = blockLlmCalls.reduce((s, c) => s + (c.tokensIn ?? 0), 0)
+                        const tokOut = blockLlmCalls.reduce((s, c) => s + (c.tokensOut ?? 0), 0)
+                        const cost = blockLlmCalls.reduce((s, c) => s + (c.costUsd ?? 0), 0)
+                        const calls = blockLlmCalls.length
+                        // Per-model breakdown for tooltip
+                        const modelMap = new Map<string, { calls: number; tokIn: number; tokOut: number; cost: number }>()
+                        for (const c of blockLlmCalls) {
+                          const key = c.model || 'unknown'
+                          const agg = modelMap.get(key) ?? { calls: 0, tokIn: 0, tokOut: 0, cost: 0 }
+                          agg.calls++; agg.tokIn += c.tokensIn ?? 0; agg.tokOut += c.tokensOut ?? 0; agg.cost += c.costUsd ?? 0
+                          modelMap.set(key, agg)
+                        }
+                        const models = Array.from(modelMap.entries())
+                        const tooltip = models
+                          .map(([m, a]) => `${m}: ${a.calls} calls, ${a.tokIn}↑/${a.tokOut}↓${a.cost > 0 ? ` $${a.cost.toFixed(4)}` : ''}`)
+                          .join('\n')
+                        return (
+                          <div className="flex flex-col gap-0.5 text-[11px] font-mono" title={tooltip}>
+                            <div className="flex items-center gap-1.5 text-slate-300">
+                              <span className="text-slate-500">{calls}×</span>
+                              <span>{tokIn.toLocaleString()}↑/{tokOut.toLocaleString()}↓</span>
+                            </div>
+                            {cost > 0 ? (
+                              <div className="text-emerald-400">${cost.toFixed(4)}</div>
+                            ) : (
+                              <div className="text-slate-600">local</div>
+                            )}
+                            {models.length > 0 && (
+                              <div className="text-slate-500 truncate max-w-[160px]">
+                                {models.map(([m]) => m.replace(/^[^/]+\//, '').replace(/^claude-/, '')).join(', ')}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })()}
+                    </td>
                     {hasActionsCol && (
-                      <td className="px-5 py-3.5">
+                      <td className="px-5 py-3.5" onClick={e => e.stopPropagation()}>
                         {block.status === 'awaiting_approval' && onReviewApproval && (
                           <button type="button" onClick={() => onReviewApproval(block.blockId)}
                             className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md bg-amber-900/40 border border-amber-700/50 text-amber-300 hover:bg-amber-900/60 transition-colors">

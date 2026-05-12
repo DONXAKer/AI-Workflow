@@ -23,4 +23,18 @@ public interface Block {
     default BlockMetadata getMetadata() {
         return BlockMetadata.defaultFor(getName());
     }
+
+    /**
+     * Whether outputs of this block instance may be reused across runs via the block
+     * cache (see {@link com.workflow.core.BlockCacheService}). Default: not cacheable —
+     * blocks with FS side-effects (Write/Bash), external API calls, or interactive
+     * input MUST keep this false. Pure analytical blocks (analysis, planning) override
+     * to true.
+     *
+     * <p>The {@code BlockConfig} parameter lets a block decide based on its own config —
+     * e.g. {@link OrchestratorBlock} caches only mode=plan and never mode=review.
+     */
+    default boolean isCacheable(BlockConfig config) {
+        return false;
+    }
 }

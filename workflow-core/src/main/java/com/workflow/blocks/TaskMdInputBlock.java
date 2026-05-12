@@ -89,6 +89,9 @@ public class TaskMdInputBlock implements Block {
 
     @Override public String getName() { return "task_md_input"; }
 
+    @Override
+    public boolean isCacheable(com.workflow.config.BlockConfig config) { return true; }
+
     @Override public String getDescription() {
         return "Парсит файл task.md на структурированные секции, извлекает feat_id/slug/title и проставляет эвристические флаги классификации.";
     }

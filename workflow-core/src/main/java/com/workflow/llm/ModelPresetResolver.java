@@ -32,6 +32,14 @@ public class ModelPresetResolver {
 
     private static final Logger log = LoggerFactory.getLogger(ModelPresetResolver.class);
 
+    private static final Map<String, String> OLLAMA_DEFAULTS = Map.of(
+        "smart",     "qwen2.5:7b",
+        "flash",     "qwen2.5:7b",
+        "fast",      "qwen2.5:7b",
+        "reasoning", "qwen2.5:7b",
+        "cheap",     "qwen2.5:7b"
+    );
+
     private static final Map<String, String> CLI_DEFAULTS = Map.of(
         "smart",     "claude-sonnet-4-6",
         "flash",     "claude-haiku-4-5",
@@ -116,6 +124,22 @@ public class ModelPresetResolver {
         if (name == null) return false;
         String n = name.toLowerCase();
         return n.startsWith("claude") || n.equals("sonnet") || n.equals("opus") || n.equals("haiku");
+    }
+
+    /**
+     * Resolves a preset or model name to an Ollama-native model tag (e.g. {@code qwen3:8b}).
+     * Vendor-prefixed names like {@code z-ai/glm-4.6} are stripped to their last segment
+     * so switching a project to Ollama doesn't require per-block YAML edits.
+     */
+    public String resolveOllama(String presetOrModel) {
+        if (presetOrModel == null || presetOrModel.isBlank()) return OLLAMA_DEFAULTS.get("smart");
+        if (presetOrModel.contains("/")) {
+            return presetOrModel.substring(presetOrModel.lastIndexOf('/') + 1);
+        }
+        String lower = presetOrModel.toLowerCase();
+        if (OLLAMA_DEFAULTS.containsKey(lower)) return OLLAMA_DEFAULTS.get(lower);
+        log.debug("Unknown Ollama preset '{}' — passing through as raw model tag", presetOrModel);
+        return presetOrModel;
     }
 
     public Map<String, String> allPresets() {
