@@ -40,3 +40,6 @@ docker-compose.override.yml
 # package src/main/java/com/workflow/config/ that holds POJO config classes)
 /config/
 workflow-core/config/skill_marketplace.yaml
+
+# Agent memory (runtime files, not source)
+.claude/agent-memory/
