@@ -53,6 +53,14 @@ services:
       - qdrant-data:/qdrant/storage
     restart: unless-stopped
 
+  # NOTE: vLLM is intentionally not part of this compose project — it's a
+  # shared inference service used by multiple local apps (Blender-AI, this
+  # workflow, etc.), so it lives in D:\Проекты\vllm-stack as a standalone
+  # compose. Backend reaches it via http://host.docker.internal:8003/v1
+  # (Docker Desktop on Windows exposes the host loopback to all containers).
+  # To start vLLM:
+  #   cd D:\Проекты\vllm-stack && docker compose up -d
+
 volumes:
   workflow-state:
   gradle-cache:

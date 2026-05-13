@@ -91,26 +91,81 @@ public class IntegrationController {
             return ResponseEntity.ok(result);
         }
 
+        // Defensive normalisation — operators occasionally paste URLs with surrounding
+        // whitespace, a trailing newline, U+00A0 non-breaking space (when copied from
+        // rich-text), or Cyrillic look-alike characters from a placeholder hint. Java's
+        // URI.create then throws "Illegal character in <part>" with no hint at the
+        // offending byte, which is hard to debug from the UI.
+        String normalized = testUrl.trim().replace(" ", "");
+        // Strip any wrapping quote/bracket pairs from common paste-from-doc patterns.
+        if ((normalized.startsWith("\"") && normalized.endsWith("\""))
+                || (normalized.startsWith("<") && normalized.endsWith(">"))) {
+            normalized = normalized.substring(1, normalized.length() - 1).trim();
+        }
+
+        // For OpenAI-compatible providers the bare baseUrl typically ends at `/v1`
+        // which has no GET handler (404 from vLLM, OpenRouter, etc.). Probe `/models`
+        // instead — it returns 200 on a healthy server (or 401 for auth-gated providers)
+        // and lets us treat 4xx as a real "wrong URL" failure rather than swallowing
+        // 404 as success.
+        String probeUrl = normalized;
+        boolean strictStatus = false;
+        switch (config.getType()) {
+            case VLLM:
+            case OPENROUTER:
+            case AITUNNEL:
+            case OLLAMA:
+                String stripped = normalized.replaceAll("/+$", "");
+                if (!stripped.endsWith("/models")) {
+                    probeUrl = (stripped.endsWith("/v1") ? stripped : stripped + "/v1") + "/models";
+                }
+                strictStatus = true;
+                break;
+            default:
+                break;
+        }
+
         try {
             HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
 
             HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(testUrl))
+                .uri(URI.create(probeUrl))
                 .GET()
                 .timeout(Duration.ofSeconds(10))
                 .build();
 
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
-            if (response.statusCode() < 500) {
+            int code = response.statusCode();
+            // 401 is acceptable for auth-gated providers (OpenRouter/AITunnel) — the URL
+            // is correct, only the unauthenticated probe was rejected, which still proves
+            // the service is reachable.
+            boolean ok = strictStatus
+                ? (code == 200 || code == 401)
+                : (code < 500);
+            if (ok) {
                 result.put("success", true);
-                result.put("message", "Connected successfully (HTTP " + response.statusCode() + ")");
+                result.put("message", code == 200
+                    ? "Connected successfully (HTTP 200 " + probeUrl + ")"
+                    : "Reachable but HTTP " + code + " from " + probeUrl);
             } else {
                 result.put("success", false);
-                result.put("message", "Server error: HTTP " + response.statusCode());
+                result.put("message", "HTTP " + code + " from " + probeUrl
+                    + " — wrong URL or service unhealthy");
             }
+        } catch (java.net.URISyntaxException | IllegalArgumentException e) {
+            // URI parse failure — provide explicit offset and a hex dump so the operator
+            // can see hidden whitespace / Cyrillic characters that the UI strips visually.
+            StringBuilder hex = new StringBuilder();
+            for (byte b : testUrl.getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+                hex.append(String.format("%02X ", b & 0xFF));
+                if (hex.length() > 90) { hex.append("…"); break; }
+            }
+            result.put("success", false);
+            result.put("message", "Malformed URL (" + e.getMessage() + ") — raw bytes: " + hex.toString().trim()
+                + " — re-enter the URL by hand without copy-paste");
         } catch (Exception e) {
             result.put("success", false);
             result.put("message", "Connection failed: " + e.getMessage());

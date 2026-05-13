@@ -8,5 +8,6 @@ public enum IntegrationType {
     UNREAL,
     CLAUDE_CODE_CLI,
     OLLAMA,
-    AITUNNEL
+    AITUNNEL,
+    VLLM
 }

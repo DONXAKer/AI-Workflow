@@ -40,11 +40,11 @@ integrations:
 knowledge_base:
   sources:
     - type: files
-      path: /projects/AI-Workflow/docs
+      path: /projects/Проекты/AI-Workflow/docs
     - type: files
-      path: /projects/AI-Workflow/workflow-core/src/main/java
+      path: /projects/Проекты/AI-Workflow/workflow-core/src/main/java
     - type: files
-      path: /projects/AI-Workflow/workflow-ui/app
+      path: /projects/Проекты/AI-Workflow/workflow-ui/src
 
 # =============================================================================
 # Pipeline
@@ -141,7 +141,7 @@ pipeline:
         - task_md
         - analysis
         - clarification
-      working_dir: /projects/AI-Workflow
+      working_dir: /projects/Проекты/AI-Workflow
       max_iterations: 12
       system_prompt_extra: |
         Backend: workflow-core/ (Gradle Kotlin DSL, Flyway migrations in workflow-core/src/main/resources/db/migration/)
@@ -159,7 +159,7 @@ pipeline:
     depends_on:
       - plan
     config:
-      working_dir: /projects/AI-Workflow
+      working_dir: /projects/Проекты/AI-Workflow
       command: |
         set -e
         BRANCH="feature/${task_md.feat_id}-${task_md.slug}"
@@ -185,7 +185,7 @@ pipeline:
 
         Ты senior full-stack разработчик. Генерируй production-ready код.
 
-        Рабочая директория проекта: /projects/AI-Workflow
+        Рабочая директория проекта: /projects/Проекты/AI-Workflow
         - Backend: workflow-core/ (Gradle Groovy DSL, Java 21 Spring Boot 3.4)
         - Frontend: workflow-ui/
         - Gradlew находится в workflow-core/: запускай через `cd workflow-core && ./gradlew <задача>`
@@ -199,7 +199,7 @@ pipeline:
       temperature: 0.2
       max_iterations: 10
     config:
-      working_dir: /projects/AI-Workflow
+      working_dir: /projects/Проекты/AI-Workflow
       max_iterations: 20
       allowed_tools:
         - Read
@@ -244,26 +244,26 @@ pipeline:
     depends_on:
       - codegen
     config:
-      working_dir: /projects/AI-Workflow
+      working_dir: /projects/Проекты/AI-Workflow
       command: |
         set -e
-        cd /projects/AI-Workflow
+        cd /projects/Проекты/AI-Workflow
 
         JAVA_CHANGED=$(git diff --name-only main 2>/dev/null | grep -E "\.(java|kts|gradle)$" | head -1 || true)
         UI_CHANGED=$(git diff --name-only main 2>/dev/null | grep -E "^workflow-ui/" | head -1 || true)
 
         if [ -n "$JAVA_CHANGED" ]; then
           echo "=== API compilation (java/gradle changes detected) ==="
-          cd /projects/AI-Workflow/workflow-core
+          cd /projects/Проекты/AI-Workflow/workflow-core
           ./gradlew compileJava compileTestJava --no-daemon -q 2>&1 | tail -30
-          cd /projects/AI-Workflow
+          cd /projects/Проекты/AI-Workflow
         else
           echo "=== API compilation skipped (no java changes) ==="
         fi
 
         if [ -n "$UI_CHANGED" ]; then
           echo "=== Frontend install + build (ui changes detected) ==="
-          cd /projects/AI-Workflow/workflow-ui
+          cd /projects/Проекты/AI-Workflow/workflow-ui
           if [ ! -d node_modules ]; then npm ci 2>&1 | tail -5; fi
           npm run build 2>&1 | tail -30
         else
@@ -317,10 +317,10 @@ pipeline:
       plan_block: plan
       context_blocks:
         - build_test
-      working_dir: /projects/AI-Workflow
+      working_dir: /projects/Проекты/AI-Workflow
       max_iterations: 10
       system_prompt_extra: |
-        Working directory: /projects/AI-Workflow
+        Working directory: /projects/Проекты/AI-Workflow
 
         IMPORTANT: This project has NO git history — do NOT use git diff or git log.
         Instead, use Read/Grep/Glob tools to check the actual files listed in the plan.
@@ -350,11 +350,22 @@ pipeline:
     depends_on:
       - review
     config:
-      working_dir: /projects/AI-Workflow
+      working_dir: /projects/Проекты/AI-Workflow
       command: |
         set -e
         echo "=== Branch: $(git branch --show-current) ==="
-        git add -A
+        # Stage tracked files + new source files; skip runtime/agent-memory dirs
+        git add -u .
+        git add -- workflow-core/src/ workflow-ui/src/ workflow-ui/tests/ docs/ tasks/
+        # Move task to done/
+        FEAT_ID='${task_md.feat_id}'
+        SLUG='${task_md.slug}'
+        ACTIVE="tasks/active/$FEAT_ID-$SLUG.md"
+        DONE="tasks/done/$FEAT_ID-$SLUG.md"
+        if [ -f "$ACTIVE" ]; then
+          mkdir -p tasks/done
+          git mv "$ACTIVE" "$DONE" 2>/dev/null || (mv "$ACTIVE" "$DONE" && git add "$DONE")
+        fi
         if git diff --cached --quiet; then
           echo "Nothing to commit"
         else

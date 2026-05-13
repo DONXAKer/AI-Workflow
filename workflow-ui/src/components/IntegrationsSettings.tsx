@@ -10,7 +10,7 @@ import clsx from 'clsx'
 import IntegrationSlideOver from './integrations/IntegrationSlideOver'
 import PageHeader from './layout/PageHeader'
 
-const INTEGRATION_TYPES: IntegrationType[] = ['YOUTRACK', 'GITLAB', 'GITHUB', 'OPENROUTER', 'AITUNNEL', 'UNREAL', 'CLAUDE_CODE_CLI', 'OLLAMA']
+const INTEGRATION_TYPES: IntegrationType[] = ['YOUTRACK', 'GITLAB', 'GITHUB', 'OPENROUTER', 'AITUNNEL', 'UNREAL', 'CLAUDE_CODE_CLI', 'OLLAMA', 'VLLM']
 
 const TYPE_LABELS: Record<IntegrationType, string> = {
   YOUTRACK:        'YouTrack',
@@ -21,6 +21,7 @@ const TYPE_LABELS: Record<IntegrationType, string> = {
   UNREAL:          'Unreal Engine',
   CLAUDE_CODE_CLI: 'Claude Agent',
   OLLAMA:          'Ollama',
+  VLLM:            'vLLM',
 }
 
 const TYPE_BADGE: Record<IntegrationType, string> = {
@@ -32,6 +33,7 @@ const TYPE_BADGE: Record<IntegrationType, string> = {
   UNREAL:          'bg-emerald-900/50 text-emerald-300 border-emerald-800/50',
   CLAUDE_CODE_CLI: 'bg-amber-900/50 text-amber-300 border-amber-800/50',
   OLLAMA:          'bg-purple-900/50 text-purple-300 border-purple-800/50',
+  VLLM:            'bg-pink-900/50 text-pink-300 border-pink-800/50',
 }
 
 const TYPE_META: Record<IntegrationType, { description: string; icon: LucideIcon; accent: string }> = {
@@ -43,6 +45,7 @@ const TYPE_META: Record<IntegrationType, { description: string; icon: LucideIcon
   UNREAL:          { description: 'Unreal MCP + Blueprint роутинг', icon: Layers,      accent: 'text-emerald-400' },
   CLAUDE_CODE_CLI: { description: 'Claude CLI — подписка Max/API',  icon: Terminal,    accent: 'text-amber-400'  },
   OLLAMA:          { description: 'Локальный Ollama — без API-ключа', icon: Cpu,       accent: 'text-purple-400' },
+  VLLM:            { description: 'Локальный vLLM — OpenAI-совместимый, AWQ/FP8', icon: Cpu, accent: 'text-pink-400' },
 }
 
 const DEFAULT_UNREAL_EXTRA = JSON.stringify({
@@ -99,7 +102,7 @@ function typeHasField(type: IntegrationType, field: 'baseUrl' | 'project' | 'own
 }
 
 function typeRequiresToken(type: IntegrationType): boolean {
-  return type !== 'UNREAL' && type !== 'CLAUDE_CODE_CLI' && type !== 'OLLAMA'
+  return type !== 'UNREAL' && type !== 'CLAUDE_CODE_CLI' && type !== 'OLLAMA' && type !== 'VLLM'
 }
 
 function TokenCell({ token }: { token: string }) {
@@ -253,13 +256,35 @@ function IntegrationForm({ initial, lockedType = false, onSave, onCancel }: Form
               Токен {typeRequiresToken(form.type) && <span className="text-red-400">*</span>}
               {!typeRequiresToken(form.type) && <span className="text-slate-500">(необязательно)</span>}
             </label>
-            <input type="password" value={form.token} onChange={e => set('token', e.target.value)} placeholder={form.type === 'UNREAL' ? 'MCP auth token (если нужен)' : 'API-токен или ключ...'} autoComplete="new-password" className={inputCls} />
+            <input
+              type="password"
+              value={form.token}
+              onChange={e => set('token', e.target.value)}
+              placeholder={
+                form.type === 'UNREAL' ? 'MCP auth token (если нужен)' :
+                form.type === 'VLLM'   ? 'API key (если запущен с --api-key)' :
+                'API-токен или ключ...'
+              }
+              autoComplete="new-password"
+              className={inputCls}
+            />
           </div>
         )}
         {form.type === 'CLAUDE_CODE_CLI' && (
           <div className="sm:col-span-2 rounded-lg bg-amber-950/30 border border-amber-800/40 px-3 py-2.5 text-xs text-amber-300/80">
             Использует локальный Claude CLI (<code>claude -p</code>) с вашей подпиской. Токен API не нужен.
             Убедитесь, что <code>claude</code> доступен в PATH или укажите путь в поле Base URL ниже.
+          </div>
+        )}
+        {form.type === 'VLLM' && (
+          <div className="sm:col-span-2 rounded-lg bg-pink-950/30 border border-pink-800/40 px-3 py-2.5 text-xs text-pink-300/80">
+            Локальный vLLM-сервер (OpenAI-совместимый). Поднимается отдельно из{' '}
+            <code>D:/Проекты/vllm-stack</code> командой <code>docker compose up -d</code>{' '}
+            — это shared-сервис, не часть этого проекта.
+            Если оставить Base URL пустым, backend ходит в <code>http://host.docker.internal:8003/v1</code>.
+            Sampling-параметры (temp 0.25, top_p 0.9, top_k 40, repeat 1.1) применяются автоматически
+            на стороне backend — переопределить можно через <code>agent.temperature</code> в YAML-блоке.
+            Токен нужен только если vLLM запущен с <code>--api-key</code>.
           </div>
         )}
         {form.type === 'OLLAMA' && (
@@ -286,7 +311,7 @@ function IntegrationForm({ initial, lockedType = false, onSave, onCancel }: Form
           </>
         )}
         {typeHasField(form.type, 'baseUrl') && (
-          <div className={clsx((form.type === 'OPENROUTER' || form.type === 'AITUNNEL' || form.type === 'CLAUDE_CODE_CLI' || form.type === 'OLLAMA') ? 'sm:col-span-2' : '')}>
+          <div className={clsx((form.type === 'OPENROUTER' || form.type === 'AITUNNEL' || form.type === 'CLAUDE_CODE_CLI' || form.type === 'OLLAMA' || form.type === 'VLLM') ? 'sm:col-span-2' : '')}>
             <label className={labelCls}>
               {form.type === 'CLAUDE_CODE_CLI' ? 'Путь к claude' : 'Base URL'}
               {' '}<span className="text-slate-500">(необязательно)</span>
@@ -302,6 +327,7 @@ function IntegrationForm({ initial, lockedType = false, onSave, onCancel }: Form
                 form.type === 'AITUNNEL' ? 'https://api.aitunnel.ru/v1' :
                 form.type === 'CLAUDE_CODE_CLI' ? '/usr/local/bin/claude (по умолчанию: claude из PATH)' :
                 form.type === 'OLLAMA' ? 'http://host.docker.internal:11434' :
+                form.type === 'VLLM' ? 'http://host.docker.internal:8003/v1' :
                 'https://api.github.com'
               }
               className={inputCls}

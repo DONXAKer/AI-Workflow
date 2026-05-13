@@ -302,7 +302,23 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(grep -v \"^$\\\\|Downloading\\\\|Resolving\\\\|Configuring\")",
-      "PowerShell(cd \"D:\\\\Проекты\\\\AI-Workflow\"; git status --short | Where-Object { $_ -notmatch '^\\\\?\\\\? \\\\.claude' })"
+      "PowerShell(cd \"D:\\\\Проекты\\\\AI-Workflow\"; git status --short | Where-Object { $_ -notmatch '^\\\\?\\\\? \\\\.claude' })",
+      "Bash(git -C \"D:/Проекты/AI-Workflow\" diff main..feature/UI-001-remove-allprojects-from-history --stat)",
+      "Bash(git *)",
+      "Bash(gh pr create --title 'FEAT-VISUAL-001: BP_UnitActor — C++ base class + HP/type render' --body ' *)",
+      "PowerShell(if \\($env:GH_TOKEN\\) { \"GH_TOKEN present \\(length: $\\($env:GH_TOKEN.Length\\)\\)\" } elseif \\($env:GITHUB_TOKEN\\) { \"GITHUB_TOKEN present \\(length: $\\($env:GITHUB_TOKEN.Length\\)\\)\" } else { \"no token in env\" })",
+      "Bash(claude --version)",
+      "Bash(claude -p --permission-mode bypassPermissions --model sonnet ' *)",
+      "Read(//projects/WarCard/tasks/**)",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('orchestratorModel:', d.get\\('orchestratorModel'\\)\\); print\\('defaultProvider:', d.get\\('defaultProvider'\\)\\)\")",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('content:', repr\\(d['choices'][0]['message']['content']\\)\\); print\\('tokens:', d.get\\('usage'\\)\\)\")",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('tokens:', d.get\\('usage'\\)\\)\")",
+      "Bash(nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv)",
+      "Bash(find *)",
+      "Bash(ls \"C:\\\\Users\\\\Root\\\\.claude\\\\plans\")",
+      "Bash(mkdir \"C:\\\\Users\\\\Root\\\\.claude\\\\plans\")",
+      "WebFetch(domain:voice2me.beehiiv.com)"
     ]
   }
 }

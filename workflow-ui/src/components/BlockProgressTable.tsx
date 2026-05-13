@@ -99,6 +99,12 @@ const PROVIDER_BADGE: Record<LlmProvider, { label: string; Icon: React.Component
     cls: 'bg-cyan-950/50 border-cyan-800/50 text-cyan-300',
     tooltip: 'AITunnel.ru — российский AI-шлюз',
   },
+  VLLM: {
+    label: 'vLLM',
+    Icon: Cpu,
+    cls: 'bg-pink-950/50 border-pink-800/50 text-pink-300',
+    tooltip: 'Локальный vLLM (OpenAI-совместимый)',
+  },
 }
 
 export function ProviderBadge({ provider }: { provider?: LlmProvider }) {

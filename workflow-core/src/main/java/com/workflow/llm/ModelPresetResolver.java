@@ -45,6 +45,21 @@ public class ModelPresetResolver {
         "cheap",     Models.OLLAMA_CLINE_ROOCODE
     );
 
+    private static final Map<String, String> VLLM_DEFAULTS = Map.of(
+        // Single model serves all tiers: vLLM hosts one model per process and switching
+        // (model swap) would require a daemon restart. Qwen3-4B-AWQ is the default
+        // because it fits comfortably on RTX 4060 8 GB with 32k context, prefix-caching
+        // and CUDA graphs all enabled — 8B AWQ crash-loops at startup on the same card
+        // (see Models.VLLM_QWEN3_AWQ javadoc for details). Per-block override via
+        // agent.model = "Qwen/Qwen3-8B-AWQ" routes a single block to the larger model
+        // ONLY if the configured vLLM instance is actually serving it.
+        "smart",     Models.VLLM_QWEN3_AWQ,
+        "flash",     Models.VLLM_QWEN3_AWQ,
+        "fast",      Models.VLLM_QWEN3_AWQ,
+        "reasoning", Models.VLLM_QWEN3_AWQ,
+        "cheap",     Models.VLLM_QWEN3_AWQ
+    );
+
     private static final Map<String, String> CLI_DEFAULTS = Map.of(
         "smart",     Models.CLI_SONNET,
         "flash",     Models.CLI_HAIKU,
@@ -129,6 +144,29 @@ public class ModelPresetResolver {
         if (name == null) return false;
         String n = name.toLowerCase();
         return n.startsWith("claude") || n.equals("sonnet") || n.equals("opus") || n.equals("haiku");
+    }
+
+    /**
+     * Resolves a preset or model name to a vLLM model identifier (HuggingFace repo id,
+     * e.g. {@code Qwen/Qwen3-8B-AWQ}).
+     *
+     * <p>vLLM identifies served models by their HF repo id verbatim — there is no
+     * Ollama-style {@code :tag} discriminator. A presetOrModel containing '/' is
+     * assumed to already be a full HF repo id and passed through unchanged. Bare
+     * preset names ({@code smart}, {@code flash}, …) map via {@link #VLLM_DEFAULTS}.
+     *
+     * <p>Per-block YAML overrides should pin the full HF repo id of a model the
+     * configured vLLM instance actually serves; otherwise vLLM responds with HTTP
+     * 404 and the call fails loud.
+     */
+    public String resolveVllm(String presetOrModel) {
+        if (presetOrModel == null || presetOrModel.isBlank()) return VLLM_DEFAULTS.get("smart");
+        // Full HF repo id ("Qwen/Qwen3-8B-AWQ") — pass through, vLLM matches on this verbatim.
+        if (presetOrModel.contains("/")) return presetOrModel;
+        String lower = presetOrModel.toLowerCase();
+        if (VLLM_DEFAULTS.containsKey(lower)) return VLLM_DEFAULTS.get(lower);
+        log.debug("Unknown vLLM preset '{}' — passing through as raw model id", presetOrModel);
+        return presetOrModel;
     }
 
     /**

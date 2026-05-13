@@ -18,5 +18,10 @@ public enum LlmProvider {
     /** AITunnel.ru — OpenAI-compatible Russian aggregator. Same call shape as OpenRouter,
      * different baseUrl + token. Useful when OpenRouter is geoblocked or operator prefers
      * a domestic provider. */
-    AITUNNEL
+    AITUNNEL,
+    /** Local vLLM server — OpenAI-compatible. Hosts AWQ/FP8/NVFP4 quants natively on
+     * NVIDIA GPUs; significantly faster than Ollama on the same hardware due to FP8
+     * Tensor Cores (Ada+) and Blackwell NVFP4 paths. Coexists with OLLAMA — embeddings
+     * stay on Ollama (no benefit from migrating the 137M-param nomic-embed). */
+    VLLM
 }

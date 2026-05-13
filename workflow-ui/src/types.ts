@@ -17,7 +17,7 @@ export interface EntryPoint {
 }
 
 export type RunStatus = 'PENDING' | 'RUNNING' | 'PAUSED_FOR_APPROVAL' | 'COMPLETED' | 'FAILED'
-export type IntegrationType = 'YOUTRACK' | 'GITLAB' | 'GITHUB' | 'OPENROUTER' | 'AITUNNEL' | 'UNREAL' | 'CLAUDE_CODE_CLI' | 'OLLAMA'
+export type IntegrationType = 'YOUTRACK' | 'GITLAB' | 'GITHUB' | 'OPENROUTER' | 'AITUNNEL' | 'UNREAL' | 'CLAUDE_CODE_CLI' | 'OLLAMA' | 'VLLM'
 
 export interface ToolCallEntry {
   blockId: string
@@ -31,7 +31,7 @@ export interface ToolCallEntry {
   timestamp?: string
 }
 
-export type LlmProvider = 'OPENROUTER' | 'CLAUDE_CODE_CLI' | 'OLLAMA' | 'AITUNNEL'
+export type LlmProvider = 'OPENROUTER' | 'CLAUDE_CODE_CLI' | 'OLLAMA' | 'AITUNNEL' | 'VLLM'
 
 export interface LlmCallEntry {
   blockId: string

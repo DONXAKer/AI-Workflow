@@ -89,7 +89,14 @@ Smart-tier additions (commit `f2e9882`):
 
 ### LLM routing & model presets
 
-LLM calls take one of two routes — OpenRouter (default) or the Claude Code CLI when `CLAUDE_CODE_CLI` integration is the project's default provider (memory `project_llm_routing.md`). Block configs reference **named tiers**, not raw model IDs, so swapping a model is a single-place change. `ModelPresetResolver` keeps two maps so each route picks a route-appropriate model:
+LLM calls route through one of **four providers**, selected per-project via `Project.defaultProvider` (Settings → Project → Default LLM provider) or per-run via `inputs.provider`:
+- **OpenRouter** — paid cloud API, default for blocks that don't pin a provider
+- **AITunnel** — Russian OpenAI-compatible aggregator (geofallback for OpenRouter)
+- **Claude Code CLI** — local `claude -p` subprocess, billed against Anthropic Max
+- **Ollama** — local Ollama server, used for both chat (`mychen76/qwen3_cline_roocode:8b`) and embeddings (`nomic-embed-text:v1.5`)
+- **vLLM** — local OpenAI-compatible server (`Qwen/Qwen3-8B-AWQ`), faster than Ollama on the same GPU (AWQ-Marlin kernels + FP8 Tensor Cores on Ada+)
+
+Block configs reference **named tiers**, not raw model IDs, so swapping a model is a single-place change. `ModelPresetResolver` keeps separate maps per route so each provider picks a route-appropriate model:
 
 **OpenRouter route — `DEFAULTS` (no Anthropic models, by design):**
 
@@ -104,6 +111,10 @@ LLM calls take one of two routes — OpenRouter (default) or the Claude Code CLI
 `smart`/`flash` are operator-validated for the WarCard pipeline (commit `836f307`). Anthropic models are **reserved for the CLI route** — they never appear in `DEFAULTS`. Extended presets (`deepseek`, `glm`, `gemini-pro`, `gemini-flash`, `gpt4o`, `mistral`, `qwen`) also live in this map.
 
 **CLI route — `CLI_DEFAULTS` (Anthropic-native):** `smart=claude-sonnet-4-6`, `flash=claude-haiku-4-5`, `reasoning=claude-opus-4-7`, `fast=claude-haiku-4-5`, `cheap=claude-haiku-4-5`. `resolveCli()` strips vendor prefixes from `anthropic/claude-*` and falls back to `claude-sonnet-4-6` for non-Anthropic models (commit `91bb66c`) — the CLI rejects unknown names.
+
+**Ollama route — `OLLAMA_DEFAULTS`:** every tier (`smart/flash/fast/reasoning/cheap`) → `mychen76/qwen3_cline_roocode:8b`. One model serves all tiers because vLLM/Ollama on consumer GPUs can't afford the VRAM thrash of swapping per-tier; pick something different per-block via `agent.model: "<ollama-tag>"`. `LlmClient` enforces `OLLAMA_NUM_CTX=16384` (overrides Modelfile's 65536 — kept low to fit 8 GB VRAM) and auto-sets `think:false` for qwen3-family models (not qwen3.6 — empirical, see `isQwen3Model()`).
+
+**vLLM route — `VLLM_DEFAULTS`:** every tier → `Qwen/Qwen3-4B-AWQ` (HuggingFace repo id, not Ollama tag). vLLM hosts one model per process — swapping models needs a daemon restart, so the tier map is intentionally uniform. **Why 4B not 8B:** Qwen3-8B-AWQ weights are 5.7 GB which leaves <1 GB for KV+workspace on a 4060 8 GB — it crash-loops at startup with "No available memory for the cache blocks" even after FP8 KV + max-num-seqs=4 + enforce-eager + prefix-cache off. 4B (~2.5 GB) leaves 4 GB of headroom, runs full 32k context and prefix-caching on, gives 70-100 t/s on Ada Lovelace. On a 12 GB+ GPU swap the vllm-stack `--model` to `Qwen/Qwen3-8B-AWQ` (constant `Models.VLLM_QWEN3_8B_AWQ` exists for per-block overrides). `LlmClient.completeViaVllm` applies Modelfile-equivalent sampling defaults: temperature 0.25, top_p 0.9, top_k 40, repetition_penalty 1.1. **Operator override:** set `agent.temperature: <val>` in the block YAML to any value other than 1.0 (the system "unset" sentinel) — that value is forwarded to vLLM verbatim. **vLLM deployment:** vLLM runs as a **standalone compose project** at `D:\Проекты\vllm-stack` (not coupled to this workflow) — `vllm/vllm-openai:latest`, host port 8003. Default `baseUrl` is `http://host.docker.internal:8003/v1` (Docker Desktop on Windows exposes host loopback from any container). Override via the `VLLM` IntegrationConfig only when vLLM lives on a different host. To start: `cd D:\Проекты\vllm-stack && docker compose up -d`. Embeddings stay on Ollama (`nomic-embed-text:v1.5`) — no benefit from migrating a 137M-param model.
 
 **Anthropic-only-under-CLI guard:** if a bare `claude-*` name reaches the OpenRouter route (because CLI is not active), `LlmClient.resolveModel` falls back to the `smart` tier with a warn log instead of silently calling `anthropic/claude-*` through OpenRouter. Practical consequence: blocks should pass tiers (`smart`, `flash`, `reasoning`, ...) — never bare `claude-sonnet-4-6` — so the same YAML works under both routes.
 

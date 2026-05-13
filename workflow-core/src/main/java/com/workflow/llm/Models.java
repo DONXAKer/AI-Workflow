@@ -25,6 +25,22 @@ public final class Models {
     /** Hard fallback when no preset resolver is wired (defensive). */
     public static final String OLLAMA_FALLBACK = OLLAMA_CLINE_ROOCODE;
 
+    // ── vLLM (local OpenAI-compatible server) ──────────────────────────────
+    /**
+     * Qwen3 4B AWQ Int4 — primary default for vLLM. ~2.5 GB on disk, fits RTX 4060 8 GB
+     * with a full 32k context and prefix-caching on. Picked over 8B because the 8B AWQ
+     * (5.7 GB) leaves &lt;1 GB for KV+workspace on 8 GB cards and crash-loops at startup
+     * with "No available memory for the cache blocks" even after FP8 KV + max-num-seqs=4
+     * + enforce-eager + prefix-cache off. AWQ-Marlin kernels on Ada Lovelace deliver
+     * ~70–100 t/s for 4B; quality is competent for tool-use / agentic workloads.
+     */
+    public static final String VLLM_QWEN3_AWQ = "Qwen/Qwen3-4B-AWQ";
+    /** Larger variant — operator may pin this per-block via {@code agent.model} when
+     *  running on a 12 GB+ GPU or a remote vLLM that has it loaded. Not the default. */
+    public static final String VLLM_QWEN3_8B_AWQ = "Qwen/Qwen3-8B-AWQ";
+    /** Hard fallback when no preset resolver is wired (defensive). */
+    public static final String VLLM_FALLBACK = VLLM_QWEN3_AWQ;
+
     // ── Claude Code CLI (Anthropic via local CLI) ──────────────────────────
     public static final String CLI_SONNET   = "claude-sonnet-4-6";
     public static final String CLI_HAIKU    = "claude-haiku-4-5";
