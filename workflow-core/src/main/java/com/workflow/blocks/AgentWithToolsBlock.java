@@ -119,6 +119,8 @@ public class AgentWithToolsBlock implements Block {
     @Autowired(required = false) private StringInterpolator stringInterpolator;
     @Autowired(required = false) private RunWebSocketHandler wsHandler;
     @Autowired(required = false) private com.workflow.tools.FileSystemCache fileSystemCache;
+    @Autowired(required = false) private com.workflow.mcp.McpToolLoader mcpToolLoader;
+    @Autowired(required = false) private com.workflow.knowledge.KnowledgeBase knowledgeBase;
 
     @Override public String getName() { return "agent_with_tools"; }
 
@@ -157,7 +159,24 @@ public class AgentWithToolsBlock implements Block {
                 FieldSchema.string("preload_from", "Preload from plan block",
                     "ID upstream-плана (orchestrator mode=plan), из которого взять files_to_touch "
                         + "и предзагрузить содержимое в user_message — экономит 3-5 итераций "
-                        + "exploration на impl-блоке.")
+                        + "exploration на impl-блоке."),
+                FieldSchema.bool("focus_on_failure", "Узкий prompt на build/tests loopback", false,
+                    "Если включено и блок переходит в loopback от build/tests (есть test_failures / "
+                        + "build_stderr в _loopback) — заменяет user_message узким root-cause-first "
+                        + "prompt'ом. Для 8B-моделей разница между «потерялся в 15K spec» и «исправил "
+                        + "одну опечатку»."),
+                FieldSchema.stringArray("mcp_servers", "MCP-серверы",
+                    "Имена MCP-серверов (из реестра Settings → MCP servers) которые подключаются "
+                        + "к этому блоку. Их tools/list загружается на старте, каждый remote tool "
+                        + "становится доступен агенту как `mcp_<server>__<tool>` поверх native tools."),
+                FieldSchema.bool("auto_inject_rag", "Авто-инъекция top-3 RAG-чанков", false,
+                    "Если включено — на старте блока эмбеддит task_md.to_be (или auto_search_query) "
+                        + "и префиксит top-3 семантически релевантных кусков кода в user_message "
+                        + "как секцию `## Релевантный код`. Требует настроенный workflow.knowledge.qdrant.url "
+                        + "и проиндексированный проект."),
+                FieldSchema.string("auto_search_query", "Запрос для авто-RAG",
+                    "Опциональный override: если задан — эмбеддится именно этот текст вместо "
+                        + "task_md.to_be. Поддерживает ${block.field} интерполяцию.")
             ),
             true,   // hasCustomForm — UI uses dedicated AgentWithToolsForm
             Map.of(),
@@ -175,7 +194,11 @@ public class AgentWithToolsBlock implements Block {
                 FieldSchema.output("total_cost_usd", "Total cost USD", "number",
                     "Суммарная стоимость вызовов в USD."),
                 FieldSchema.output("tool_calls_made", "Tool calls made", "string_array",
-                    "Список имён tools, вызванных в порядке вызова.")
+                    "Список имён tools, вызванных в порядке вызова."),
+                FieldSchema.output("files_changed", "Files changed", "string_array",
+                    "Список изменённых файлов с insertions/deletions (captured via git diff)."),
+                FieldSchema.output("diff_summary", "Diff summary", "string",
+                    "Одна строка-итог: '<N> файлов, +X −Y'.")
             ),
             100
         );
@@ -199,17 +222,43 @@ public class AgentWithToolsBlock implements Block {
         String expanded = stringInterpolator != null
             ? stringInterpolator.interpolate(userTemplate, run, input)
             : userTemplate;
-        String userMessage = prependLoopbackFeedback(interpolate(expanded, input), input);
+        // Focused-failure mode: when the previous run looped back from build/tests
+        // (not from review), the model drowns in 10-15K tokens of task spec while
+        // the actual failure is one compiler error. Replace the bloated user_message
+        // entirely with a narrow root-cause-first prompt centred on the failure text.
+        // Opt-in via `focus_on_failure: true` so existing pipelines keep verbose mode.
+        boolean focusOnFailure = asBool(cfg, "focus_on_failure", false);
+        String userMessage;
+        if (focusOnFailure && hasBuildOrTestFailure(input)) {
+            userMessage = buildFocusedFailurePrompt(input);
+            log.info("agent_with_tools[{}]: focus_on_failure engaged — narrow prompt ({} chars) for build/test failure",
+                blockConfig.getId(), userMessage.length());
+        } else {
+            userMessage = prependLoopbackFeedback(interpolate(expanded, input), input);
+        }
         userMessage = prependCodebaseTree(userMessage, workingDir);
         userMessage = prependClaudeMd(userMessage, workingDir);
         userMessage = prependPreloadedFiles(userMessage, cfg, input, workingDir);
+        userMessage = prependRagHits(userMessage, cfg, input);
 
         List<String> allowedTools = asStringList(cfg, "allowed_tools");
         if (allowedTools.isEmpty()) {
             throw new IllegalArgumentException(
                 "agent_with_tools: allowed_tools must list at least one tool");
         }
-        List<Tool> tools = toolRegistry.resolve(allowedTools);
+        List<Tool> nativeTools = toolRegistry.resolve(allowedTools);
+
+        // Pull tools from any MCP servers the block opts into. Each remote tool is
+        // namespaced as `mcp_<server>__<tool>` so it cannot collide with a native one.
+        // Failures connecting to an MCP server are logged inside the loader and the
+        // run continues with whatever subset succeeded.
+        List<String> mcpServerNames = asStringList(cfg, "mcp_servers");
+        List<Tool> mcpTools = (mcpToolLoader != null && !mcpServerNames.isEmpty())
+            ? mcpToolLoader.loadFor(mcpServerNames) : List.of();
+
+        List<Tool> tools = new ArrayList<>(nativeTools.size() + mcpTools.size());
+        tools.addAll(nativeTools);
+        tools.addAll(mcpTools);
         List<ToolDefinition> toolDefs = tools.stream()
             .map(t -> new ToolDefinition(t.name(), t.description(), t.inputSchema(objectMapper)))
             .toList();
@@ -247,10 +296,13 @@ public class AgentWithToolsBlock implements Block {
             .build();
 
         DefaultToolExecutor executor = new DefaultToolExecutor(
-            toolRegistry, toolCtx, objectMapper, auditRepository);
+            toolRegistry, toolCtx, objectMapper, auditRepository, mcpTools);
 
         log.info("agent_with_tools[{}]: model={} tools={} workingDir={}",
             blockConfig.getId(), model, allowedTools, workingDir);
+        // Free VRAM from other Ollama models before this block claims the GPU — see
+        // matching call in OrchestratorBlock for the rationale (8 GB GPU thrashing).
+        llmClient.unloadOllamaModelsExcept(model);
         ToolUseResponse response = llmClient.completeWithTools(request, executor);
 
         List<String> toolCallsMade = response.toolCallHistory().stream()
@@ -265,7 +317,115 @@ public class AgentWithToolsBlock implements Block {
         out.put("total_output_tokens", response.totalOutputTokens());
         out.put("total_cost_usd", response.totalCostUsd());
         out.put("tool_calls_made", toolCallsMade);
+        // Capture what the agent actually changed on disk so the run-detail UI can
+        // show "files +X/−Y" instead of forcing the operator to dig into the working
+        // tree manually. Fail-soft: empty git repo / git unavailable → fields absent.
+        out.putAll(captureGitChanges(workingDir));
         return out;
+    }
+
+    /**
+     * Runs {@code git diff --numstat HEAD} + {@code git ls-files --others} in
+     * {@code workingDir} and returns:
+     * <ul>
+     *   <li>{@code files_changed} — {@code [{path, insertions, deletions, status}]} per file</li>
+     *   <li>{@code diff_summary} — short human string e.g. {@code "5 файлов, +120 −30"}</li>
+     * </ul>
+     * <p>Returns {@link Map#of()} on any failure or when the directory has no changes.
+     * Untracked files count as new with {@code insertions=<line count>, deletions=0}.
+     */
+    Map<String, Object> captureGitChanges(Path workingDir) {
+        String inside = execGit(workingDir, 5, "rev-parse", "--is-inside-work-tree").trim();
+        if (!"true".equalsIgnoreCase(inside)) return Map.of();
+
+        List<Map<String, Object>> files = new ArrayList<>();
+        int totalIns = 0;
+        int totalDel = 0;
+
+        // Modified / deleted tracked files
+        String numstat = execGit(workingDir, 10, "diff", "--numstat", "HEAD").trim();
+        for (String line : numstat.split("\n")) {
+            if (line.isBlank()) continue;
+            String[] parts = line.split("\t");
+            if (parts.length < 3) continue;
+            int ins = parseIntOrZero(parts[0]);
+            int del = parseIntOrZero(parts[1]);
+            String path = parts[2];
+            String status;
+            if (ins == 0 && del > 0 && !java.nio.file.Files.exists(workingDir.resolve(path))) {
+                status = "deleted";
+            } else {
+                status = "modified";
+            }
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("path", path);
+            entry.put("insertions", ins);
+            entry.put("deletions", del);
+            entry.put("status", status);
+            files.add(entry);
+            totalIns += ins;
+            totalDel += del;
+        }
+
+        // Untracked new files
+        String untracked = execGit(workingDir, 5, "ls-files", "--others", "--exclude-standard").trim();
+        for (String relPath : untracked.split("\n")) {
+            if (relPath.isBlank()) continue;
+            Path p = workingDir.resolve(relPath);
+            int lineCount = 0;
+            try {
+                if (java.nio.file.Files.isRegularFile(p)) {
+                    try (java.util.stream.Stream<String> s =
+                            java.nio.file.Files.lines(p, java.nio.charset.StandardCharsets.UTF_8)) {
+                        lineCount = (int) s.count();
+                    }
+                }
+            } catch (Exception ignored) { /* binary file or read error — count as 0 */ }
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("path", relPath);
+            entry.put("insertions", lineCount);
+            entry.put("deletions", 0);
+            entry.put("status", "new");
+            files.add(entry);
+            totalIns += lineCount;
+        }
+
+        if (files.isEmpty()) return Map.of();
+
+        String summary = String.format("%d %s, +%d −%d",
+            files.size(),
+            files.size() == 1 ? "файл" : "файлов",
+            totalIns, totalDel);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("files_changed", files);
+        result.put("diff_summary", summary);
+        return result;
+    }
+
+    private static int parseIntOrZero(String s) {
+        try { return Integer.parseInt(s.trim()); } catch (Exception e) { return 0; }
+    }
+
+    private String execGit(Path workingDir, int timeoutSec, String... args) {
+        try {
+            List<String> cmd = new ArrayList<>(args.length + 1);
+            cmd.add("git");
+            for (String a : args) cmd.add(a);
+            ProcessBuilder pb = new ProcessBuilder(cmd);
+            pb.directory(workingDir.toFile());
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            boolean finished = p.waitFor(timeoutSec, java.util.concurrent.TimeUnit.SECONDS);
+            if (!finished) {
+                p.destroyForcibly();
+                return "";
+            }
+            return new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            log.debug("git {} failed: {}", String.join(" ", args), e.getMessage());
+            return "";
+        }
     }
 
     private static String asRequiredString(Map<String, Object> cfg, String key) {
@@ -385,6 +545,87 @@ public class AgentWithToolsBlock implements Block {
      * <p>Files are read via {@link FileSystemCache#getRead}/{@code putRead} so a later
      * explicit {@code Read} of the same path inside the agent is a cache hit.
      */
+    /** Cap on RAG section size so it doesn't drown the rest of the prompt. */
+    private static final int RAG_INJECTION_MAX_CHARS = 6_000;
+    private static final int RAG_INJECTION_TOP_K = 3;
+
+    /**
+     * When {@code auto_inject_rag: true} in YAML, embeds the task description and
+     * prepends the top-K most relevant code chunks as a {@code ## Релевантный код}
+     * section. This gives the agent a head-start view of WHERE in the codebase its
+     * change is going to land — without waiting for it to Grep/Glob 5-10 iterations.
+     *
+     * <p>No-op when: knowledge layer is disabled, no project context, search returns
+     * zero hits, or task description is empty.
+     */
+    private String prependRagHits(String userMessage, Map<String, Object> cfg, Map<String, Object> input) {
+        if (!asBool(cfg, "auto_inject_rag", false)) return userMessage;
+        if (knowledgeBase == null) return userMessage;
+        String slug = com.workflow.project.ProjectContext.get();
+        if (slug == null || slug.isBlank()) return userMessage;
+
+        String query = pickSearchQuery(cfg, input);
+        if (query == null || query.isBlank()) return userMessage;
+
+        try {
+            java.util.List<com.workflow.knowledge.KnowledgeHit> hits =
+                knowledgeBase.search(slug, query, RAG_INJECTION_TOP_K);
+            if (hits.isEmpty()) return userMessage;
+            StringBuilder sb = new StringBuilder();
+            sb.append("## Релевантный код (top-").append(hits.size())
+              .append(" семантически)\n\n");
+            int totalChars = 0;
+            for (com.workflow.knowledge.KnowledgeHit h : hits) {
+                String header = "### " + h.path() + ':' + h.startLine() + '-' + h.endLine() + "\n```\n";
+                String tail = "\n```\n\n";
+                int budget = RAG_INJECTION_MAX_CHARS - totalChars - header.length() - tail.length();
+                if (budget <= 0) break;
+                String content = h.content();
+                if (content.length() > budget) content = content.substring(0, budget) + "\n…[truncated]";
+                sb.append(header).append(content).append(tail);
+                totalChars += header.length() + content.length() + tail.length();
+            }
+            sb.append("---\n\n");
+            return sb + userMessage;
+        } catch (Exception e) {
+            log.debug("auto_inject_rag skipped: {}", e.getMessage());
+            return userMessage;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private String pickSearchQuery(Map<String, Object> cfg, Map<String, Object> input) {
+        Object q = cfg.get("auto_search_query");
+        if (q != null && !q.toString().isBlank()) {
+            // Resolve ${...} placeholders against block outputs.
+            if (stringInterpolator != null) {
+                try { return stringInterpolator.interpolate(q.toString(), null, input); }
+                catch (Exception ignored) { return q.toString(); }
+            }
+            return q.toString();
+        }
+        // Fallback: pull task_md.to_be from inputs if present.
+        Object taskMd = input.get("task_md");
+        if (taskMd instanceof Map<?, ?> m) {
+            Object toBe = m.get("to_be");
+            if (toBe != null && !toBe.toString().isBlank()) {
+                String s = toBe.toString();
+                return s.length() > 1500 ? s.substring(0, 1500) : s;
+            }
+            Object title = m.get("title");
+            if (title != null && !title.toString().isBlank()) return title.toString();
+        }
+        return null;
+    }
+
+    private static boolean asBool(Map<String, Object> cfg, String key, boolean def) {
+        Object v = cfg.get(key);
+        if (v == null) return def;
+        if (v instanceof Boolean b) return b;
+        String s = v.toString().trim().toLowerCase();
+        return s.equals("true") || s.equals("yes") || s.equals("1");
+    }
+
     private String prependPreloadedFiles(String userMessage, Map<String, Object> cfg,
                                           Map<String, Object> input, Path workingDir) {
         Object pf = cfg.get("preload_from");
@@ -549,5 +790,89 @@ public class AgentWithToolsBlock implements Block {
 
         sb.append("\n---\n\n## Основная задача\n\n").append(userMessage);
         return sb.toString();
+    }
+
+    /** Detects whether the current invocation came back from a build or tests failure. */
+    @SuppressWarnings("unchecked")
+    private static boolean hasBuildOrTestFailure(Map<String, Object> input) {
+        Object raw = input.get("_loopback");
+        if (!(raw instanceof Map<?, ?> lb)) return false;
+        for (String key : new String[]{
+                "test_failures", "build_stderr", "build_stdout", "build_exit", "build_output"}) {
+            Object v = lb.get(key);
+            if (v != null && !v.toString().isBlank()) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Builds a narrow root-cause-first prompt for a build/test loopback iteration.
+     * Replaces the full task spec entirely — for 8B models the verbose context drowns
+     * the actual error. The prompt insists on understanding WHY the failure happened
+     * (missing enum value? renamed method? obsolete test?) before patching, so the
+     * model doesn't just paper over the symptom.
+     */
+    @SuppressWarnings("unchecked")
+    private static String buildFocusedFailurePrompt(Map<String, Object> input) {
+        Map<String, Object> lb = (Map<String, Object>) input.get("_loopback");
+        StringBuilder sb = new StringBuilder();
+        sb.append("# FOCUSED FIX — build or tests are broken\n\n");
+        sb.append("Предыдущая реализация сломала компиляцию или тесты. Сейчас твоя ЕДИНСТВЕННАЯ задача —\n");
+        sb.append("разблокировать сборку. НЕ переписывай фичу, НЕ рефакторь несвязанный код.\n\n");
+        sb.append("## ROOT-CAUSE FIRST — не патчь текст, разберись ПОЧЕМУ упало\n");
+        sb.append("Перед любым изменением:\n");
+        sb.append("1. Найди упомянутый в ошибке символ (имя класса/метода/enum/поля) через Grep по ВСЕМУ\n");
+        sb.append("   working_dir. Где он определён? Где используется?\n");
+        sb.append("2. Определи природу проблемы:\n");
+        sb.append("   - Символ ВООБЩЕ отсутствует (никогда не существовал) → надо добавить в production code.\n");
+        sb.append("   - Символ был удалён/переименован, тест ссылается на старое имя → или восстановить, или\n");
+        sb.append("     обновить тест под новое имя — выбирай по интенту изменения.\n");
+        sb.append("   - Тест проверяет поведение, которого больше нет (устарел) → удалить тест.\n");
+        sb.append("   - Опечатка в имени (case, плюрализация) → исправить опечатку.\n");
+        sb.append("   - Изменилась сигнатура метода / тип поля → синхронизировать вызов с определением.\n");
+        sb.append("3. Только после понимания — делай МИНИМАЛЬНОЕ изменение. Один символ → одна правка.\n\n");
+        sb.append("## Что НЕЛЬЗЯ делать\n");
+        sb.append("- Переписывать классы/файлы целиком — добавь только то, чего не хватает.\n");
+        sb.append("- Переключать git ветки.\n");
+        sb.append("- Трогать не связанный с ошибкой код.\n");
+        sb.append("- Удалять тест \"чтобы прошло\", если он реально проверяет нужное поведение.\n");
+        sb.append("- Добавлять `@Ignore` / `@Disabled` чтобы скрыть проблему.\n\n");
+        sb.append("## Failure details\n");
+
+        Object tf = lb.get("test_failures");
+        Object bso = lb.get("build_stdout");
+        Object bse = lb.get("build_stderr");
+        Object bexit = lb.get("build_exit");
+        Object bo = lb.get("build_output");
+
+        if (tf != null && !tf.toString().isBlank()) {
+            sb.append("\n### Test output\n```\n").append(trimTail(tf.toString(), 3000)).append("\n```\n");
+        }
+        if (bse != null && !bse.toString().isBlank()) {
+            sb.append("\n### Build stderr\n```\n").append(trimTail(bse.toString(), 2000)).append("\n```\n");
+        }
+        if (bso != null && !bso.toString().isBlank()) {
+            sb.append("\n### Build stdout\n```\n").append(trimTail(bso.toString(), 2000)).append("\n```\n");
+        }
+        if (bo != null && !bo.toString().isBlank()) {
+            sb.append("\n### Build output\n```\n").append(trimTail(bo.toString(), 2000)).append("\n```\n");
+        }
+        if (bexit != null) {
+            sb.append("\nExit code: `").append(bexit).append("`\n");
+        }
+
+        Object iter = lb.get("iteration");
+        if (iter != null) {
+            sb.append("\nЭто loopback итерация **").append(iter).append("**. ");
+            sb.append("Если предыдущая попытка не сработала — значит ты неправильно определил root cause. ");
+            sb.append("Перепроверь: символ действительно отсутствует, или ты искал не в той директории/пакете?\n");
+        }
+        return sb.toString();
+    }
+
+    /** Returns the tail of {@code text} truncated to {@code maxChars}, with a leading marker. */
+    private static String trimTail(String text, int maxChars) {
+        if (text.length() <= maxChars) return text;
+        return "... [head trimmed] ...\n" + text.substring(text.length() - maxChars);
     }
 }

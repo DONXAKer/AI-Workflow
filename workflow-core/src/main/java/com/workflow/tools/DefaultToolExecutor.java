@@ -30,23 +30,58 @@ public class DefaultToolExecutor implements ToolExecutor {
     private static final Logger log = LoggerFactory.getLogger(DefaultToolExecutor.class);
 
     private final ToolRegistry registry;
+    private final java.util.Map<String, Tool> extras;
     private final ToolContext context;
     private final ObjectMapper objectMapper;
     private final ToolCallAuditRepository auditRepository;
 
+    /**
+     * Per-invocation dedup of read-only tool calls. Small models inside agentic loops
+     * sometimes lose track of what they've already searched and re-issue the same
+     * Glob/Read/Grep dozens of times — observed 11× repeats of one Glob in FEAT-AP-002
+     * impl_server. We return the prior result with a warning header so the agent sees
+     * "you've already done this" and (hopefully) breaks out of the loop.
+     *
+     * <p>Only idempotent read-only tools are deduped. Write/Edit/Bash always run
+     * fresh — repeated writes may be intentional (e.g. progress markers).
+     */
+    private static final java.util.Set<String> READ_ONLY_TOOLS = java.util.Set.of(
+        "Read", "Glob", "Grep", "Search");
+    private final java.util.Map<String, ToolResult> dedupCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, Integer> dedupCount = new java.util.concurrent.ConcurrentHashMap<>();
+
     public DefaultToolExecutor(ToolRegistry registry, ToolContext context) {
-        this(registry, context, null, null);
+        this(registry, context, null, null, java.util.List.of());
     }
 
     public DefaultToolExecutor(ToolRegistry registry, ToolContext context,
                                ObjectMapper objectMapper,
                                ToolCallAuditRepository auditRepository) {
+        this(registry, context, objectMapper, auditRepository, java.util.List.of());
+    }
+
+    /**
+     * @param extras per-invocation tools that aren't Spring beans (e.g. {@code McpToolWrapper}
+     *               instances built on-demand from the YAML's {@code mcp_servers} list).
+     *               These shadow {@link ToolRegistry} entries with the same name.
+     */
+    public DefaultToolExecutor(ToolRegistry registry, ToolContext context,
+                               ObjectMapper objectMapper,
+                               ToolCallAuditRepository auditRepository,
+                               java.util.List<Tool> extras) {
         if (registry == null) throw new IllegalArgumentException("registry required");
         if (context == null) throw new IllegalArgumentException("context required");
         this.registry = registry;
         this.context = context;
         this.objectMapper = objectMapper;
         this.auditRepository = auditRepository;
+        if (extras == null || extras.isEmpty()) {
+            this.extras = java.util.Map.of();
+        } else {
+            java.util.Map<String, Tool> m = new java.util.HashMap<>();
+            for (Tool t : extras) if (t != null) m.put(t.name(), t);
+            this.extras = java.util.Map.copyOf(m);
+        }
     }
 
     @Override
@@ -55,25 +90,51 @@ public class DefaultToolExecutor implements ToolExecutor {
         String toolName = call.toolName();
         ToolResult result;
 
-        if (!registry.has(toolName)) {
+        Tool tool = extras.get(toolName);
+        if (tool == null && registry.has(toolName)) tool = registry.get(toolName);
+        if (tool == null) {
             result = ToolResult.error(call.id(),
-                "unknown tool: '" + toolName + "' — available: " + registeredNames());
-        } else {
-            Tool tool = registry.get(toolName);
-            try {
-                String content = tool.execute(context, call.input());
-                result = ToolResult.ok(call.id(), content == null ? "" : content);
-            } catch (ToolInvocationException e) {
-                log.debug("Tool {} rejected input: {}", toolName, e.getMessage());
-                result = ToolResult.error(call.id(), e.getMessage());
-            } catch (Exception e) {
-                log.warn("Tool {} crashed: {}", toolName, e.getMessage(), e);
-                result = ToolResult.error(call.id(),
-                    "tool '" + toolName + "' failed: " + e.getClass().getSimpleName()
-                        + (e.getMessage() == null ? "" : ": " + e.getMessage()));
+                "unknown tool: '" + toolName + "' — available: " + availableNames());
+            persistAudit(call, result, (int) (System.currentTimeMillis() - started));
+            return result;
+        }
+
+        // Dedup gate for read-only tools — see field javadoc for the why.
+        String dedupKey = null;
+        if (READ_ONLY_TOOLS.contains(toolName)) {
+            dedupKey = toolName + ":" + (call.input() == null ? "" : call.input().toString());
+            ToolResult cached = dedupCache.get(dedupKey);
+            if (cached != null) {
+                int hits = dedupCount.merge(dedupKey, 1, Integer::sum);
+                String warning = String.format(
+                    "[DUPLICATE call — same %s args already executed %d×. Use a different query or move on. " +
+                    "Cached result below.]\n\n%s", toolName, hits, cached.content());
+                result = cached.isError()
+                    ? ToolResult.error(call.id(), warning)
+                    : ToolResult.ok(call.id(), warning);
+                log.info("Tool {} dedup hit (#{} for key)", toolName, hits);
+                persistAudit(call, result, (int) (System.currentTimeMillis() - started));
+                return result;
             }
         }
 
+        try {
+            String content = tool.execute(context, call.input());
+            result = ToolResult.ok(call.id(), content == null ? "" : content);
+        } catch (ToolInvocationException e) {
+            log.debug("Tool {} rejected input: {}", toolName, e.getMessage());
+            result = ToolResult.error(call.id(), e.getMessage());
+        } catch (Exception e) {
+            log.warn("Tool {} crashed: {}", toolName, e.getMessage(), e);
+            result = ToolResult.error(call.id(),
+                "tool '" + toolName + "' failed: " + e.getClass().getSimpleName()
+                    + (e.getMessage() == null ? "" : ": " + e.getMessage()));
+        }
+
+        if (dedupKey != null) {
+            dedupCache.put(dedupKey, result);
+            dedupCount.put(dedupKey, 1);
+        }
         persistAudit(call, result, (int) (System.currentTimeMillis() - started));
         return result;
     }
@@ -108,7 +169,10 @@ public class DefaultToolExecutor implements ToolExecutor {
         return s.length() <= max ? s : s.substring(0, max) + "\n... [truncated]";
     }
 
-    private String registeredNames() {
-        return registry.all().stream().map(Tool::name).sorted().toList().toString();
+    private String availableNames() {
+        java.util.Set<String> names = new java.util.TreeSet<>();
+        for (Tool t : registry.all()) names.add(t.name());
+        names.addAll(extras.keySet());
+        return names.toString();
     }
 }

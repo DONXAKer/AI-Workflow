@@ -29,7 +29,7 @@ function BlockNodeImpl(props: NodeProps<BlockNodeT>) {
       className={clsx(
         'group relative bg-slate-900 border rounded-lg pt-2.5 pb-2 px-3 min-w-[180px] max-w-[260px] text-left shadow-sm transition-colors overflow-hidden',
         data.selected ? 'border-blue-500 ring-2 ring-blue-500/40' : 'border-slate-700',
-        errors.length > 0 && 'border-red-600 ring-2 ring-red-600/30',
+        errors.some(e => !e.severity || e.severity === 'ERROR') && 'border-red-600 ring-2 ring-red-600/30',
         data.disabled && 'opacity-50',
       )}
     >
@@ -70,16 +70,33 @@ function BlockNodeImpl(props: NodeProps<BlockNodeT>) {
         {data.hasCondition && (
           <Ban className="w-3 h-3 text-amber-400" aria-label="condition" />
         )}
-        {errors.length > 0 && (
-          <span
-            data-testid={`block-error-${data.blockId}`}
-            className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-red-900/60 text-red-200"
-            title={errors.map(e => `${e.code}: ${e.message}`).join('\n')}
-          >
-            <AlertCircle className="w-3 h-3" />
-            {errors.length}
-          </span>
-        )}
+        {(() => {
+          const realErrs = errors.filter(e => !e.severity || e.severity === 'ERROR')
+          const warns = errors.filter(e => e.severity === 'WARN')
+          return (
+            <>
+              {realErrs.length > 0 && (
+                <span
+                  data-testid={`block-error-${data.blockId}`}
+                  className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-red-900/60 text-red-200"
+                  title={realErrs.map(e => `${e.code}: ${e.message}`).join('\n')}
+                >
+                  <AlertCircle className="w-3 h-3" />
+                  {realErrs.length}
+                </span>
+              )}
+              {warns.length > 0 && (
+                <span
+                  className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-900/60 text-amber-200"
+                  title={warns.map(e => `${e.code}: ${e.message}`).join('\n')}
+                >
+                  <AlertCircle className="w-3 h-3" />
+                  {warns.length}
+                </span>
+              )}
+            </>
+          )
+        })()}
       </div>
 
       {/* Add-after button — visible on hover */}

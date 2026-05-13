@@ -27,6 +27,8 @@ export interface ToolCallEntry {
   isError: boolean
   durationMs: number
   outputText?: string
+  /** ISO timestamp — used to filter calls per loopback iteration (ToolCallAudit.iteration resets per invocation). */
+  timestamp?: string
 }
 
 export type LlmProvider = 'OPENROUTER' | 'CLAUDE_CODE_CLI' | 'OLLAMA' | 'AITUNNEL'
@@ -43,12 +45,16 @@ export interface LlmCallEntry {
   provider?: LlmProvider
   /** Stop reason: end_turn / tool_calls / length / MAX_ITERATIONS / BUDGET_EXCEEDED / ERROR. */
   finishReason?: string
+  /** ISO timestamp — used to filter per loopback iteration. */
+  timestamp?: string
 }
 
 export interface StoredBlockOutput {
   blockId: string
   outputJson: string
   inputJson?: string
+  /** Loopback iteration index this output belongs to (0 = first run, 1+ = after loopback). */
+  iteration?: number
 }
 
 export interface BlockEvent {
@@ -630,4 +636,20 @@ export interface McpServer {
   enabled: boolean
   createdAt?: string
   updatedAt?: string
+}
+
+/** Live state of an async project-reindex job. UI polls /reindex/status to refresh this. */
+export interface ReindexJobStatus {
+  success?: boolean
+  state: 'idle' | 'running' | 'done' | 'failed'
+  processed: number
+  total: number
+  current_file: string
+  skipped_unchanged?: number
+  removed_orphan?: number
+  chunks_upserted?: number
+  took_ms?: number
+  error?: string
+  updated_at?: string
+  qdrant_enabled?: boolean
 }

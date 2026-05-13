@@ -9,12 +9,13 @@
 #
 # Usage:
 #   1. cp docs/feature-pipeline-template.yaml <your-project>/.ai-workflow/pipelines/feature.yaml
-#   2. sed -i 's#/projects/PROJECT_NAME#/projects/<your-project>#g' <feature.yaml>
+#   2. sed -i 's#/projects/<example>#/projects/<your-project>#g' <feature.yaml>
 #   3. Adjust `bash_allowlist` / `build` / `tests` blocks for your build tool
 #      (gradle/maven/npm/cargo/etc).
-#   4. Remove or rename project-specific blocks: `validate_contracts`,
+#   4. Remove or adapt project-specific blocks: `validate_contracts`,
 #      `ai_simulator`, the entire `[needs_bp]` Unreal sub-flow.
-#   5. Validate: POST /api/pipelines/validate?configPath=<path>
+#   5. (One-time per project) reindex source for RAG: Settings → Code Index → Reindex now
+#   6. Validate: POST /api/pipelines/validate?configPath=<path>
 #
 # Provider routing:
 #   Use `tier: smart` (analytical: analysis/plan/review/agent_verify) and
@@ -22,6 +23,14 @@
 #   ModelPresetResolver to OpenRouter or Claude CLI based on the project's
 #   `defaultProvider` setting. Don't pin literal model names like `qwen/...`
 #   or `claude-sonnet-4-6` unless you're sure you want a single provider.
+#
+# Recent platform features used here:
+#   - `prose_fallback`        — orchestrator accepts Markdown when model refuses JSON
+#   - `focus_on_failure`      — narrow root-cause prompt on build/tests loopback
+#   - `auto_inject_rag`       — prepends top-3 Qdrant chunks to user_message
+#   - `mcp_servers`           — agent_with_tools sees remote MCP tools alongside native
+#   - Merged shell+verify     — shell_exec self-triggers loopback on `success: false`
+#                                (no separate `verify` wrapper needed)
 # =============================================================================
 
 name: "feature"
@@ -32,14 +41,14 @@ description: |
     task.md
     → analysis (smart, approval) [drops acceptance_checklist for verify_acceptance]
     → clarification (smart, conditional on needs_clarification)
-    → branch_setup (approval) → create_branch
-    → plan_impl (orchestrator)
-    → impl_server (agent_with_tools, tier:flash)
+    → create_branch (approval, names + creates branch atomically)
+    → plan_impl (orchestrator, RAG-injected)
+    → impl_server (agent_with_tools, RAG-injected)
     → review_impl (orchestrator + loopback to impl)
-    → build → verify_build (loopback)
-    → tests → verify_tests (loopback)
-    → validate_contracts → verify_contracts (loopback) [PROJECT: contracts/validator]
-    → ai_simulator → verify_ai_simulator (loopback) [PROJECT: smoke runner]
+    → build (self-loopback on success=false)
+    → tests (self-loopback on success=false)
+    → validate_contracts (self-loopback) [PROJECT: contracts/validator]
+    → ai_simulator (self-loopback) [PROJECT: smoke runner]
     → verify_acceptance (agent_verify on acceptance_checklist + loopback)
     → [needs_bp] check_unreal (approval) → plan_bp → impl_bp → review_bp [PROJECT: UE5]
     → diff_review (approval) → commit → git_push → pr_link
@@ -48,11 +57,6 @@ defaults:
   agent:
     temperature: 0.3
     maxTokens: 8192
-
-# This template has a two-pass structure (server impl/verify → blueprint impl/verify)
-# that does not fit the linear phase ordering. Project copies that drop the
-# blueprint sub-flow can remove this flag and rely on default phase validation.
-phase_check: false
 
 pipeline:
   - id: "task_md"
@@ -67,6 +71,17 @@ pipeline:
       tier: "smart"
       temperature: 0.3
       maxTokens: 8192
+      system_prompt: |
+        ACCEPTANCE CHECKLIST RULES — строго соблюдай при генерации acceptance_checklist:
+
+        Каждый пункт checklist ДОЛЖЕН быть верифицируем через Read/Grep/Bash по исходному коду.
+        ЗАПРЕЩЕНО добавлять пункты, требующие:
+        - Запуска полного UE Editor / UE build (в pipeline нет UE binary)
+        - Post-pipeline шагов (перемещение task файла в done/ — делает блок commit)
+        - Внешних GUI-инструментов, ручного тестирования gameplay, визуальной проверки
+        - Бинарных assets (.uasset, .umap) — их нельзя проверить grep/read
+
+        Фокус: корректность кода, API-контракты, изменения модели данных, покрытие тестами.
     approval: true
     depends_on: ["task_md"]
     config: {}
@@ -80,44 +95,32 @@ pipeline:
     condition: "$.analysis.needs_clarification == true"
     config: {}
 
-  - id: "branch_setup"
+  # Merged branch_setup + create_branch — operator approves the shell script
+  # once, then names and creates the branch atomically.
+  - id: "create_branch"
     block: "shell_exec"
     approval: true
     depends_on: ["analysis"]
     config:
-      # TODO: replace /projects/PROJECT_NAME with your project path (matches Project.workingDir)
-      working_dir: "/projects/PROJECT_NAME"
+      working_dir: "/projects/<example>"   # TODO: project working dir
       command: |
         FEAT_ID='${task_md.feat_id}'
         TITLE='${task_md.title}'
         TITLE_SLUG=$(echo "$TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | cut -c1-40)
-        SUGGESTED="feat/$FEAT_ID-$TITLE_SLUG"
-        CURRENT=$(git branch --show-current)
-        echo "Текущая ветка : $CURRENT"
-        echo "Предлагаемая  : $SUGGESTED"
-        printf '{"branch_name":"%s","base_branch":"main","current_branch":"%s"}' "$SUGGESTED" "$CURRENT"
-      allow_nonzero_exit: false
-      timeout_sec: 30
-
-  - id: "create_branch"
-    block: "shell_exec"
-    approval: false
-    depends_on: ["branch_setup"]
-    config:
-      working_dir: "/projects/PROJECT_NAME"
-      command: |
-        BRANCH=$(echo '${branch_setup.stdout}' | grep -o '"branch_name":"[^"]*"' | head -1 | cut -d'"' -f4)
-        if [ -z "$BRANCH" ]; then BRANCH='${task_md.feat_id}'; fi
+        BRANCH="feat/$FEAT_ID-$TITLE_SLUG"
+        if [ -z "$FEAT_ID" ] || [ "$FEAT_ID" = "null" ]; then BRANCH="$FEAT_ID"; fi
+        echo "Создаю ветку: $BRANCH"
         git fetch --quiet origin main 2>/dev/null || true
         if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
-          echo "Ветка $BRANCH уже существует, переключаемся"
+          echo "Ветка $BRANCH уже существует, переключаюсь"
           git checkout "$BRANCH"
         else
           git checkout -b "$BRANCH" main 2>/dev/null || git checkout -b "$BRANCH"
           echo "Создана ветка $BRANCH"
         fi
+        printf '{"branch_name":"%s","base_branch":"main"}' "$BRANCH"
       allow_nonzero_exit: false
-      timeout_sec: 30
+      timeout_sec: 60
 
   # ── Orchestrator: plan ────────────────────────────────────────────────────
   - id: "plan_impl"
@@ -131,15 +134,16 @@ pipeline:
     config:
       mode: "plan"
       max_iterations: 22
-      working_dir: "/projects/PROJECT_NAME"
+      working_dir: "/projects/<example>"
       budget_usd_cap: 0.8
       context_blocks: ["task_md", "analysis"]
+      # Accept Markdown if the model refuses JSON; parser extracts goal/approach/files.
+      prose_fallback: true
+      # Inject top-3 RAG chunks (semantic search on task.md.to_be) — drops package
+      # path hallucination on first-pass plans.
+      auto_inject_rag: true
 
   # ── Implementation ────────────────────────────────────────────────────────
-  # tier: smart by default — sonnet/glm-4.6 — keeps attention across long tasks.
-  # For small/cheap tasks switch to tier: flash (haiku/glm-4.7-flash). Note:
-  # flash skips details on big features (e.g. forgets one enum entry across files),
-  # which causes review_impl loopbacks. smart costs ~3× but rarely loops.
   - id: "impl_server"
     block: "agent_with_tools"
     agent:
@@ -179,18 +183,19 @@ pipeline:
         Implement the change. Do NOT switch branches — pipeline already prepared one.
         After each edit run your build's compile check (gradle/mvn/npm/etc).
         Do NOT mark done until compilation succeeds.
+        Do NOT move task files from tasks/active/ to tasks/done/ — the commit block does this.
 
         ## IF YOU ARE RUNNING ON A LOOPBACK ITERATION
         Check `_loopback` in your input map — if present, the previous review/verify
         flagged specific issues. Read EVERY entry in `_loopback.issues` (or
         `_loopback.failed_items` for verify_acceptance loopback) and address each one
-        explicitly before finishing. Do NOT just re-do the original work — fix the
-        listed gaps. Use Grep across the whole project to locate enums/strings/configs
-        the issue refers to; many DoD violations are in YAML/contract files, not just
-        in code.
-      working_dir: "/projects/PROJECT_NAME"
+        explicitly. Use Grep across the whole project to locate enums/strings/configs
+        the issue refers to.
+      working_dir: "/projects/<example>"
       budget_usd_cap: 5
-      allowed_tools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
+      focus_on_failure: true        # narrow prompt on build/tests loopback
+      auto_inject_rag: true         # top-3 RAG chunks in user_message
+      allowed_tools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "Search"]
       # TODO: adapt allowlist to your build tool. Examples for gradle Java:
       bash_allowlist:
         - "Bash(git status)"
@@ -201,7 +206,7 @@ pipeline:
         - "Bash(cat *)"
         - "Bash(ls*)"
         - "Bash(find*)"
-        - "Bash(grep*)"   # used by loopback flow to locate flagged enums/strings
+        - "Bash(grep*)"
         - "Bash(./gradlew compileJava*)"
         - "Bash(./gradlew test*)"
         - "Bash(cd * && ./gradlew compileJava*)"
@@ -221,29 +226,29 @@ pipeline:
     depends_on: ["impl_server"]
     config:
       mode: "review"
-      max_iterations: 30
+      max_iterations: 50
       plan_block: "plan_impl"
-      working_dir: "/projects/PROJECT_NAME"
+      working_dir: "/projects/<example>"
       budget_usd_cap: 1.5
+      prose_fallback: true
     verify:
       checks: []
       on_fail:
         action: "loopback"
         target: "impl_server"
-        max_iterations: 2
+        max_iterations: 3
         inject_context:
           retry_instruction: "$.review_impl.retry_instruction"
           issues: "$.review_impl.issues"
 
-  # ── Build & tests ─────────────────────────────────────────────────────────
+  # ── Build & tests (merged shell+verify — self-loopback on success=false) ──
   # TODO: adapt build/tests to your stack (gradle/mvn/npm/cargo).
-  # Auto-detection covers gradle (./gradlew), system gradle, mvn, npm.
   - id: "build"
     block: "shell_exec"
     approval: false
     depends_on: ["review_impl"]
     config:
-      working_dir: "/projects/PROJECT_NAME/server"   # TODO: point at your source root
+      working_dir: "/projects/<example>/server"   # TODO: source root
       command: |
         echo "=== Build auto-detect ==="
         BUILD_OK=0
@@ -264,34 +269,23 @@ pipeline:
         fi
       allow_nonzero_exit: true
       timeout_sec: 600
-
-  - id: "verify_build"
-    block: "verify"
-    approval: false
-    depends_on: ["build"]
-    config: {}
-    verify:
-      subject: "build"
-      checks:
-        - field: "success"
-          rule: "equals"
-          value: true
-      on_fail:
-        action: "loopback"
-        target: "impl_server"
-        max_iterations: 2
-        inject_context:
-          build_stderr: "$.build.stderr"
-          build_stdout: "$.build.stdout"
-          build_exit: "$.build.exit_code"
+    on_failure:
+      action: "loopback"
+      target: "impl_server"
+      max_iterations: 2
+      inject_context:
+        build_stderr: "$.build.stderr"
+        build_stdout: "$.build.stdout"
+        build_exit: "$.build.exit_code"
 
   - id: "tests"
     block: "shell_exec"
     approval: false
-    depends_on: ["verify_build"]
+    depends_on: ["build"]
     config:
-      working_dir: "/projects/PROJECT_NAME/server"   # TODO: point at your test root
+      working_dir: "/projects/<example>/server"   # TODO: test root
       command: |
+        set -o pipefail
         if [ -f "gradlew" ]; then
           ./gradlew test --no-daemon -q 2>&1 | tail -40
         elif [ -f "pom.xml" ]; then
@@ -303,37 +297,26 @@ pipeline:
         fi
       allow_nonzero_exit: true
       timeout_sec: 600
+    on_failure:
+      action: "loopback"
+      target: "impl_server"
+      max_iterations: 2
+      inject_context:
+        test_failures: "$.tests.stdout"
 
-  - id: "verify_tests"
-    block: "verify"
-    approval: false
-    depends_on: ["tests"]
-    config: {}
-    verify:
-      subject: "tests"
-      checks:
-        - field: "success"
-          rule: "equals"
-          value: true
-      on_fail:
-        action: "loopback"
-        target: "impl_server"
-        max_iterations: 2
-        inject_context:
-          test_failures: "$.tests.stdout"
-
-  # ── PROJECT-SPECIFIC: contract validator ─────────────────────────────────
-  # Remove this block if your project doesn't have an external contract validator.
-  # Self-skips when contracts/ has no diff or when contracts/validator/ is missing.
+  # ── PROJECT-SPECIFIC: contract validator (merged with verify) ────────────
+  # Remove if your project has no external contract validator. Self-skips when
+  # contracts/ has no diff or contracts/validator/ is missing.
   - id: "validate_contracts"
     block: "shell_exec"
     approval: false
-    depends_on: ["verify_tests"]
+    depends_on: ["tests"]
     config:
-      working_dir: "/projects/PROJECT_NAME"
+      working_dir: "/projects/<example>"
       command: |
+        set -o pipefail
         if git diff --quiet main..HEAD -- contracts/ 2>/dev/null; then
-          echo "No contracts/ changes vs main — skipping validator"
+          echo "No contracts/ changes vs main — skipping"
           exit 0
         fi
         if [ ! -d "contracts/validator" ]; then
@@ -341,45 +324,30 @@ pipeline:
           exit 0
         fi
         cd contracts/validator
-        if command -v uv >/dev/null 2>&1; then
-          uv run python validator.py
-        elif command -v python3 >/dev/null 2>&1; then
-          python3 validator.py
-        else
-          echo "Neither uv nor python3 available — skipping"
-          exit 0
+        if command -v uv >/dev/null 2>&1; then uv run python validator.py
+        elif command -v python3 >/dev/null 2>&1; then python3 validator.py
+        else echo "Neither uv nor python3 available — skipping"; exit 0
         fi
       allow_nonzero_exit: true
       timeout_sec: 120
+    on_failure:
+      action: "loopback"
+      target: "impl_server"
+      max_iterations: 2
+      inject_context:
+        contract_errors: "$.validate_contracts.stdout"
 
-  - id: "verify_contracts"
-    block: "verify"
-    approval: false
-    depends_on: ["validate_contracts"]
-    config: {}
-    verify:
-      subject: "validate_contracts"
-      checks:
-        - field: "success"
-          rule: "equals"
-          value: true
-      on_fail:
-        action: "loopback"
-        target: "impl_server"
-        max_iterations: 2
-        inject_context:
-          contract_errors: "$.validate_contracts.stdout"
-
-  # ── PROJECT-SPECIFIC: end-to-end smoke ───────────────────────────────────
-  # Replace with your project's E2E runner. Self-skips if the gradle task
-  # `runAISimulator` isn't registered.
+  # ── PROJECT-SPECIFIC: end-to-end smoke (merged with verify) ──────────────
+  # Replace with your project's E2E runner. Self-skips if `runAISimulator` task
+  # isn't registered.
   - id: "ai_simulator"
     block: "shell_exec"
     approval: false
-    depends_on: ["verify_contracts"]
+    depends_on: ["validate_contracts"]
     config:
-      working_dir: "/projects/PROJECT_NAME/server"   # TODO: point at runnable root
+      working_dir: "/projects/<example>/server"
       command: |
+        set -o pipefail
         if [ ! -f "gradlew" ]; then
           echo "gradlew not found — skipping smoke"
           exit 0
@@ -391,44 +359,29 @@ pipeline:
         ./gradlew runAISimulator --no-daemon -q 2>&1 | tail -60
       allow_nonzero_exit: true
       timeout_sec: 600
-
-  - id: "verify_ai_simulator"
-    block: "verify"
-    approval: false
-    depends_on: ["ai_simulator"]
-    config: {}
-    verify:
-      subject: "ai_simulator"
-      checks:
-        - field: "success"
-          rule: "equals"
-          value: true
-      on_fail:
-        action: "loopback"
-        target: "impl_server"
-        max_iterations: 1
-        inject_context:
-          ai_sim_output: "$.ai_simulator.stdout"
+    on_failure:
+      action: "loopback"
+      target: "impl_server"
+      max_iterations: 1
+      inject_context:
+        ai_sim_output: "$.ai_simulator.stdout"
 
   # ── Acceptance gate ──────────────────────────────────────────────────────
-  # Verifies each item in analysis.acceptance_checklist via Read/Grep/Bash.
-  # Loopback to impl_server with the failed items injected as context — Claude
-  # gets concrete corrective work, not a generic "try again".
   - id: "verify_acceptance"
     block: "agent_verify"
     agent:
       tier: "smart"
       maxTokens: 8192
     approval: false
-    depends_on: ["analysis", "verify_ai_simulator"]
+    depends_on: ["analysis", "ai_simulator"]
     config:
       subject: "analysis"
-      working_dir: "/projects/PROJECT_NAME"
+      working_dir: "/projects/<example>"
       pass_threshold: "critical_and_important"
       max_iterations: 12
       budget_usd_cap: 1.5
-      allowed_tools: ["Read", "Grep", "Glob", "Bash"]
-      # TODO: adapt to your test/build tool
+      allowed_tools: ["Read", "Grep", "Glob", "Bash", "Search"]
+      # TODO: adapt allowlist to your test/build tool
       bash_allowlist:
         - "Bash(./gradlew test*)"
         - "Bash(./gradlew compileJava*)"
@@ -449,17 +402,17 @@ pipeline:
         passed_items: "$.verify_acceptance.passed_items"
         _previous_verification_results: "$.verify_acceptance.verification_results"
 
-  # ── PROJECT-SPECIFIC: Unreal Engine 5 Blueprint sub-flow ────────────────
-  # Remove this whole [check_unreal → plan_bp → impl_bp → review_bp] section
-  # if your project doesn't have an Unreal client. Gated on task_md.needs_bp
-  # heuristic — set to true in tasks that require BP/UMG work.
+  # ── PROJECT-SPECIFIC: Unreal Engine Blueprint sub-flow ───────────────────
+  # Gated on `task_md.needs_bp == true` via keyword heuristics (configurable in
+  # Settings → Integrations → UNREAL → heuristicKeywords, or built-in defaults).
+  # REMOVE this entire section if your project has no Unreal/Blueprint side.
   - id: "check_unreal"
     block: "shell_exec"
     approval: true
     condition: "$.task_md.needs_bp == true"
     depends_on: ["verify_acceptance"]
     config:
-      working_dir: "/projects/PROJECT_NAME"
+      working_dir: "/projects/<example>"
       command: |
         if command -v nc >/dev/null 2>&1 && nc -z -w2 host.docker.internal 55557 2>/dev/null; then
           echo "Unreal MCP available on host.docker.internal:55557"
@@ -482,9 +435,11 @@ pipeline:
     config:
       mode: "plan"
       max_iterations: 15
-      working_dir: "/projects/PROJECT_NAME"
+      working_dir: "/projects/<example>"
       budget_usd_cap: 1
       context_blocks: ["task_md", "review_impl"]
+      prose_fallback: true
+      auto_inject_rag: true
 
   - id: "impl_bp"
     block: "agent_with_tools"
@@ -508,10 +463,13 @@ pipeline:
         Definition of Done: ${plan_bp.definition_of_done}
 
         Server side already done. Now implement the BP/UMG side via MCP.
-        Do NOT modify server/ files. Do NOT switch branches.
-      working_dir: "/projects/PROJECT_NAME"
+        Native tools cannot edit .uasset / .umap files — use mcp_unreal-mcp__*
+        tools for all Blueprint operations. Do NOT modify server/ files.
+      working_dir: "/projects/<example>"
       budget_usd_cap: 3
-      allowed_tools: ["Read", "Glob", "Grep", "Bash"]
+      auto_inject_rag: true
+      allowed_tools: ["Read", "Glob", "Grep", "Bash", "Search"]
+      mcp_servers: ["unreal-mcp"]    # configured under Settings → MCP servers
       bash_allowlist:
         - "Bash(git status)"
         - "Bash(git diff*)"
@@ -531,8 +489,9 @@ pipeline:
       mode: "review"
       max_iterations: 15
       plan_block: "plan_bp"
-      working_dir: "/projects/PROJECT_NAME"
+      working_dir: "/projects/<example>"
       budget_usd_cap: 1
+      prose_fallback: true
     verify:
       checks: []
       on_fail:
@@ -550,7 +509,7 @@ pipeline:
     # When the BP sub-flow is removed, change depends_on to ["verify_acceptance"]
     depends_on: ["review_bp"]
     config:
-      working_dir: "/projects/PROJECT_NAME"
+      working_dir: "/projects/<example>"
       command: |
         echo "=== Изменённые файлы ==="
         git status --short
@@ -568,13 +527,12 @@ pipeline:
     approval: false
     depends_on: ["diff_review"]
     config:
-      working_dir: "/projects/PROJECT_NAME"
+      working_dir: "/projects/<example>"
       command: |
-        cd /projects/PROJECT_NAME
+        cd /projects/<example>
         git config core.autocrlf false
 
         # TODO: adapt scope. server/ + contracts/ + tasks/ covers a typical layout.
-        # Use 'git add -u .' for all-tracked, or list specific dirs.
         git add -u -- server/ contracts/ tasks/
 
         # Auto-move task.md from active/ to done/ in same commit.
@@ -593,7 +551,6 @@ pipeline:
           exit 1
         fi
 
-        # Single-quoted vars: title can contain literal " without breaking git.
         TITLE='${task_md.feat_id}: ${task_md.title}'
         BODY='Implements acceptance criteria from ${task_md.slug}.md'
         if git commit -m "$TITLE" -m "$BODY"; then
@@ -610,7 +567,7 @@ pipeline:
     approval: false
     depends_on: ["commit"]
     config:
-      working_dir: "/projects/PROJECT_NAME"
+      working_dir: "/projects/<example>"
       command: |
         BRANCH=$(git branch --show-current)
         if [ -z "$BRANCH" ] || [ "$BRANCH" = "main" ]; then
@@ -630,7 +587,7 @@ pipeline:
     approval: false
     depends_on: ["git_push"]
     config:
-      working_dir: "/projects/PROJECT_NAME"
+      working_dir: "/projects/<example>"
       command: |
         BRANCH=$(git branch --show-current)
         REMOTE=$(git remote get-url origin 2>/dev/null || echo "")
@@ -638,7 +595,7 @@ pipeline:
           echo "No origin remote — skipping PR URL"
           exit 0
         fi
-        # Convert git@github.com:owner/repo.git or https://github.com/owner/repo.git → owner/repo
+        # owner/repo from git@github.com:owner/repo.git or https://github.com/owner/repo.git
         SLUG=$(echo "$REMOTE" | sed -E 's#(git@github\.com:|https?://github\.com/)([^/]+/[^/.]+)(\.git)?#\2#' | sed 's#\.git$##')
         if echo "$SLUG" | grep -q '^[^/]\+/[^/]\+$'; then
           URL="https://github.com/$SLUG/compare/main...$BRANCH?expand=1"

@@ -87,6 +87,9 @@ public class PipelineRunner {
 
     private Map<String, Block> blockRegistry;
 
+    @Autowired(required = false)
+    private com.workflow.knowledge.ProjectIndexService projectIndexService;
+
     /** Tracks virtual threads running active pipelines for cancellation */
     private final ConcurrentHashMap<UUID, Thread> runningThreads = new ConcurrentHashMap<>();
 
@@ -697,10 +700,22 @@ public class PipelineRunner {
     }
 
     /**
-     * Checks whether a CI block output represents a failure.
+     * Checks whether a block output represents a failure that should trigger on_failure.
+     * Two detection paths:
+     * <ul>
+     *   <li>CI-style: {@code output.status} or {@code output.overall_status} matches one
+     *       of {@code on_failure.failed_statuses} (gitlab_ci / github_actions outputs).</li>
+     *   <li>Shell-style: {@code output.success == false} — lets shell_exec blocks self-trigger
+     *       loopback on non-zero exit, replacing the verify_build / verify_tests / etc.
+     *       wrapper pattern with a single block that owns its own retry.</li>
+     * </ul>
      */
     private boolean isCiFailure(Map<String, Object> output, OnFailureConfig cfg) {
         if (output == null || cfg == null) return false;
+        // Shell-style: explicit success=false is unambiguous, no failed_statuses needed.
+        Object success = output.get("success");
+        if (Boolean.FALSE.equals(success)) return true;
+        // CI-style: check named status against allowed failure tokens.
         String status = null;
         for (String key : new String[]{"status", "overall_status"}) {
             Object val = output.get(key);
@@ -1164,6 +1179,74 @@ public class PipelineRunner {
         if (wsHandler != null) wsHandler.sendRunComplete(run.getId(), "COMPLETED");
         if (metrics != null) metrics.recordRunComplete("completed");
         log.info("Pipeline run {} completed successfully", run.getId());
+
+        // Re-index files that the pipeline just modified so the next run starts
+        // with an up-to-date semantic index. Fire-and-forget; failures here must
+        // not affect the operator's view of the completed run.
+        scheduleProjectReindexDelta(run);
+    }
+
+    /**
+     * After a successful run, if the project working dir is a git repo and the latest
+     * commit touched files we know about, ask {@link com.workflow.knowledge.ProjectIndexService}
+     * to re-embed only those files. {@code @Async} on the service method keeps this
+     * off the run-completion thread.
+     */
+    private void scheduleProjectReindexDelta(PipelineRun run) {
+        if (projectIndexService == null || !projectIndexService.isAvailable()) return;
+        String slug = run.getProjectSlug();
+        if (slug == null || slug.isBlank()) return;
+        try {
+            java.util.List<String> changed = changedFilesSinceParent(run);
+            if (changed.isEmpty()) return;
+            projectIndexService.reindexDeltaAsync(slug, changed);
+        } catch (Exception e) {
+            log.debug("Post-run reindex delta skipped: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Runs {@code git diff --name-only HEAD~1 HEAD} in the project's working dir to
+     * list paths the run's commit modified. Returns an empty list when the project
+     * isn't a git repo or git isn't available.
+     */
+    private java.util.List<String> changedFilesSinceParent(PipelineRun run) {
+        try {
+            // Look up the project's working dir from the same lookup ProjectIndexService uses.
+            String slug = run.getProjectSlug();
+            com.workflow.project.Project p = projectIndexService == null ? null
+                : findProjectBySlug(slug);
+            String workingDir = p == null ? null : p.getWorkingDir();
+            if (workingDir == null || workingDir.isBlank()) return java.util.List.of();
+            ProcessBuilder pb = new ProcessBuilder("git", "diff", "--name-only", "HEAD~1", "HEAD");
+            pb.directory(new java.io.File(workingDir));
+            pb.redirectErrorStream(true);
+            Process proc = pb.start();
+            if (!proc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                proc.destroyForcibly();
+                return java.util.List.of();
+            }
+            String out = new String(proc.getInputStream().readAllBytes(),
+                java.nio.charset.StandardCharsets.UTF_8);
+            java.util.List<String> paths = new java.util.ArrayList<>();
+            for (String line : out.split("\n")) {
+                String t = line.trim();
+                if (!t.isEmpty()) paths.add(t);
+            }
+            return paths;
+        } catch (Exception e) {
+            return java.util.List.of();
+        }
+    }
+
+    private com.workflow.project.Project findProjectBySlug(String slug) {
+        if (slug == null) return null;
+        try {
+            return projectRepository == null ? null
+                : projectRepository.findBySlug(slug).orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private void handleCancellation(PipelineRun run) {

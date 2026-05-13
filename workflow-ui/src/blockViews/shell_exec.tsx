@@ -1,15 +1,13 @@
 import { useState } from 'react'
-import { CheckCircle, XCircle, ChevronDown, ChevronRight, Terminal } from 'lucide-react'
+import { CheckCircle, XCircle } from 'lucide-react'
 import clsx from 'clsx'
 import type { BlockViewSpec } from './index'
 
 function ShellOutput({ out }: { out: Record<string, unknown> }) {
-  const [showCmd, setShowCmd] = useState(false)
   const success = out.success === true
   const exitCode = typeof out.exit_code === 'number' ? out.exit_code : null
   const stdout = typeof out.stdout === 'string' ? out.stdout.trim() : ''
   const stderr = typeof out.stderr === 'string' ? out.stderr.trim() : ''
-  const cmd = typeof out.command === 'string' ? out.command.trim() : ''
 
   return (
     <div className="space-y-3">
@@ -39,22 +37,6 @@ function ShellOutput({ out }: { out: Record<string, unknown> }) {
         <div>
           <p className="text-[10px] uppercase tracking-wide text-red-400 font-medium mb-1">stderr</p>
           <OutputPre text={stderr} error />
-        </div>
-      )}
-
-      {cmd && (
-        <div>
-          <button type="button" onClick={() => setShowCmd(v => !v)}
-            className="flex items-center gap-1.5 text-[10px] text-slate-500 hover:text-slate-300 transition-colors uppercase tracking-wide">
-            {showCmd ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            <Terminal className="w-3 h-3" />
-            Команда
-          </button>
-          {showCmd && (
-            <pre className="mt-1 text-[10px] text-slate-400 bg-slate-950/60 border border-slate-800 rounded px-2 py-1.5 whitespace-pre-wrap break-all">
-              {cmd}
-            </pre>
-          )}
         </div>
       )}
     </div>

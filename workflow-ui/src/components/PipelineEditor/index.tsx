@@ -175,7 +175,7 @@ export function PipelineEditor() {
         saving={editor.saving}
         validating={editor.validating}
         validatedClean={editor.validatedClean}
-        errorCount={editor.errors.length}
+        errorCount={editor.errors.filter(e => !e.severity || e.severity === 'ERROR').length}
         canUndo={editor.canUndo}
         presentPhases={presentPhases}
         phaseCheckEnabled={editor.current?.phase_check !== false}

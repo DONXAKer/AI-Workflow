@@ -279,4 +279,77 @@ class OrchestratorBlockTest {
     private static Map<String, Object> item(String id, boolean passed, String evidence, String fix) {
         return Map.of("id", id, "passed", passed, "evidence", evidence, "fix", fix);
     }
+
+    // ── fixCommonJsonErrors ───────────────────────────────────────────────────
+    // Repairs the typo patterns we've actually observed from LLM responses.
+    // The regression these tests guard: glm-4.6 on FEAT-AP-002 emitted
+    // `"approach "Объявить...` (missing colon, trailing space inside key),
+    // which a strict Jackson parse rejects.
+
+    @Test
+    void fixup_missingColonAfterKey_glm46_realFailure() {
+        // Exact pattern observed in OrchestratorBlock raw-text log
+        String broken = "{\"requirement\": \"r1\", \"approach \"Объявить DELEGATE\", \"files\": \"f.h\"}";
+        String fixed = OrchestratorBlock.fixCommonJsonErrors(broken);
+        assertEquals("{\"requirement\": \"r1\", \"approach\": \"Объявить DELEGATE\", \"files\": \"f.h\"}", fixed);
+    }
+
+    @Test
+    void fixup_missingColonAfterKey_asciiKey() {
+        String broken = "{\"foo\": 1, \"bar \"baz\", \"qux\": 3}";
+        String fixed = OrchestratorBlock.fixCommonJsonErrors(broken);
+        assertEquals("{\"foo\": 1, \"bar\": \"baz\", \"qux\": 3}", fixed);
+    }
+
+    @Test
+    void fixup_smartQuotes_replaced() {
+        String broken = "{“goal”: “do X”}";
+        String fixed = OrchestratorBlock.fixCommonJsonErrors(broken);
+        assertEquals("{\"goal\": \"do X\"}", fixed);
+    }
+
+    @Test
+    void fixup_trailingComma_removed() {
+        String broken = "{\"items\": [1, 2, 3,], \"k\": \"v\",}";
+        String fixed = OrchestratorBlock.fixCommonJsonErrors(broken);
+        assertEquals("{\"items\": [1, 2, 3], \"k\": \"v\"}", fixed);
+    }
+
+    @Test
+    void fixup_preservesValidJson() {
+        String valid = "{\"goal\": \"a\", \"approach\": \"do x\"}";
+        assertEquals(valid, OrchestratorBlock.fixCommonJsonErrors(valid));
+    }
+
+    @Test
+    void fixup_doesNotMatchInsideStringValues() {
+        // `"word "` inside a value must NOT trigger the missing-colon fix.
+        // Anchored at key-position (after { , or \n) so we don't rewrite this.
+        String input = "{\"text\": \"a word \"more\" inside\", \"k\": 1}";
+        String fixed = OrchestratorBlock.fixCommonJsonErrors(input);
+        // Either unchanged or at least the value content not corrupted —
+        // assert that key list survives.
+        assertTrue(fixed.contains("\"text\""));
+        assertTrue(fixed.contains("\"k\": 1"));
+    }
+
+    @Test
+    void fixup_handlesNullAndEmpty() {
+        assertNull(OrchestratorBlock.fixCommonJsonErrors(null));
+        assertEquals("", OrchestratorBlock.fixCommonJsonErrors(""));
+    }
+
+    @Test
+    void fixup_realFailureRoundtripsThroughJackson() throws Exception {
+        // End-to-end: the actual broken JSON from FEAT-AP-002 must become parseable.
+        String broken = "{\"goal\": \"g\", \"requirements_coverage\": [{\"requirement\": \"r\", \"approach \"Объявить\", \"files\": \"f\"}]}";
+        String fixed = OrchestratorBlock.fixCommonJsonErrors(broken);
+        ObjectMapper om = new ObjectMapper();
+        Map<?,?> parsed = om.readValue(fixed, Map.class);
+        assertEquals("g", parsed.get("goal"));
+        List<?> rc = (List<?>) parsed.get("requirements_coverage");
+        assertEquals(1, rc.size());
+        Map<?,?> first = (Map<?,?>) rc.get(0);
+        assertEquals("Объявить", first.get("approach"));
+    }
 }

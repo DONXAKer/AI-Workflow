@@ -83,6 +83,28 @@ public class TaskMdInputBlock implements Block {
         "needs_bp", "needs_server", "needs_client", "needs_contract_change"
     );
 
+    /**
+     * Built-in keyword fallback used when no UNREAL integration is configured or its
+     * {@code extraConfigJson.heuristicKeywords} parsing fails. Without this, every
+     * heuristic flag stays {@code false} on installs that never set up UNREAL
+     * (most non-game projects). Keywords are intentionally broad — false positives
+     * are cheap, false negatives skip needed sub-flows (e.g. impl_bp for UE tasks).
+     */
+    private static final Map<String, List<String>> DEFAULT_HEURISTIC_KEYWORDS = Map.of(
+        "needs_bp", List.of(
+            "blueprint", "wbp_", "umg", "widget", "battle hud", "hud",
+            ".uasset", ".umap", "unreal editor", "blueprint class", "actor",
+            "umg widget", "ue editor"),
+        "needs_client", List.of(
+            "client/", "client\\", "ue5", "ue 5", "unreal engine", "unreal",
+            "frontend"),
+        "needs_server", List.of(
+            "server/", "server\\", "spring boot", "gradle", "maven",
+            "rest endpoint", "websocket", "backend"),
+        "needs_contract_change", List.of(
+            "openapi", "asyncapi", "json schema", "contract", "api contract")
+    );
+
     @Autowired(required = false) private StringInterpolator stringInterpolator;
     @Autowired(required = false) private IntegrationConfigRepository integrationConfigRepository;
     @Autowired(required = false) private ObjectMapper objectMapper;
@@ -264,7 +286,7 @@ public class TaskMdInputBlock implements Block {
             if (cfg.isEmpty()) {
                 cfg = integrationConfigRepository.findByType(IntegrationType.UNREAL).stream().findFirst();
             }
-            if (cfg.isEmpty() || cfg.get().getExtraConfigJson() == null) return Map.of();
+            if (cfg.isEmpty() || cfg.get().getExtraConfigJson() == null) return DEFAULT_HEURISTIC_KEYWORDS;
             ObjectMapper mapper = objectMapper != null ? objectMapper : new ObjectMapper();
             Map<String, Object> extra = mapper.readValue(
                 cfg.get().getExtraConfigJson(), new TypeReference<>() {});
@@ -276,7 +298,8 @@ public class TaskMdInputBlock implements Block {
             // UNREAL integration not configured or schema constraint mismatch — use defaults
             log.debug("task_md_input: UNREAL heuristic keywords unavailable: {}", e.getMessage());
         }
-        return Map.of();
+        // Fall through to built-in defaults so heuristics never silently degrade to all-false.
+        return DEFAULT_HEURISTIC_KEYWORDS;
     }
 
     private List<String> sectionKeysFound(Map<String, String> sections) {

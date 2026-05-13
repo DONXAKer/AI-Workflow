@@ -107,15 +107,24 @@ export default function RunPage() {
       const data = await api.getRun(runId)
       setRun(data)
 
-      // Build blockId → parsed output/input maps from persisted outputs (if available)
+      // Build maps from persisted outputs. Each loopback iteration has its own
+      // BlockOutput row (stored.iteration: 0, 1, 2, …). We keep TWO indexes so
+      // both per-iteration and "latest for blockId" lookups stay cheap:
+      //   - outputByIter: Map<"blockId:iter", output>  — used for iteration rows
+      //   - outputMap:    Map<"blockId", output>       — used for currentBlock/approval
+      //     fallbacks where iteration is unknown (always stores the LAST entry).
       const outputMap = new Map<string, Record<string, unknown>>()
       const inputMap = new Map<string, Record<string, unknown>>()
+      const outputByIter = new Map<string, Record<string, unknown>>()
+      const inputByIter = new Map<string, Record<string, unknown>>()
       if (data.outputs?.length) {
         for (const stored of data.outputs) {
+          const iterKey = `${stored.blockId}:${stored.iteration ?? 0}`
           try {
             const parsed = JSON.parse(stored.outputJson)
             if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
               outputMap.set(stored.blockId, parsed as Record<string, unknown>)
+              outputByIter.set(iterKey, parsed as Record<string, unknown>)
             }
           } catch {
             // ignore malformed JSON
@@ -125,6 +134,7 @@ export default function RunPage() {
               const parsed = JSON.parse(stored.inputJson)
               if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
                 inputMap.set(stored.blockId, parsed as Record<string, unknown>)
+                inputByIter.set(iterKey, parsed as Record<string, unknown>)
               }
             } catch {
               // ignore malformed JSON
@@ -143,37 +153,79 @@ export default function RunPage() {
         // Multiple events per blockId are possible when a block ran more than once (loopbacks).
         const eventBlockIds = new Set(data.events.map((e: BlockEvent) => e.blockId))
         completedStatuses = data.events.map((event: BlockEvent) => {
-          const output = outputMap.get(event.blockId)
+          const iter = event.iteration ?? 0
+          const iterKey = `${event.blockId}:${iter}`
+          // Per-iteration output first, fall back to latest if missing (legacy rows).
+          const output = outputByIter.get(iterKey) ?? outputMap.get(event.blockId)
           const isSkipped = output?._skipped === true
           const isReused = !isSkipped && output?._reused === true
           // A paused block has its output saved but isn't yet "complete" — override status below
           const status: BlockStatus['status'] = isSkipped ? 'skipped' : isReused ? 'reused' : 'complete'
           const bs: BlockStatus = {
             blockId: event.blockId,
-            iteration: event.iteration ?? 0,
+            iteration: iter,
             status,
             output,
-            input: inputMap.get(event.blockId),
+            input: inputByIter.get(iterKey) ?? inputMap.get(event.blockId),
           }
           if (event.durationMs != null) bs.durationMs = event.durationMs
           if (event.startedAt) bs.startedAt = event.startedAt
           if (event.completedAt) bs.completedAt = event.completedAt
           return bs
         })
-        // If the current block is already in events but run is paused/running, correct its status
+        // If the current block is already in events: either it's the same iteration
+        // (paused waiting for approval) or a NEW iteration (loopback re-entered the
+        // block). Distinguish by run status — RUNNING with currentBlock matching an
+        // existing terminal row means a fresh iteration just started; append a new
+        // running row instead of silently merging with the old completed one.
         if (data.currentBlock && eventBlockIds.has(data.currentBlock)) {
           if (data.status === 'PAUSED_FOR_APPROVAL') {
             completedStatuses = completedStatuses.map(b =>
               b.blockId === data.currentBlock ? { ...b, status: 'awaiting_approval' } : b
             )
+          } else if (data.status === 'RUNNING') {
+            const existingForBlock = completedStatuses
+              .filter(b => b.blockId === data.currentBlock)
+            const lastIter = Math.max(...existingForBlock.map(b => b.iteration ?? 0))
+            const allTerminal = existingForBlock.every(b =>
+              b.status === 'complete' || b.status === 'skipped' || b.status === 'reused')
+            if (allTerminal) {
+              // Infer iter+1 start time from the latest event's completedAt — same
+              // logic as the "not yet in events" branch below.
+              let inferredStart: string | undefined
+              for (let i = data.events.length - 1; i >= 0; i--) {
+                const e = data.events[i] as BlockEvent
+                if (e.completedAt) { inferredStart = e.completedAt; break }
+              }
+              if (!inferredStart) inferredStart = data.startedAt
+              const next: BlockStatus = {
+                blockId: data.currentBlock,
+                iteration: lastIter + 1,
+                status: 'running',
+              }
+              if (inferredStart) next.startedAt = inferredStart
+              completedStatuses.push(next)
+            }
           }
         } else if (data.currentBlock) {
-          // Current block not yet in events — append with live status
+          // Current block not yet in events — append with live status. Estimate
+          // its startedAt from the latest completed block's completedAt (the
+          // current block starts immediately after); fall back to the run's
+          // startedAt if there are no prior events. Without this, LiveDuration
+          // has nothing to count from and the column renders "—".
           const currentStatus: BlockStatus['status'] =
             data.status === 'PAUSED_FOR_APPROVAL' ? 'awaiting_approval' :
             data.status === 'RUNNING' ? 'running' :
             data.status === 'FAILED' ? 'failed' : 'pending'
-          completedStatuses.push({ blockId: data.currentBlock, status: currentStatus })
+          let inferredStart: string | undefined
+          for (let i = data.events.length - 1; i >= 0; i--) {
+            const e = data.events[i] as BlockEvent
+            if (e.completedAt) { inferredStart = e.completedAt; break }
+          }
+          if (!inferredStart) inferredStart = data.startedAt
+          const cur: BlockStatus = { blockId: data.currentBlock, status: currentStatus }
+          if (inferredStart) cur.startedAt = inferredStart
+          completedStatuses.push(cur)
         }
       } else {
         // Fallback: hydrate from completedBlocks (no events = old backend / legacy run)
@@ -190,13 +242,16 @@ export default function RunPage() {
               input: inputMap.get(blockId),
             }
           })
-        // Add current block if not already completed
+        // Add current block if not already completed — same startedAt-inference
+        // story as the events path: without it, LiveDuration has no clock to tick.
         if (data.currentBlock && !data.completedBlocks?.includes(data.currentBlock)) {
           const currentStatus: BlockStatus['status'] =
             data.status === 'PAUSED_FOR_APPROVAL' ? 'awaiting_approval' :
             data.status === 'RUNNING' ? 'running' :
             data.status === 'FAILED' ? 'failed' : 'pending'
-          completedStatuses.push({ blockId: data.currentBlock, status: currentStatus })
+          const cur: BlockStatus = { blockId: data.currentBlock, status: currentStatus }
+          if (data.startedAt) cur.startedAt = data.startedAt
+          completedStatuses.push(cur)
         }
       }
 
@@ -233,22 +288,42 @@ export default function RunPage() {
       const startedAt = new Date().toISOString()
       addLog(`Блок запущен: ${blockIdLabel(blockId)}`)
       setBlockStatuses(prev => {
-        const exists = prev.find(b => b.blockId === blockId)
-        if (exists) return prev.map(b => b.blockId === blockId ? { ...b, status: 'running', startedAt } : b)
-        return [...prev, { blockId, status: 'running', startedAt }]
+        // Find the LAST row with this blockId — if it's terminal, this BLOCK_STARTED
+        // is a loopback retry; APPEND a new row instead of overwriting the previous
+        // iteration's output. Otherwise it's an in-progress update (race), so update.
+        let lastIdx = -1
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].blockId === blockId) { lastIdx = i; break }
+        }
+        const isTerminal = (s: BlockStatus['status']) =>
+          s === 'complete' || s === 'skipped' || s === 'reused' || s === 'failed'
+        if (lastIdx >= 0 && !isTerminal(prev[lastIdx].status)) {
+          return prev.map((b, i) => i === lastIdx ? { ...b, status: 'running', startedAt } : b)
+        }
+        const nextIteration = lastIdx >= 0 ? (prev[lastIdx].iteration ?? 0) + 1 : 0
+        return [...prev, { blockId, status: 'running', startedAt, iteration: nextIteration }]
       })
       setRun(prev => prev ? { ...prev, status: 'RUNNING', currentBlock: blockId } : prev)
     } else if (msg.type === 'BLOCK_COMPLETE') {
       const blockId = msg.blockId ?? 'unknown'
       addLog(`Блок завершён: ${blockIdLabel(blockId)} — ${msg.status ?? 'done'}`)
       const completedAt = new Date().toISOString()
-      setBlockStatuses(prev =>
-        prev.map(b =>
-          b.blockId === blockId
+      setBlockStatuses(prev => {
+        // Update the LAST row for this blockId that's still running — earlier
+        // iterations (terminal status) must stay untouched.
+        let lastIdx = -1
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].blockId === blockId && (prev[i].status === 'running' || prev[i].status === 'awaiting_approval' || prev[i].status === 'pending')) {
+            lastIdx = i; break
+          }
+        }
+        if (lastIdx < 0) return prev
+        return prev.map((b, i) =>
+          i === lastIdx
             ? { ...b, status: msg.status === 'SKIPPED' ? 'skipped' : 'complete', output: msg.output, completedAt }
             : b
         )
-      )
+      })
       // Refresh tool calls immediately so iteration expand buttons appear without waiting for polling
       if (runId) {
         api.getRunToolCalls(runId).then(setToolCalls).catch(() => {})
@@ -292,13 +367,15 @@ export default function RunPage() {
       })
     } else if (msg.type === 'BLOCK_PROGRESS') {
       const blockId = msg.blockId ?? 'unknown'
-      setBlockStatuses(prev =>
-        prev.map(b =>
-          b.blockId === blockId
-            ? { ...b, progressDetail: msg.detail }
-            : b
-        )
-      )
+      setBlockStatuses(prev => {
+        // Progress applies to the CURRENT iteration only (the last running row).
+        let lastIdx = -1
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].blockId === blockId && prev[i].status === 'running') { lastIdx = i; break }
+        }
+        if (lastIdx < 0) return prev
+        return prev.map((b, i) => i === lastIdx ? { ...b, progressDetail: msg.detail } : b)
+      })
     } else if (msg.type === 'BLOCK_SKIPPED') {
       const blockId = msg.blockId ?? 'unknown'
       addLog(`Блок пропущен: ${blockIdLabel(blockId)}`)

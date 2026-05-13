@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { Save, Loader2, AlertCircle, Trash2, Plug, FileCode, FolderOpen, Brain, Globe, Terminal, Cpu } from 'lucide-react'
+import { Save, Loader2, AlertCircle, Trash2, Plug, FileCode, FolderOpen, Brain, Globe, Terminal, Cpu, Database, RefreshCw } from 'lucide-react'
 import { api } from '../../services/api'
 import { ProjectInfo, IntegrationConfig, LlmProvider } from '../../types'
 import PathInput from '../../components/PathInput'
@@ -28,6 +28,9 @@ export default function SettingsTab() {
   const [orchEnabled, setOrchEnabled] = useState(true)
   const [orchModel, setOrchModel] = useState('')
   const [orchExtra, setOrchExtra] = useState('')
+
+  const [indexStats, setIndexStats] = useState<{ file_count: number; qdrant_enabled: boolean } | null>(null)
+  const [reindexJob, setReindexJob] = useState<import('../../types').ReindexJobStatus | null>(null)
   const [defaultProvider, setDefaultProvider] = useState<LlmProvider>('OPENROUTER')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -38,10 +41,16 @@ export default function SettingsTab() {
     if (!slug) return
     setLoading(true)
     try {
-      const [projects, integs] = await Promise.all([
+      const [projects, integs, stats, jobStatus] = await Promise.all([
         api.listProjects(),
         api.listIntegrations(),
+        api.getIndexStats(slug).catch(() => ({ file_count: 0, qdrant_enabled: false })),
+        api.getReindexStatus(slug).catch(() => null),
       ])
+      setIndexStats(stats)
+      // Restore job status from server — survives page navigation. If a job is
+      // running, the polling effect below picks it up and shows live progress.
+      if (jobStatus) setReindexJob(jobStatus)
       const found = projects.find(p => p.slug === slug)
       if (found) {
         setProject(found)
@@ -63,6 +72,26 @@ export default function SettingsTab() {
   }, [slug])
 
   useEffect(() => { load() }, [load])
+
+  // Poll reindex job status while a job is in flight — keeps "currently indexing X"
+  // ticking even if the user navigated away from the page during the reindex.
+  useEffect(() => {
+    if (!slug || reindexJob?.state !== 'running') return
+    const id = setInterval(async () => {
+      try {
+        const status = await api.getReindexStatus(slug)
+        setReindexJob(status)
+        if (status.state === 'done') {
+          // Refresh static stats too — file_count likely changed
+          const stats = await api.getIndexStats(slug).catch(() => null)
+          if (stats) setIndexStats(stats)
+        }
+      } catch {
+        // transient error — keep polling
+      }
+    }, 1500)
+    return () => clearInterval(id)
+  }, [slug, reindexJob?.state])
 
   const save = async () => {
     if (!slug) return
@@ -386,6 +415,78 @@ export default function SettingsTab() {
             Сохранить
           </button>
         </div>
+      </div>
+
+      {/* Code index (RAG) */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <Database className="w-4 h-4 text-purple-400" />
+          <h3 className="text-sm font-medium text-slate-200">Индекс кода (RAG)</h3>
+        </div>
+        <p className="text-xs text-slate-500 mb-3">
+          Семантический индекс исходников проекта в Qdrant. Подключается к блокам через <code className="font-mono bg-slate-800 px-1 rounded">allowed_tools: ["Search"]</code> или <code className="font-mono bg-slate-800 px-1 rounded">auto_inject_rag: true</code>.
+        </p>
+        {!indexStats?.qdrant_enabled && (
+          <div className="flex items-start gap-2 bg-amber-950/30 border border-amber-800/40 rounded-lg px-3 py-2 mb-3">
+            <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-300">
+              Qdrant не настроен (<code className="font-mono">QDRANT_URL</code> не задан в backend). Запусти <code className="font-mono">docker-compose up -d qdrant</code> и пересобери workflow-core.
+            </p>
+          </div>
+        )}
+        <div className="flex items-center justify-between gap-3 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
+          <div className="text-xs text-slate-400">
+            Проиндексировано: <span className="font-mono text-slate-200">{indexStats?.file_count ?? 0}</span> файлов
+          </div>
+          <button
+            type="button"
+            disabled={reindexJob?.state === 'running' || !indexStats?.qdrant_enabled}
+            onClick={async () => {
+              if (!slug) return
+              try {
+                const job = await api.reindexProject(slug)
+                setReindexJob(job)
+              } catch (e) {
+                setReindexJob({ state: 'failed', processed: 0, total: 0, current_file: '',
+                  error: e instanceof Error ? e.message : 'unknown' })
+              }
+            }}
+            className="flex items-center gap-2 bg-purple-700 hover:bg-purple-600 disabled:bg-slate-700 disabled:text-slate-500 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+          >
+            {reindexJob?.state === 'running'
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <RefreshCw className="w-3.5 h-3.5" />}
+            {reindexJob?.state === 'running' ? 'Индексирование…' : 'Reindex now'}
+          </button>
+        </div>
+
+        {reindexJob?.state === 'running' && (
+          <div className="mt-2 space-y-1.5">
+            {reindexJob.total > 0 && (
+              <div className="w-full h-1.5 bg-slate-800 rounded overflow-hidden">
+                <div className="h-full bg-purple-500 transition-all"
+                  style={{ width: `${Math.min(100, Math.round((reindexJob.processed / reindexJob.total) * 100))}%` }} />
+              </div>
+            )}
+            <p className="text-[11px] text-slate-400 font-mono">
+              {reindexJob.processed}/{reindexJob.total || '?'}
+              {reindexJob.current_file && (
+                <span className="text-slate-500"> — индексирую: </span>
+              )}
+              <span className="text-slate-300">{reindexJob.current_file}</span>
+            </p>
+          </div>
+        )}
+        {reindexJob?.state === 'done' && (
+          <p className="text-xs text-green-400 mt-2 font-mono">
+            ✓ {reindexJob.processed} индексировано, {reindexJob.skipped_unchanged ?? 0} без изменений,
+            {' '}{reindexJob.removed_orphan ?? 0} удалено, {reindexJob.chunks_upserted ?? 0} чанков
+            {reindexJob.took_ms ? ` за ${Math.round(reindexJob.took_ms / 1000)}с` : ''}
+          </p>
+        )}
+        {reindexJob?.state === 'failed' && reindexJob.error && (
+          <p className="text-xs text-red-400 mt-2 font-mono">Ошибка: {reindexJob.error}</p>
+        )}
       </div>
 
       {/* Danger zone */}

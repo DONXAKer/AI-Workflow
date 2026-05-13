@@ -28,6 +28,11 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       YOUTRACK_URL: ${YOUTRACK_URL}
       YOUTRACK_TOKEN: ${YOUTRACK_TOKEN}
+      # Knowledge layer (project source RAG). qdrant service in same compose net.
+      QDRANT_URL: http://qdrant:6333
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text:v1.5}
+    depends_on:
+      - qdrant
 
   workflow-ui:
     build:
@@ -37,6 +42,18 @@ services:
     depends_on:
       - workflow-core
 
+  # Vector store for per-project source code RAG. Backed by an in-container
+  # volume — index is rebuilt automatically on first Search query (lazy) or
+  # via Project settings → Reindex now (manual).
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    restart: unless-stopped
+
 volumes:
   workflow-state:
   gradle-cache:
+  qdrant-data:

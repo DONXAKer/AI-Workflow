@@ -1117,6 +1117,10 @@ public class RunController {
             m.put("inputJson", c.getInputJson());
             m.put("isError", c.isError());
             m.put("durationMs", c.getDurationMs());
+            // Needed to disambiguate per-loopback-iteration in UI: ToolCallAudit.iteration
+            // resets per block invocation, so distinct loopback runs collide. Timestamp
+            // lets UI filter by BlockOutput.startedAt/completedAt window.
+            if (c.getTimestamp() != null) m.put("timestamp", c.getTimestamp().toString());
             if (c.getOutputText() != null && !c.getOutputText().isBlank()) {
                 m.put("outputText", c.getOutputText());
             }
@@ -1141,6 +1145,7 @@ public class RunController {
             m.put("tokensOut", c.getTokensOut());
             m.put("costUsd", c.getCostUsd());
             m.put("durationMs", c.getDurationMs());
+            if (c.getTimestamp() != null) m.put("timestamp", c.getTimestamp().toString());
             if (c.getProvider() != null) m.put("provider", c.getProvider().name());
             if (c.getFinishReason() != null) m.put("finishReason", c.getFinishReason());
             return m;

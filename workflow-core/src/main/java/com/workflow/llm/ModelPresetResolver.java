@@ -33,19 +33,24 @@ public class ModelPresetResolver {
     private static final Logger log = LoggerFactory.getLogger(ModelPresetResolver.class);
 
     private static final Map<String, String> OLLAMA_DEFAULTS = Map.of(
-        "smart",     "qwen2.5:7b",
-        "flash",     "qwen2.5:7b",
-        "fast",      "qwen2.5:7b",
-        "reasoning", "qwen2.5:7b",
-        "cheap",     "qwen2.5:7b"
+        // qwen2.5:7b emits zero tool_calls in agentic loops (empirical, FEAT-AP-002).
+        // qwen3_cline_roocode:8b is a Cline-tuned qwen3 that reliably calls Read/
+        // Write/Edit/Grep/Bash and handles structured JSON (incl. orchestrator schema).
+        // Used as the all-around default for analysis/clarification/planner/impl.
+        // For pure speed without tool-use, override per-block with agent.model.
+        "smart",     Models.OLLAMA_CLINE_ROOCODE,
+        "flash",     Models.OLLAMA_CLINE_ROOCODE,
+        "fast",      Models.OLLAMA_CLINE_ROOCODE,
+        "reasoning", Models.OLLAMA_CLINE_ROOCODE,
+        "cheap",     Models.OLLAMA_CLINE_ROOCODE
     );
 
     private static final Map<String, String> CLI_DEFAULTS = Map.of(
-        "smart",     "claude-sonnet-4-6",
-        "flash",     "claude-haiku-4-5",
-        "fast",      "claude-haiku-4-5",
-        "reasoning", "claude-opus-4-7",
-        "cheap",     "claude-haiku-4-5"
+        "smart",     Models.CLI_SONNET,
+        "flash",     Models.CLI_HAIKU,
+        "fast",      Models.CLI_HAIKU,
+        "reasoning", Models.CLI_OPUS,
+        "cheap",     Models.CLI_HAIKU
     );
 
     private static final Map<String, String> DEFAULTS = Map.ofEntries(
@@ -57,19 +62,19 @@ public class ModelPresetResolver {
         // under workflow.model-presets if your stack prefers different models.
         // NOTE: Anthropic models are reserved for the CLI path (CLI_DEFAULTS) — they
         // never appear here, so OpenRouter routing always picks an Anthropic-free model.
-        Map.entry("smart",        "z-ai/glm-4.6"),
-        Map.entry("flash",        "z-ai/glm-4.7-flash"),
+        Map.entry("smart",        Models.OR_SMART),
+        Map.entry("flash",        Models.OR_FLASH),
         // Legacy / extended presets
-        Map.entry("fast",         "google/gemini-2.5-flash-lite"),
-        Map.entry("reasoning",    "google/gemini-2.5-pro"),
-        Map.entry("cheap",        "openai/gpt-4o-mini"),
-        Map.entry("deepseek",     "deepseek/deepseek-chat-v3-0324"),
-        Map.entry("glm",          "z-ai/glm-5.1"),
-        Map.entry("gemini-pro",   "google/gemini-2.5-pro"),
-        Map.entry("gemini-flash", "google/gemini-2.0-flash-001"),
-        Map.entry("gpt4o",        "openai/gpt-4o"),
-        Map.entry("mistral",      "mistralai/mistral-large-2411"),
-        Map.entry("qwen",         "qwen/qwen-2.5-72b-instruct")
+        Map.entry("fast",         Models.OR_FAST),
+        Map.entry("reasoning",    Models.OR_REASONING),
+        Map.entry("cheap",        Models.OR_CHEAP),
+        Map.entry("deepseek",     Models.OR_DEEPSEEK),
+        Map.entry("glm",          Models.OR_GLM),
+        Map.entry("gemini-pro",   Models.OR_GEMINI_PRO),
+        Map.entry("gemini-flash", Models.OR_GEMINI_FLASH),
+        Map.entry("gpt4o",        Models.OR_GPT4O),
+        Map.entry("mistral",      Models.OR_MISTRAL),
+        Map.entry("qwen",         Models.OR_QWEN)
     );
 
     @Value("#{${workflow.model-presets:{:}}}")
@@ -133,7 +138,11 @@ public class ModelPresetResolver {
      */
     public String resolveOllama(String presetOrModel) {
         if (presetOrModel == null || presetOrModel.isBlank()) return OLLAMA_DEFAULTS.get("smart");
-        if (presetOrModel.contains("/")) {
+        // Disambiguate two `org/model` shapes:
+        //   - OpenRouter: `z-ai/glm-4.6` (vendor/model, no tag) — strip vendor to map to Ollama
+        //   - Ollama community: `mychen76/qwen3_cline_roocode:8b` (user/model:tag) — keep full name
+        // The `:tag` after the model name is the Ollama discriminator (OpenRouter IDs never tag).
+        if (presetOrModel.contains("/") && !presetOrModel.contains(":")) {
             return presetOrModel.substring(presetOrModel.lastIndexOf('/') + 1);
         }
         String lower = presetOrModel.toLowerCase();

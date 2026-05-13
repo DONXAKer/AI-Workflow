@@ -1,4 +1,4 @@
-import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry, LlmCallEntry, McpServer, ValidationResult, PipelineConfigDto, BlockRegistryEntry, BlockConfigDto, EntryPointConfigDto } from '../types'
+import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry, LlmCallEntry, McpServer, ValidationResult, PipelineConfigDto, BlockRegistryEntry, BlockConfigDto, EntryPointConfigDto, ReindexJobStatus } from '../types'
 import { currentProjectSlug } from './projectContext'
 
 const BASE = '/api'
@@ -340,6 +340,15 @@ export const api = {
       `${BASE}/projects/${slug}`,
       { method: 'DELETE' }
     ),
+
+  reindexProject: (slug: string): Promise<ReindexJobStatus> =>
+    request(`${BASE}/projects/${slug}/reindex`, { method: 'POST' }),
+
+  getReindexStatus: (slug: string): Promise<ReindexJobStatus> =>
+    request(`${BASE}/projects/${slug}/reindex/status`),
+
+  getIndexStats: (slug: string): Promise<{ file_count: number; qdrant_enabled: boolean }> =>
+    request(`${BASE}/projects/${slug}/index-stats`),
 
   browseFs: (path?: string): Promise<{ path: string; parent: string; directories: string[]; root: string }> =>
     request(`${BASE}/fs/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`),

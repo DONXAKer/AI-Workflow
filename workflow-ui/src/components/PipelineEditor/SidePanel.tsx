@@ -218,18 +218,51 @@ function PinnedHeader({
         />
       </div>
 
-      {/* Validation errors banner — pinned, never inside the scroll area */}
-      {errors.length > 0 && (
-        <div className="mx-4 mb-3 bg-red-950/40 border border-red-800 rounded-lg p-2.5 space-y-1">
-          <div className="flex items-center gap-1.5 text-xs font-medium text-red-200">
-            <AlertCircle className="w-3.5 h-3.5" />
-            Ошибки валидации ({errors.length})
+      {/* Validation banner — separates ERROR (blocking) from WARN/INFO (advisory).
+          Earlier this rendered all entries as red errors, including PHASE_OVERRIDE_MISSING
+          which is a polymorphic-block hint and should never alarm. */}
+      {(() => {
+        const real = errors.filter(e => !e.severity || e.severity === 'ERROR')
+        const warns = errors.filter(e => e.severity === 'WARN')
+        const infos = errors.filter(e => e.severity === 'INFO')
+        if (real.length === 0 && warns.length === 0 && infos.length === 0) return null
+        return (
+          <div className="mx-4 mb-3 space-y-2">
+            {real.length > 0 && (
+              <div className="bg-red-950/40 border border-red-800 rounded-lg p-2.5 space-y-1">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-red-200">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  Ошибки валидации ({real.length})
+                </div>
+                <ul className="text-[10px] text-red-200 space-y-0.5 pl-4 list-disc">
+                  {real.map((e, i) => <li key={i}><span className="font-mono">{e.code}</span>: {e.message}</li>)}
+                </ul>
+              </div>
+            )}
+            {warns.length > 0 && (
+              <details className="bg-amber-950/30 border border-amber-800/40 rounded-lg p-2.5">
+                <summary className="flex items-center gap-1.5 text-xs font-medium text-amber-200 cursor-pointer">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  Предупреждения ({warns.length})
+                </summary>
+                <ul className="text-[10px] text-amber-200/80 space-y-0.5 pl-4 list-disc mt-1.5">
+                  {warns.map((e, i) => <li key={i}><span className="font-mono">{e.code}</span>: {e.message}</li>)}
+                </ul>
+              </details>
+            )}
+            {infos.length > 0 && (
+              <details className="bg-slate-900 border border-slate-700/40 rounded-lg p-2.5">
+                <summary className="flex items-center gap-1.5 text-xs font-medium text-slate-400 cursor-pointer">
+                  Подсказки ({infos.length})
+                </summary>
+                <ul className="text-[10px] text-slate-400 space-y-0.5 pl-4 list-disc mt-1.5">
+                  {infos.map((e, i) => <li key={i}><span className="font-mono">{e.code}</span>: {e.message}</li>)}
+                </ul>
+              </details>
+            )}
           </div>
-          <ul className="text-[10px] text-red-200 space-y-0.5 pl-4 list-disc">
-            {errors.map((e, i) => <li key={i}><span className="font-mono">{e.code}</span>: {e.message}</li>)}
-          </ul>
-        </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

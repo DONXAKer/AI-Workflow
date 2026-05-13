@@ -80,6 +80,62 @@ public class LlmClient {
         if (shouldUseCli(model)) {
             return completeViaCli(resolveCliModel(model), system, user);
         }
+        return completeViaOpenRouter(model, system, user, maxTokens, temperature);
+    }
+
+    /**
+     * Lower-level completion that accepts a full chat-message history — used by
+     * the orchestrator continuation-call path to feed back a previous assistant
+     * turn and ask the model to continue from exactly where it stopped (without
+     * regenerating from scratch).
+     *
+     * @param messages list of {@code {role, content}} maps; role ∈ system|user|assistant.
+     *                 Must include at least one user message; system is optional.
+     */
+    public String completeWithMessages(String model, java.util.List<java.util.Map<String, String>> messages,
+                                       int maxTokens, double temperature) {
+        if (messages == null || messages.isEmpty()) {
+            throw new IllegalArgumentException("completeWithMessages: messages must not be empty");
+        }
+        ArrayNode arr = objectMapper.createArrayNode();
+        for (var msg : messages) {
+            ObjectNode m = arr.addObject();
+            m.put("role", msg.getOrDefault("role", "user"));
+            m.put("content", msg.getOrDefault("content", ""));
+        }
+        if (shouldUseOllama(model)) {
+            return chatViaOllama(resolveOllamaModel(model), arr, maxTokens, temperature);
+        }
+        if (shouldUseCli(model)) {
+            // Claude CLI doesn't expose a chat-history mode through `-p`; degrade to
+            // a system+user pair built from the last user message. Continuation-call
+            // is rarely needed on CLI (Anthropic models complete JSON reliably) so
+            // this lossy path is acceptable.
+            String system = "";
+            String user = "";
+            for (var msg : messages) {
+                if ("system".equals(msg.get("role"))) system = msg.getOrDefault("content", "");
+                else user = msg.getOrDefault("content", user);
+            }
+            return completeViaCli(resolveCliModel(model), system, user);
+        }
+        return chatViaOpenRouter(model, arr, maxTokens, temperature);
+    }
+
+    private String completeViaOpenRouter(String model, String system, String user, int maxTokens, double temperature) {
+        ArrayNode messages = objectMapper.createArrayNode();
+        if (system != null && !system.isBlank()) {
+            messages.addObject().put("role", "system").put("content", system);
+        }
+        messages.addObject().put("role", "user").put("content", user);
+        return chatViaOpenRouter(model, messages, maxTokens, temperature);
+    }
+
+    /**
+     * Multi-turn chat completion via OpenRouter / AITunnel. Used by the
+     * continuation-call path with [system, user, assistant(partial), user("continue")].
+     */
+    private String chatViaOpenRouter(String model, ArrayNode messages, int maxTokens, double temperature) {
         String resolvedModel = resolveModel(model);
         boolean useAITunnel = shouldUseAITunnel();
         WebClient client = useAITunnel ? buildAITunnelClient() : buildOpenRouterClient();
@@ -89,18 +145,10 @@ public class LlmClient {
         requestBody.put("model", resolvedModel);
         requestBody.put("max_tokens", maxTokens);
         requestBody.put("temperature", temperature);
+        requestBody.set("messages", messages);
 
-        ArrayNode messages = requestBody.putArray("messages");
-        if (system != null && !system.isBlank()) {
-            ObjectNode systemMsg = messages.addObject();
-            systemMsg.put("role", "system");
-            systemMsg.put("content", system);
-        }
-        ObjectNode userMsg = messages.addObject();
-        userMsg.put("role", "user");
-        userMsg.put("content", user);
-
-        log.info("Calling OpenRouter model: {} (maxTokens={}, temperature={})", resolvedModel, maxTokens, temperature);
+        log.info("Calling OpenRouter model: {} (maxTokens={}, temperature={}, msgs={})",
+            resolvedModel, maxTokens, temperature, messages.size());
 
         long startedAt = System.currentTimeMillis();
         try {
@@ -148,7 +196,7 @@ public class LlmClient {
         if (!resolved.contains("/")) {
             String n = resolved.toLowerCase();
             if (n.startsWith("claude") || n.equals("sonnet") || n.equals("opus") || n.equals("haiku")) {
-                String fallback = presetResolver != null ? presetResolver.resolve("smart") : "z-ai/glm-4.6";
+                String fallback = presetResolver != null ? presetResolver.resolve("smart") : Models.OR_FALLBACK;
                 log.warn("OpenRouter route received bare CLI name '{}' — Anthropic is CLI-only, "
                     + "falling back to smart tier '{}'", resolved, fallback);
                 return fallback;
@@ -609,7 +657,7 @@ public class LlmClient {
     }
 
     private String resolveOllamaModel(String model) {
-        return presetResolver != null ? presetResolver.resolveOllama(model) : (model != null ? model : "qwen3:8b");
+        return presetResolver != null ? presetResolver.resolveOllama(model) : (model != null ? model : Models.OLLAMA_FALLBACK);
     }
 
     private WebClient buildOllamaClient() {
@@ -635,10 +683,65 @@ public class LlmClient {
     // Reasonable upper bound for local Ollama models: longer outputs are rarely useful and push past
     // both context window and timeout on consumer GPUs.
     private static final int OLLAMA_MAX_TOKENS_CAP = 3000;
-    private static final int OLLAMA_NUM_CTX = 8192;
+    // 8K was too small for agentic loops: 4K user prompt + CLAUDE.md + tool schemas
+    // + tool responses easily exceeded the window, silently truncating tool definitions
+    // and pushing qwen3-class models into chat-mode (no structured tool_calls).
+    // 32K caused 7-8B models on RTX 4060 8GB to OOM after a few agentic iterations
+    // (KV cache balloon). 16K is the sweet spot: tools+CLAUDE.md fit comfortably,
+    // and accumulated tool-result history can grow ~5 iterations before pressure.
+    private static final int OLLAMA_NUM_CTX = 16384;
 
+    /**
+     * Unloads every model currently resident in Ollama VRAM except the one matching
+     * {@code keepLoaded} (pass {@code null} to unload everything). Triggered by the
+     * pipeline runner before each Ollama-bound block: avoids thrashing on 8 GB GPUs
+     * where qwen3.6:35b-a3b (28 GB) + cline_roocode:8b (5 GB) simultaneously cause
+     * Ollama to return `null` errors mid-tool-use loop.
+     *
+     * <p>The unload mechanism is Ollama's documented contract: a generate call with
+     * {@code keep_alive: 0} flushes the named model from memory.
+     */
+    public void unloadOllamaModelsExcept(String keepLoaded) {
+        try {
+            WebClient client = buildOllamaClient();
+            String listing = client.get().uri("/api/ps").retrieve().bodyToMono(String.class)
+                .timeout(java.time.Duration.ofSeconds(5)).block();
+            if (listing == null) return;
+            JsonNode root = objectMapper.readTree(listing);
+            JsonNode models = root.path("models");
+            if (!models.isArray()) return;
+            for (JsonNode m : models) {
+                String name = m.path("name").asText("");
+                if (name.isEmpty() || name.equals(keepLoaded)) continue;
+                try {
+                    ObjectNode unload = objectMapper.createObjectNode();
+                    unload.put("model", name);
+                    unload.put("keep_alive", 0);
+                    client.post().uri("/api/generate").bodyValue(unload).retrieve()
+                        .bodyToMono(String.class)
+                        .timeout(java.time.Duration.ofSeconds(15))
+                        .onErrorReturn("")
+                        .block();
+                    log.info("Ollama: unloaded {} (keeping {})", name, keepLoaded);
+                } catch (Exception ignored) { /* best-effort */ }
+            }
+        } catch (Exception e) {
+            log.debug("unloadOllamaModelsExcept({}) skipped: {}", keepLoaded, e.getMessage());
+        }
+    }
+
+    /**
+     * Matches qwen3-family models whose chat templates support the {@code think}
+     * parameter (qwen3 base, qwen3-coder, qwen3_cline_roocode, etc.). qwen3.6 was
+     * deliberately excluded after empirical tests: it returned empty content when
+     * {@code think:false} was passed, and emitted structured JSON only when
+     * thinking was left on.
+     */
     private static boolean isQwen3Model(String model) {
-        return model != null && model.toLowerCase().startsWith("qwen3");
+        if (model == null) return false;
+        String m = model.toLowerCase();
+        if (m.startsWith(Models.FAMILY_QWEN36)) return false;  // see javadoc
+        return m.startsWith(Models.FAMILY_QWEN3);
     }
 
     private boolean isOllamaReasoningDisabled() {
@@ -660,24 +763,35 @@ public class LlmClient {
     }
 
     private String completeViaOllama(String model, String system, String user, int maxTokens, double temperature) {
-        WebClient client = buildOllamaClient();
-
-        int cappedMaxTokens = Math.min(maxTokens, OLLAMA_MAX_TOKENS_CAP);
-
-        ObjectNode requestBody = objectMapper.createObjectNode();
-        requestBody.put("model", model);
-        requestBody.put("max_tokens", cappedMaxTokens);
-        requestBody.put("temperature", temperature);
-        if (isQwen3Model(model)) requestBody.put("think", false);
-        requestBody.putObject("options").put("num_ctx", OLLAMA_NUM_CTX);
-
-        ArrayNode messages = requestBody.putArray("messages");
+        ArrayNode messages = objectMapper.createArrayNode();
         if (system != null && !system.isBlank()) {
             messages.addObject().put("role", "system").put("content", system);
         }
         messages.addObject().put("role", "user").put("content", injectNoThink(user, model));
+        return chatViaOllama(model, messages, maxTokens, temperature);
+    }
 
-        log.info("Calling Ollama model: {} (maxTokens={}, temperature={})", model, maxTokens, temperature);
+    /**
+     * Multi-turn chat completion via Ollama OpenAI-compat endpoint. Used by the
+     * continuation-call path with [system, user, assistant(partial), user("continue")].
+     * Honours the same {@code think:false} / num_ctx settings as the single-turn call.
+     *
+     * <p>Bypasses {@code OLLAMA_MAX_TOKENS_CAP} since continuation calls may need
+     * more headroom than the chat cap to actually finish a structure.
+     */
+    private String chatViaOllama(String model, ArrayNode messages, int maxTokens, double temperature) {
+        WebClient client = buildOllamaClient();
+
+        ObjectNode requestBody = objectMapper.createObjectNode();
+        requestBody.put("model", model);
+        requestBody.put("max_tokens", maxTokens);
+        requestBody.put("temperature", temperature);
+        if (isQwen3Model(model)) requestBody.put("think", false);
+        requestBody.putObject("options").put("num_ctx", OLLAMA_NUM_CTX);
+        requestBody.set("messages", messages);
+
+        log.info("Calling Ollama model: {} (maxTokens={}, temperature={}, msgs={})",
+            model, maxTokens, temperature, messages.size());
         long startedAt = System.currentTimeMillis();
         try {
             String responseBody = client.post()
@@ -759,9 +873,14 @@ public class LlmClient {
             body.put("max_tokens", Math.min(request.maxTokens(), OLLAMA_MAX_TOKENS_CAP));
             body.put("temperature", request.temperature());
             body.set("messages", messages);
-            if (isQwen3Model(resolvedModel)) body.put("think", false);
+            // qwen3 plans tool_calls inside its thinking block; setting think:false
+            // makes it emit a plain chat completion with zero tool_calls. Keep
+            // thinking ON when tools are passed (paying the latency cost) — there's
+            // no point in saving tokens if the model never uses the tools we gave it.
+            boolean hasTools = toolsJson.size() > 0;
+            if (isQwen3Model(resolvedModel) && !hasTools) body.put("think", false);
             body.putObject("options").put("num_ctx", OLLAMA_NUM_CTX);
-            if (toolsJson.size() > 0) {
+            if (hasTools) {
                 body.set("tools", toolsJson);
                 body.put("tool_choice", "auto");
             }
@@ -955,7 +1074,7 @@ public class LlmClient {
     }
 
     private String resolveCliModel(String model) {
-        return presetResolver != null ? presetResolver.resolveCli(model) : (model != null ? model : "claude-sonnet-4-6");
+        return presetResolver != null ? presetResolver.resolveCli(model) : (model != null ? model : Models.CLI_FALLBACK);
     }
 
     private String completeViaCli(String model, String system, String user) {

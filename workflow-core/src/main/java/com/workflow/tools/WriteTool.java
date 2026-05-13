@@ -30,8 +30,10 @@ public class WriteTool implements Tool {
 
     @Override
     public String description() {
-        return "Write content to a file under the working directory. Creates parent "
-            + "directories if needed; overwrites existing files.";
+        return "Write content to a file under the working directory. **OVERWRITES the "
+            + "entire file** if it already exists — use Edit for partial modifications. "
+            + "Creates parent directories if needed. Refuses to truncate a >100-line "
+            + "existing file with a <40%-size payload (likely a bug; use Edit instead).";
     }
 
     @Override
@@ -57,6 +59,28 @@ public class WriteTool implements Tool {
 
         Path target = PathScope.resolve(ctx, filePath);
         DenyList.assertWriteAllowed(target);
+
+        // Large-file truncate guard: if the model calls Write on an existing >100-line
+        // file with a much smaller payload, it almost certainly meant Edit. This
+        // exact pattern destroyed UnitCard.java (576 → 16 lines) on FEAT-AP-002.
+        if (Files.exists(target) && Files.isRegularFile(target)) {
+            try {
+                long existingLines = Files.lines(target, StandardCharsets.UTF_8).count();
+                if (existingLines > 100) {
+                    int newLines = content.isEmpty() ? 0 : (int) content.chars().filter(c -> c == '\n').count() + 1;
+                    if (newLines < existingLines * 0.4) {
+                        throw new ToolInvocationException(String.format(
+                            "Refusing to overwrite %s: existing file has %d lines, " +
+                            "your payload has %d lines (%.0f%%). This is almost always " +
+                            "an Edit-vs-Write mistake. Use the Edit tool to modify part " +
+                            "of the file. If you really need to replace the whole file, " +
+                            "delete it first via Bash (rm) then call Write.",
+                            ctx.workingDir().relativize(target),
+                            existingLines, newLines, 100.0 * newLines / existingLines));
+                    }
+                }
+            } catch (java.io.IOException ignored) { /* fall through — write proceeds */ }
+        }
 
         Path parent = target.getParent();
         if (parent != null && !Files.exists(parent)) {

@@ -108,6 +108,7 @@ public class OrchestratorBlock implements Block {
     @Autowired(required = false) private ProjectRepository projectRepository;
     @Autowired(required = false) private StringInterpolator stringInterpolator;
     @Autowired(required = false) private RunWebSocketHandler wsHandler;
+    @Autowired(required = false) private com.workflow.knowledge.KnowledgeBase knowledgeBase;
 
     @Override public String getName() { return "orchestrator"; }
 
@@ -148,7 +149,18 @@ public class OrchestratorBlock implements Block {
                 FieldSchema.number("budget_usd_cap", "Бюджет USD", DEFAULT_BUDGET_USD,
                     "Лимит стоимости вызовов LLM."),
                 FieldSchema.multilineString("system_prompt_extra", "Доп. системный промпт",
-                    "Дополнительный контекст проекта (стек, конвенции). Добавляется к встроенному.")
+                    "Дополнительный контекст проекта (стек, конвенции). Добавляется к встроенному."),
+                FieldSchema.bool("auto_inject_rag", "Авто-инъекция top-3 RAG-чанков",
+                    false,
+                    "На старте plan-mode эмбеддит task_md.to_be (или auto_search_query) "
+                        + "и префиксит top-3 семантически релевантных кусков кода в user_message. "
+                        + "Снимает галлюцинации package paths когда планер не знает реальной структуры. "
+                        + "Требует проиндексированный проект (Settings → Reindex)."),
+                FieldSchema.bool("prose_fallback", "Принимать prose как результат", false,
+                    "Если модель вернула free-form текст вместо JSON — синтезировать "
+                        + "структурированный output (plan: prose→approach; review: passed=true). "
+                        + "Полезно для 8B локальных моделей, которые срываются на сложных JSON-схемах. "
+                        + "В review-mode рискованно: пайплайн пойдёт дальше, реальные баги ловят build/tests/verify_acceptance.")
             ),
             false,
             Map.of(),
@@ -190,7 +202,11 @@ public class OrchestratorBlock implements Block {
                 FieldSchema.output("checklist_status", "Checklist status", "string_array",
                     "[review] Per-item статус по acceptance_checklist."),
                 FieldSchema.output("regressions", "Regressions", "string_array",
-                    "[review] Регрессии (build/test breakage).")
+                    "[review] Регрессии (build/test breakage)."),
+                FieldSchema.output("degraded", "Degraded", "boolean",
+                    "true если сработал prose_fallback (модель не выдала JSON, output синтезирован из текста)."),
+                FieldSchema.output("degraded_reason", "Degraded reason", "string",
+                    "Краткая причина срабатывания prose_fallback.")
             ),
             70
         );
@@ -254,6 +270,24 @@ public class OrchestratorBlock implements Block {
         }
 
         if (anyContext) {
+            // Inject the target project's CLAUDE.md so the planner knows the actual
+            // tech stack (UE version, build tool, conventions) instead of guessing.
+            // Was the root cause of "Unreal 4 editor" hallucination on a UE5.7 project
+            // — the planner never saw the project's stack and defaulted to its training prior.
+            String claudeMd = com.workflow.project.ProjectClaudeMd.readForPrompt(workingDir);
+            if (!claudeMd.isEmpty()) {
+                userMsg.insert(0, claudeMd + "\n---\n\n");
+            }
+            // Auto-inject top-K RAG hits when the project is indexed AND the block opts in.
+            // Without this, plan_impl hallucinates package paths (`com.warcard.api/` vs
+            // real `ru.gritsay.warcardserver/...`) because it has only CLAUDE.md + tree
+            // summary to go on. RAG gives it actual source chunks for the task.
+            if (asBool(cfg, "auto_inject_rag", false) && knowledgeBase != null) {
+                String ragSection = buildRagSection(cfg, input);
+                if (!ragSection.isEmpty()) {
+                    userMsg.insert(0, ragSection + "\n---\n\n");
+                }
+            }
             String tree = ProjectTreeSummary.summarise(workingDir);
             if (!tree.isEmpty()) {
                 userMsg.append("## Codebase layout (working_dir: ").append(workingDir).append(")\n")
@@ -757,6 +791,14 @@ public class OrchestratorBlock implements Block {
         final String blockId = blockConfig.getId();
         final UUID   runId   = run.getId();
 
+        // qwen3.6 MoE emits Markdown plans by default and ignores the JSON schema in
+        // the system prompt — even when "Respond with the JSON only" is screamed at it.
+        // Forcing response_format=json_object via Ollama's OpenAI-compat endpoint pins
+        // its output to a JSON object. We accept the tradeoff (model skips tool
+        // exploration) because for qwen3.6 it doesn't tool-explore anyway, and the
+        // alternative is degraded prose_fallback every time.
+        boolean forceJson = model != null && model.toLowerCase().startsWith(com.workflow.llm.Models.FAMILY_QWEN36);
+
         ToolUseRequest request = ToolUseRequest.builder()
             .model(model)
             .systemPrompt(systemPrompt)
@@ -768,10 +810,11 @@ public class OrchestratorBlock implements Block {
             .budgetUsdCap(budget)
             .workingDir(workingDir)
             .completionSignal(agent.getCompletionSignal())
+            .responseFormat(forceJson ? "json" : null)
             // NOTE: response_format=json_object causes Ollama models to skip tool_calls
             // entirely (they output a single JSON immediately without exploring the codebase).
-            // For the orchestrator we need tool exploration, so leave format unconstrained
-            // and rely on the system prompt's JSON-shape instructions.
+            // For other models we leave it unconstrained — qwen3.6 is the one model
+            // that *only* produces usable JSON when forced.
             .progressCallback(wsHandler != null ? detail ->
                 wsHandler.sendBlockProgress(runId, blockId, detail) : null)
             .build();
@@ -780,6 +823,9 @@ public class OrchestratorBlock implements Block {
             toolRegistry, toolCtx, objectMapper, auditRepository);
 
         log.info("orchestrator[{}] mode={} model={} workingDir={}", blockId, mode, model, workingDir);
+        // Free VRAM from any other Ollama model still cached before we start —
+        // qwen3.6:35b-a3b (28 GB) + cline_roocode:8b (5 GB) thrash 8 GB GPUs otherwise.
+        llmClient.unloadOllamaModelsExcept(resolveOllamaTag(model));
         // Previously we force-routed OLLAMA orchestrator calls through OpenRouter because
         // qwen2.5:7b lapsed into prose. With Ollama's `format: "json"` grammar constraint set
         // above and pre-loaded git diff in the review user-message, we keep the project's
@@ -793,11 +839,29 @@ public class OrchestratorBlock implements Block {
         // 2. extractJson returned empty map but finalText is non-blank (model returned markdown, not JSON)
         String finalText = response.finalText();
         boolean needsRescue = parsed.containsKey("raw_text")
-            || (parsed.isEmpty() && finalText != null && !finalText.isBlank());
+            || (parsed.isEmpty() && finalText != null && !finalText.isBlank())
+            || isSuspiciouslyTruncated(parsed, mode);
         if (needsRescue) {
-            log.info("orchestrator[{}]: no valid JSON in response (stopReason={}, emptyParsed={}, textLen={}), attempting rescue",
+            log.info("orchestrator[{}]: no valid JSON in response (stopReason={}, emptyParsed={}, textLen={}), attempting recovery",
                 blockId, response.stopReason(), parsed.isEmpty(), finalText != null ? finalText.length() : 0);
-            parsed = rescueJson(finalText, mode, model);
+            // Recovery cascade (cheap → expensive):
+            // 1. Markdown extractor — many local models (qwen3.6, hermes3) emit
+            //    structured Markdown plans regardless of JSON instructions.
+            // 2. Continuation-call — JSON started but cut off mid-output.
+            // 3. rescueJson — full regenerate with the schema.
+            Map<String, Object> recovered = extractFromMarkdown(finalText, mode);
+            if (recovered != null && !isSuspiciouslyTruncated(recovered, mode)) {
+                log.info("orchestrator[{}]: recovered via Markdown extraction (no JSON in response)", blockId);
+                parsed = recovered;
+            } else {
+                Map<String, Object> continued = tryContinuation(finalText, request, model, mode);
+                if (continued != null && !continued.containsKey("raw_text") && !isSuspiciouslyTruncated(continued, mode)) {
+                    log.info("orchestrator[{}]: JSON recovered via continuation-call", blockId);
+                    parsed = continued;
+                } else {
+                    parsed = rescueJson(finalText, mode, model);
+                }
+            }
         }
 
         Map<String, Object> out = new LinkedHashMap<>(parsed);
@@ -805,30 +869,53 @@ public class OrchestratorBlock implements Block {
         out.put("iterations_used", response.iterationsUsed());
         out.put("total_cost_usd", response.totalCostUsd());
 
+        // Opt-in lenient mode: when the model returns prose instead of JSON, salvage it
+        // into the expected schema and continue rather than crashing the run. Useful
+        // for 8B local models that fail the orchestrator JSON protocol but produce
+        // semantically reasonable plans / reviews. Plan-side: relatively safe (prose
+        // becomes `approach`, impl_server gets a text instruction). Review-side: risky
+        // (we have to assume passed=true since prose lacks structured verdict) —
+        // downstream build/tests/verify_acceptance must catch real regressions.
+        Map<String, Object> blockCfg = blockConfig.getConfig() != null ? blockConfig.getConfig() : Map.of();
+        boolean proseFallback = asBool(blockCfg, "prose_fallback", false);
+
         // Fail hard if JSON parsing failed completely — a broken/missing review is not a soft failure
         if (out.containsKey("raw_text")) {
-            throw new IllegalStateException(
-                "orchestrator[" + blockConfig.getId() + "] mode=" + mode
-                + ": failed to extract valid JSON from LLM response after rescue attempt");
-        }
-
-        // Detect "loop ran out of iterations / tokens before producing real JSON" — the
-        // model never wrote a final plan/review. Distinguish from a genuine escalation,
-        // which would carry actual {issues, retry_instruction} or {goal, approach} text.
-        // Without this guard, defaults below would fill action=escalate / passed=false
-        // and the pipeline would crash with a misleading "Orchestrator escalated:".
-        boolean hasRealOutput = "review".equals(mode)
-            ? !asString(out, "issues", "").isBlank()
-                || !asString(out, "carry_forward", "").isBlank()
-                || (out.get("checklist_status") instanceof List<?> cs && !cs.isEmpty())
-            : !asString(out, "goal", "").isBlank() || !asString(out, "approach", "").isBlank();
-        if (!hasRealOutput) {
-            throw new IllegalStateException(
-                "orchestrator[" + blockConfig.getId() + "] mode=" + mode
-                + ": LLM did not produce any plan/review content"
-                + " (stopReason=" + response.stopReason()
-                + ", iterations=" + response.iterationsUsed()
-                + "). Increase max_iterations or maxTokens, or pick a stronger model.");
+            String rawText = asString(out, "raw_text", "");
+            if (proseFallback && !rawText.isBlank()) {
+                log.warn("orchestrator[{}] mode={}: prose_fallback engaged — synthesising structured output from {} chars of free-form text",
+                    blockConfig.getId(), mode, rawText.length());
+                out = synthesiseFromProse(rawText, mode, response);
+            } else {
+                throw new IllegalStateException(
+                    "orchestrator[" + blockConfig.getId() + "] mode=" + mode
+                    + ": failed to extract valid JSON from LLM response after rescue attempt");
+            }
+        } else {
+            // Detect "loop ran out of iterations / tokens before producing real JSON" — the
+            // model never wrote a final plan/review. Distinguish from a genuine escalation,
+            // which would carry actual {issues, retry_instruction} or {goal, approach} text.
+            // Without this guard, defaults below would fill action=escalate / passed=false
+            // and the pipeline would crash with a misleading "Orchestrator escalated:".
+            boolean hasRealOutput = "review".equals(mode)
+                ? !asString(out, "issues", "").isBlank()
+                    || !asString(out, "carry_forward", "").isBlank()
+                    || (out.get("checklist_status") instanceof List<?> cs && !cs.isEmpty())
+                : !asString(out, "goal", "").isBlank() || !asString(out, "approach", "").isBlank();
+            if (!hasRealOutput) {
+                if (proseFallback && response.finalText() != null && !response.finalText().isBlank()) {
+                    log.warn("orchestrator[{}] mode={}: prose_fallback engaged — no structured output, salvaging {} chars of final_text",
+                        blockConfig.getId(), mode, response.finalText().length());
+                    out = synthesiseFromProse(response.finalText(), mode, response);
+                } else {
+                    throw new IllegalStateException(
+                        "orchestrator[" + blockConfig.getId() + "] mode=" + mode
+                        + ": LLM did not produce any plan/review content"
+                        + " (stopReason=" + response.stopReason()
+                        + ", iterations=" + response.iterationsUsed()
+                        + "). Increase max_iterations or maxTokens, or pick a stronger model.");
+                }
+            }
         }
 
         // Ensure optional fields exist so pipeline interpolation never throws
@@ -1054,6 +1141,274 @@ Rules:
         return sb.toString();
     }
 
+    // ── Markdown salvage ──────────────────────────────────────────────────────
+
+    /**
+     * Extracts plan/review fields from a Markdown response. Some local models
+     * (qwen3.6:35b-a3b, hermes3:8b) refuse to emit JSON regardless of system-prompt
+     * pressure or {@code response_format: json_object} — they consistently produce
+     * well-structured Markdown plans instead. This parser maps Markdown sections
+     * onto the same fields the orchestrator schema expects, so the run keeps moving
+     * without the prose_fallback degraded path.
+     *
+     * <p>Returns null when the input doesn't look like a Markdown plan (no recognisable
+     * headings, or too few fields extracted to be useful). Callers fall through to the
+     * next salvage layer.
+     */
+    private Map<String, Object> extractFromMarkdown(String text, String mode) {
+        if (text == null || text.isBlank()) return null;
+        // Strip leading/trailing code-fence wrappers some models add
+        String t = text.trim();
+        if (t.startsWith("```")) {
+            int nl = t.indexOf('\n');
+            if (nl > 0) t = t.substring(nl + 1);
+            int last = t.lastIndexOf("```");
+            if (last > 0) t = t.substring(0, last);
+        }
+
+        // Pattern: heading line "# X" or "## X" or "### X", optionally with trailing ":"
+        java.util.regex.Pattern headingRe = java.util.regex.Pattern.compile(
+            "(?m)^#{1,6}\\s+(.+?)\\s*:?\\s*$");
+        // Split into (heading, body) pairs
+        java.util.List<int[]> headings = new java.util.ArrayList<>();
+        java.util.regex.Matcher m = headingRe.matcher(t);
+        while (m.find()) headings.add(new int[]{m.start(), m.end()});
+        if (headings.size() < 2) return null;  // not Markdown-structured
+
+        // Extract section bodies keyed by lowercased heading title
+        java.util.Map<String, String> sections = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < headings.size(); i++) {
+            int hStart = headings.get(i)[0];
+            int hEnd   = headings.get(i)[1];
+            int bodyEnd = i + 1 < headings.size() ? headings.get(i + 1)[0] : t.length();
+            String title = t.substring(t.indexOf(' ', hStart) + 1, hEnd).replaceAll(":\\s*$", "").trim();
+            String body  = t.substring(hEnd, bodyEnd).trim();
+            sections.put(title.toLowerCase(java.util.Locale.ROOT), body);
+        }
+
+        if ("review".equals(mode)) {
+            return buildReviewFromMarkdown(sections, t);
+        }
+        return buildPlanFromMarkdown(sections, t);
+    }
+
+    /**
+     * Returns null when too few plan fields could be extracted — caller falls through
+     * to continuation/rescue rather than committing a near-empty result.
+     */
+    private static Map<String, Object> buildPlanFromMarkdown(java.util.Map<String, String> sections, String full) {
+        String goal = findSection(sections, "goal", "цель", "objective");
+        String approach = findSection(sections, "approach", "подход", "implementation plan",
+            "implementation", "план реализации", "phase 1", "phase 2");
+        String filesToTouch = findSection(sections, "files to touch", "files", "файлы",
+            "files modified", "files to modify");
+        String definitionOfDone = findSection(sections, "definition of done", "acceptance criteria",
+            "acceptance", "definition-of-done", "критерии завершения", "тесты", "tests",
+            "verification");
+        String tools = findSection(sections, "tools to use", "tools", "инструменты");
+
+        // If section "approach" wasn't found, dump everything-after-first-heading as approach
+        if (approach.isBlank() && !sections.isEmpty()) {
+            int firstHeadingPos = full.indexOf('\n');
+            approach = firstHeadingPos > 0 ? full.substring(firstHeadingPos).trim() : full;
+        }
+        // Extract file paths from any table / list throughout the doc — handles "| File | Action |" tables.
+        if (filesToTouch.isBlank()) filesToTouch = extractFilePathsFromMarkdown(full);
+
+        // Confidence threshold: at least goal OR a meaningful approach + something else
+        boolean enough = !goal.isBlank() && (!approach.isBlank() || !filesToTouch.isBlank());
+        if (!enough) return null;
+
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("goal", goal.isBlank() ? "(extracted from markdown — title missing)" : goal);
+        out.put("approach", approach);
+        out.put("files_to_touch", filesToTouch);
+        out.put("definition_of_done", definitionOfDone);
+        out.put("tools_to_use", tools.isBlank() ? "Read, Edit, Grep, Glob, Bash" : tools);
+        out.put("requirements_coverage", List.of());  // markdown rarely carries this structurally
+        return out;
+    }
+
+    private static Map<String, Object> buildReviewFromMarkdown(java.util.Map<String, String> sections, String full) {
+        String issues = findSection(sections, "issues", "problems", "проблемы", "regressions");
+        String carry = findSection(sections, "carry forward", "summary", "what was done",
+            "what was accomplished", "результат");
+        String retryInstruction = findSection(sections, "retry instruction", "fix",
+            "what to fix", "что исправить");
+        String actionRaw = findSection(sections, "action", "decision", "verdict", "действие");
+        String action = "continue";
+        String lower = actionRaw.toLowerCase(java.util.Locale.ROOT);
+        if (lower.contains("retry")) action = "retry";
+        else if (lower.contains("escalate")) action = "escalate";
+
+        // Passed/Failed heuristic: explicit "passed: true/false" in any section, or
+        // presence of issues/retry implies passed=false.
+        boolean passed;
+        String passedRaw = findSection(sections, "passed", "verdict", "status");
+        if (passedRaw.toLowerCase().contains("true")) passed = true;
+        else if (passedRaw.toLowerCase().contains("false")) passed = false;
+        else passed = issues.isBlank() && retryInstruction.isBlank();
+
+        boolean enough = !issues.isBlank() || !carry.isBlank() || !passedRaw.isBlank();
+        if (!enough) return null;
+
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("passed", passed);
+        out.put("issues", issues);
+        out.put("action", action);
+        out.put("retry_instruction", retryInstruction);
+        out.put("carry_forward", carry.isBlank() ? full.substring(0, Math.min(500, full.length())) : carry);
+        out.put("checklist_status", List.of());
+        out.put("regressions", List.of());
+        return out;
+    }
+
+    /** Returns the body of the first section whose title matches any of the candidates. */
+    private static String findSection(java.util.Map<String, String> sections, String... candidates) {
+        for (String cand : candidates) {
+            String body = sections.get(cand.toLowerCase());
+            if (body != null && !body.isBlank()) return body;
+        }
+        // Substring match (e.g. "## 2.1 C++ Core Logic" → "core")
+        for (var e : sections.entrySet()) {
+            for (String cand : candidates) {
+                if (e.getKey().contains(cand.toLowerCase())) {
+                    return e.getValue();
+                }
+            }
+        }
+        return "";
+    }
+
+    /**
+     * Scans the full markdown for likely source file paths — `path/to/file.ext` patterns
+     * appearing in tables or backticks. Used as a fallback when no explicit "Files" section.
+     */
+    private static String extractFilePathsFromMarkdown(String text) {
+        java.util.LinkedHashSet<String> paths = new java.util.LinkedHashSet<>();
+        // Backtick-quoted paths or table cells with `path/...` shape
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+            "`([A-Za-z0-9_./-]+\\.[A-Za-z0-9]+)`").matcher(text);
+        while (m.find()) paths.add(m.group(1));
+        // Plain table cells with paths (no backticks)
+        java.util.regex.Matcher m2 = java.util.regex.Pattern.compile(
+            "(?m)^\\|\\s*([A-Za-z0-9_./-]+/[A-Za-z0-9_./-]+\\.[A-Za-z0-9]+)\\s*\\|").matcher(text);
+        while (m2.find()) paths.add(m2.group(1));
+        return String.join("\n", paths);
+    }
+
+    // ── Continuation completion ───────────────────────────────────────────────
+
+    /**
+     * Calls the LLM with the original system+user messages, the model's truncated
+     * assistant turn, and a final user-tail asking it to <em>continue from where it
+     * stopped</em>. Combines original + continuation and re-tries JSON extraction.
+     *
+     * <p>Cheaper and more reliable than {@link #rescueJson} (which regenerates the
+     * whole structure): the model only needs to write the missing closing chars +
+     * the few remaining payload items, not the entire plan from scratch. Bypasses
+     * {@code OLLAMA_MAX_TOKENS_CAP} via {@code completeWithMessages(..., 4096, ...)}.
+     */
+    private Map<String, Object> tryContinuation(String rawText, ToolUseRequest request,
+                                                String model, String mode) {
+        if (rawText == null || rawText.isBlank()) return null;
+        // Guard: only continue if model started a JSON object near the head — if rawText
+        // is pure prose this path won't help, fall through to rescue.
+        int firstBrace = rawText.indexOf('{');
+        if (firstBrace < 0 || firstBrace > 200) return null;
+
+        try {
+            java.util.List<java.util.Map<String, String>> msgs = new java.util.ArrayList<>();
+            if (request.systemPrompt() != null && !request.systemPrompt().isBlank()) {
+                msgs.add(java.util.Map.of("role", "system", "content", request.systemPrompt()));
+            }
+            msgs.add(java.util.Map.of("role", "user", "content", request.userMessage()));
+            msgs.add(java.util.Map.of("role", "assistant", "content", rawText));
+            msgs.add(java.util.Map.of("role", "user", "content",
+                "Your previous response was cut off mid-output. Continue from EXACTLY where you stopped — "
+                    + "do NOT repeat anything already written, do NOT add markdown fences, do NOT prepend "
+                    + "any explanation. Output only the continuation characters and ensure every open "
+                    + "brace `{`, bracket `[`, and string `\"` is properly closed."));
+
+            String continuation = llmClient.completeWithMessages(model, msgs, 4096, 0.0);
+            if (continuation == null || continuation.isBlank()) return null;
+            // Strip common preamble patterns models add despite being told not to.
+            continuation = stripContinuationPreamble(continuation);
+
+            String combined = rawText + continuation;
+            log.info("orchestrator: continuation-call produced {} extra chars (was {} → now {})",
+                continuation.length(), rawText.length(), combined.length());
+            Map<String, Object> parsed = extractJson(combined);
+            if (!parsed.containsKey("raw_text")) {
+                return parsed;
+            }
+        } catch (Exception e) {
+            log.warn("orchestrator: continuation-call failed: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Strips OpenRouter-style vendor prefix from a model name when the result looks
+     * like an Ollama tag — only used for the VRAM-pinning hint. {@code claude-sonnet-4-6}
+     * stays unchanged (CLI route, never goes to Ollama anyway).
+     */
+    private static String resolveOllamaTag(String model) {
+        if (model == null) return null;
+        // Ollama community models use `user/model:tag` — keep as-is.
+        if (model.contains("/") && model.contains(":")) return model;
+        return model;  // bare names like `qwen3.6:35b-a3b`
+    }
+
+    /** Trim "Sure, here's the continuation:" / "```json" / leading whitespace patterns. */
+    private static String stripContinuationPreamble(String s) {
+        String t = s;
+        // Remove leading ```json or ``` lines if present
+        if (t.startsWith("```")) {
+            int nl = t.indexOf('\n');
+            if (nl > 0) t = t.substring(nl + 1);
+        }
+        // Drop trailing ``` if present
+        int fenceEnd = t.lastIndexOf("```");
+        if (fenceEnd > 0 && fenceEnd > t.length() - 10) t = t.substring(0, fenceEnd);
+        // Strip lines like "Continuation:" / "Here's the rest:" only if at the very start
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+            "^(continuation|here[''']s the rest|sure)[^\\n]{0,40}\\n",
+            java.util.regex.Pattern.CASE_INSENSITIVE).matcher(t);
+        if (m.find() && m.start() == 0) t = t.substring(m.end());
+        return t;
+    }
+
+    /**
+     * Returns true when the parsed JSON is structurally valid but its payload
+     * looks too small to be a real plan/review — i.e. the model truncated and
+     * {@code balanceJsonStructure} stitched up empty closers.
+     *
+     * <p>Plan-mode: goal is missing or just {@code "{"}, OR fewer than 3 entries
+     * in requirements_coverage. Review-mode: passed/issues/carry_forward all
+     * empty and checklist_status is empty.
+     */
+    @SuppressWarnings("unchecked")
+    private static boolean isSuspiciouslyTruncated(Map<String, Object> parsed, String mode) {
+        if (parsed == null || parsed.isEmpty()) return false;
+        if ("review".equals(mode)) {
+            String issues = asString(parsed, "issues", "");
+            String carry = asString(parsed, "carry_forward", "");
+            Object cs = parsed.get("checklist_status");
+            int csSize = (cs instanceof List<?> l) ? l.size() : 0;
+            return issues.isBlank() && carry.isBlank() && csSize == 0
+                && !parsed.containsKey("passed");
+        }
+        // plan-mode
+        String goal = asString(parsed, "goal", "");
+        if (goal.trim().length() <= 2) return true;  // "{" or empty
+        Object rc = parsed.get("requirements_coverage");
+        int rcSize = (rc instanceof List<?> l) ? l.size() : 0;
+        // If the model started a real plan but stopped after only 1-2 entries,
+        // that's truncation. Threshold 3 is the minimum we accept as "complete enough".
+        return rcSize > 0 && rcSize < 3;
+    }
+
     // ── Rescue completion ─────────────────────────────────────────────────────
 
     private Map<String, Object> rescueJson(String rawText, String mode, String model) {
@@ -1065,8 +1420,19 @@ Rules:
                 + " \"files_to_touch\": \"<string>\", \"approach\": \"<string>\","
                 + " \"definition_of_done\": \"<string>\", \"tools_to_use\": \"<string>\"}";
 
-        String snippet = rawText != null && rawText.length() > 3000
-            ? rawText.substring(rawText.length() - 3000) : rawText;
+        // Head + tail (6K each, 12K total) — last-3K-only failed for FEAT-AP-002 because
+        // the JSON head with `{"goal": "..."` was lost and the rescue LLM couldn't
+        // reconstruct from a tail-only view (returned literal `null`).
+        String snippet;
+        if (rawText == null) {
+            snippet = "";
+        } else if (rawText.length() <= 12000) {
+            snippet = rawText;
+        } else {
+            snippet = rawText.substring(0, 6000)
+                + "\n…[" + (rawText.length() - 12000) + " chars elided]…\n"
+                + rawText.substring(rawText.length() - 6000);
+        }
 
         String userPrompt = "You were analyzing code. Your findings:\n\n" + snippet
             + "\n\nNow output ONLY valid JSON matching this schema (no markdown, no explanation):\n" + schema;
@@ -1099,10 +1465,8 @@ Rules:
                 if (lineStart >= 0) {
                     int fenceEnd = text.indexOf("```", lineStart + 1);
                     if (fenceEnd > lineStart) {
-                        String candidate = text.substring(lineStart + 1, fenceEnd).trim();
-                        try {
-                            return objectMapper.readValue(candidate, new TypeReference<Map<String, Object>>() {});
-                        } catch (Exception ignored) { /* try next strategy */ }
+                        Map<String, Object> r = tryParseWithFixup(text.substring(lineStart + 1, fenceEnd).trim());
+                        if (r != null) return r;
                     }
                 }
             }
@@ -1112,14 +1476,126 @@ Rules:
         int start = text.indexOf('{');
         int end   = text.lastIndexOf('}');
         if (start >= 0 && end > start) {
-            String candidate = text.substring(start, end + 1).trim();
-            try {
-                return objectMapper.readValue(candidate, new TypeReference<Map<String, Object>>() {});
-            } catch (Exception ignored) { /* fall through */ }
+            Map<String, Object> r = tryParseWithFixup(text.substring(start, end + 1).trim());
+            if (r != null) return r;
         }
 
-        log.warn("orchestrator: could not parse JSON from response (len={}); returning raw_text", text.length());
+        // Log the actual content so failures are diagnosable — without this, the only
+        // signal is "len=5238" with no clue what the model actually returned. Cap at 4K
+        // to keep logs readable; head + tail covers the common "model wrote prose then
+        // trailed off" and "model started with explanation before JSON" patterns.
+        String preview;
+        if (text.length() <= 4000) {
+            preview = text;
+        } else {
+            preview = text.substring(0, 2000) + "\n…[" + (text.length() - 4000) + " chars elided]…\n"
+                + text.substring(text.length() - 2000);
+        }
+        log.warn("orchestrator: could not parse JSON from response (len={}); raw text:\n---\n{}\n---",
+            text.length(), preview);
         return Map.of("raw_text", text);
+    }
+
+    /**
+     * Strict parse first; on failure, runs {@link #fixCommonJsonErrors(String)} and retries.
+     * Returns {@code null} only when both passes fail — callers fall through to the next
+     * extraction strategy (fence vs braces) or to {@code raw_text}.
+     */
+    private Map<String, Object> tryParseWithFixup(String candidate) {
+        try {
+            return objectMapper.readValue(candidate, new TypeReference<Map<String, Object>>() {});
+        } catch (Exception ignored) { /* try fixup */ }
+        String fixed = fixCommonJsonErrors(candidate);
+        if (fixed.equals(candidate)) return null;
+        try {
+            Map<String, Object> result = objectMapper.readValue(fixed, new TypeReference<Map<String, Object>>() {});
+            log.info("orchestrator: JSON parsed after fixup pass (len={}, original strict-parse failed)",
+                fixed.length());
+            return result;
+        } catch (Exception ignored) { return null; }
+    }
+
+    /**
+     * Heuristic repair for the common LLM JSON typos we see in practice.
+     * Conservative: only fires when strict parse already failed.
+     *
+     * <p>Handles:
+     * <ul>
+     *   <li><b>Missing colon after key</b> — e.g. {@code "approach "Объявить...} (glm-4.6 on
+     *       FEAT-AP-002). The model swallowed the {@code ": "} between key and value,
+     *       leaving a trailing space inside the key. Repaired to {@code "approach": "Объявить...}.</li>
+     *   <li><b>Smart quotes</b> — {@code “ ” ‘ ’} → straight ASCII quotes.</li>
+     *   <li><b>Trailing comma</b> before {@code }} or {@code ]} — {@code [1, 2,]} → {@code [1, 2]}.</li>
+     * </ul>
+     *
+     * <p>Key-position anchoring (lookbehind on {@code \{ , \n}) keeps the regex from
+     * misfiring inside string values that happen to contain a {@code "word "} fragment.
+     */
+    static String fixCommonJsonErrors(String json) {
+        if (json == null) return null;
+        String result = json;
+        // 1. Smart quotes → straight
+        result = result
+            .replace('“', '"').replace('”', '"')
+            .replace('‘', '\'').replace('’', '\'');
+        // 2. Missing colon: `"key "value...` → `"key": "value...`
+        //    Anchored at key-position (after `{`, `,`, or newline + ws) so we don't
+        //    rewrite incidental `"word "` fragments inside JSON string values.
+        //    Lookahead requires a value character (letter or digit) so we don't fire
+        //    on cases like `"key " ,` (which is a different malformation).
+        result = java.util.regex.Pattern.compile(
+                "(?<=[\\{,\\n])(\\s*)\"([\\p{L}_][\\p{L}\\p{N}_]*) \"(?=[\\p{L}\\p{N}])",
+                java.util.regex.Pattern.UNICODE_CHARACTER_CLASS)
+            .matcher(result).replaceAll("$1\"$2\": \"");
+        // 3. Trailing comma before `}` or `]`
+        result = result.replaceAll(",(\\s*[}\\]])", "$1");
+        // 4. Unclosed structures — common when small models hit a self-imposed
+        //    stop-token mid-JSON (qwen3_cline_roocode on FEAT-AP-002 stopped after
+        //    starting a `requirements_coverage` entry). Walk outside string literals,
+        //    track brace/bracket depth, and append the required closers in reverse
+        //    order. We also close any open string literal first by adding a closing
+        //    quote on the last line if the brace scan finds an unterminated string.
+        result = balanceJsonStructure(result);
+        return result;
+    }
+
+    /**
+     * Appends missing {@code "}/{@code ]}/{@code "} characters when the input
+     * is a truncated-but-mostly-well-formed JSON object. Only fires when the
+     * stack has unclosed structures at end-of-string; well-formed input is returned
+     * unchanged. Skips string contents (including escaped quotes) when counting.
+     */
+    private static String balanceJsonStructure(String json) {
+        if (json == null || json.isEmpty()) return json;
+        java.util.ArrayDeque<Character> stack = new java.util.ArrayDeque<>();
+        boolean inString = false;
+        boolean escape = false;
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (inString) {
+                if (escape) { escape = false; continue; }
+                if (c == '\\') { escape = true; continue; }
+                if (c == '"') inString = false;
+                continue;
+            }
+            if (c == '"') inString = true;
+            else if (c == '{') stack.push('}');
+            else if (c == '[') stack.push(']');
+            else if (c == '}' || c == ']') {
+                if (!stack.isEmpty() && stack.peek() == c) stack.pop();
+            }
+        }
+        if (!inString && stack.isEmpty()) return json;
+        StringBuilder sb = new StringBuilder(json);
+        if (inString) sb.append('"');
+        // Drop any trailing comma that would otherwise sit right before our injected closer.
+        while (sb.length() > 0) {
+            char last = sb.charAt(sb.length() - 1);
+            if (last == ',' || Character.isWhitespace(last)) sb.deleteCharAt(sb.length() - 1);
+            else break;
+        }
+        while (!stack.isEmpty()) sb.append(stack.pop());
+        return sb.toString();
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
@@ -1188,6 +1664,126 @@ Rules:
         if (v == null) return def;
         if (v instanceof Number n) return n.intValue();
         return Integer.parseInt(v.toString().trim());
+    }
+
+    private static boolean asBool(Map<String, Object> cfg, String key, boolean def) {
+        Object v = cfg.get(key);
+        if (v == null) return def;
+        if (v instanceof Boolean b) return b;
+        String s = v.toString().trim().toLowerCase();
+        return s.equals("true") || s.equals("yes") || s.equals("1");
+    }
+
+    /** Cap on RAG section size so it doesn't drown the planner's own task context. */
+    private static final int ORCH_RAG_MAX_CHARS = 5_000;
+    private static final int ORCH_RAG_TOP_K = 3;
+
+    /**
+     * Builds the `## Релевантный код` section to prepend to the planner's user_message.
+     * Queries {@link com.workflow.knowledge.KnowledgeBase} with the task description
+     * (or explicit {@code auto_search_query}). Returns "" when the index is empty,
+     * the query is missing, or the knowledge layer is disabled.
+     */
+    @SuppressWarnings("unchecked")
+    private String buildRagSection(Map<String, Object> cfg, Map<String, Object> input) {
+        String slug = com.workflow.project.ProjectContext.get();
+        if (slug == null || slug.isBlank()) return "";
+        String query = pickPlannerRagQuery(cfg, input);
+        if (query == null || query.isBlank()) return "";
+        try {
+            java.util.List<com.workflow.knowledge.KnowledgeHit> hits =
+                knowledgeBase.search(slug, query, ORCH_RAG_TOP_K);
+            if (hits.isEmpty()) return "";
+            StringBuilder sb = new StringBuilder();
+            sb.append("## Релевантный код (top-").append(hits.size())
+              .append(" семантически по запросу: «")
+              .append(query.length() > 100 ? query.substring(0, 100) + "…" : query)
+              .append("»)\n\n");
+            int total = 0;
+            for (com.workflow.knowledge.KnowledgeHit h : hits) {
+                String header = "### " + h.path() + ':' + h.startLine() + '-' + h.endLine() + "\n```\n";
+                String tail = "\n```\n\n";
+                int budget = ORCH_RAG_MAX_CHARS - total - header.length() - tail.length();
+                if (budget <= 0) break;
+                String content = h.content();
+                if (content.length() > budget) content = content.substring(0, budget) + "\n…[truncated]";
+                sb.append(header).append(content).append(tail);
+                total += header.length() + content.length() + tail.length();
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.debug("orchestrator auto_inject_rag skipped: {}", e.getMessage());
+            return "";
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String pickPlannerRagQuery(Map<String, Object> cfg, Map<String, Object> input) {
+        Object q = cfg.get("auto_search_query");
+        if (q != null && !q.toString().isBlank()) return q.toString();
+        // Fallback: pull task_md.to_be (full task spec) — best signal for what the
+        // plan is about, embedder picks up domain terms naturally.
+        Object taskMd = input.get("task_md");
+        if (taskMd instanceof Map<?, ?> m) {
+            Object toBe = m.get("to_be");
+            if (toBe != null && !toBe.toString().isBlank()) {
+                String s = toBe.toString();
+                return s.length() > 1500 ? s.substring(0, 1500) : s;
+            }
+            Object title = m.get("title");
+            if (title != null && !title.toString().isBlank()) return title.toString();
+        }
+        return null;
+    }
+
+    /**
+     * Builds a degraded structured output from free-form prose when {@code prose_fallback}
+     * is enabled and the model returned no parseable JSON. The shape matches the per-mode
+     * defaults the runner enforces downstream, so {@code ${plan_impl.approach}} etc. still
+     * resolve. Marks the output with {@code degraded:true} so the UI can flag it.
+     *
+     * <p>Plan-mode: prose lands in {@code approach}, first non-empty line becomes {@code goal}.
+     * Pipeline continues with a text-only plan (no preload, no requirements_coverage).
+     *
+     * <p>Review-mode: optimistic — sets {@code passed=true, action=continue} and dumps
+     * prose into {@code carry_forward}. Real regressions are caught by downstream
+     * build/tests/verify_acceptance blocks, not by the prose ramp.
+     */
+    private Map<String, Object> synthesiseFromProse(String prose, String mode, ToolUseResponse response) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("mode", mode);
+        out.put("iterations_used", response.iterationsUsed());
+        out.put("total_cost_usd", response.totalCostUsd());
+        out.put("degraded", true);
+        out.put("degraded_reason", "prose_fallback: model returned free-form text, not JSON");
+
+        String text = prose == null ? "" : prose.trim();
+        String firstLine = "";
+        for (String line : text.split("\n")) {
+            String t = line.trim();
+            if (!t.isEmpty() && !t.startsWith("#") && !t.startsWith("```")) {
+                firstLine = t.length() > 200 ? t.substring(0, 200) : t;
+                break;
+            }
+        }
+
+        if ("review".equals(mode)) {
+            out.put("passed", Boolean.TRUE);            // optimistic — downstream will catch real issues
+            out.put("issues", "");
+            out.put("action", "continue");
+            out.put("retry_instruction", "");
+            out.put("carry_forward", text);
+            out.put("checklist_status", List.of());
+            out.put("regressions", List.of());
+        } else {
+            out.put("goal", firstLine.isEmpty() ? "(prose-fallback plan)" : firstLine);
+            out.put("approach", text);
+            out.put("files_to_touch", "");
+            out.put("definition_of_done", "");
+            out.put("tools_to_use", "Read, Edit, Grep, Glob, Bash");
+            out.put("requirements_coverage", List.of());
+        }
+        return out;
     }
 
     private static double asDouble(Map<String, Object> cfg, String key, double def) {

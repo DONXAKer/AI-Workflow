@@ -35,6 +35,19 @@ workflow:
   prompt-context:
     allow: ["git *", "find", "ls", "cat", "head", "tail", "tree"]
     timeout-ms: 5000
+  knowledge:
+    # Qdrant URL. When unset, KnowledgeBase falls back to NoOpKnowledgeBase and the
+    # Search tool returns "(no project index)" — runs still work, just without RAG.
+    # In Docker: http://qdrant:6333 (service name), or http://host.docker.internal:6333
+    # when Qdrant runs on the host.
+    qdrant:
+      url: ${QDRANT_URL:}
+    # Ollama model used to embed both indexed chunks and search queries. Must be the
+    # same on both sides (mismatch → mismatched dims → empty results). 274 MB,
+    # 768-dim; mxbai-embed-large (1024-dim) is the next step up if recall is weak.
+    embed-model: ${EMBED_MODEL:nomic-embed-text:v1.5}
+    chunk-lines: 200
+    chunk-overlap: 30
 
 logging:
   level:

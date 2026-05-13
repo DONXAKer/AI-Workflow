@@ -4,7 +4,7 @@ import { effectiveApprovalMode } from '../utils/configSnapshot'
 import { blockIdLabel } from '../utils/blockLabels'
 import { getBlockView, BlockViewSpec, FieldSpec } from '../blockViews/index'
 import clsx from 'clsx'
-import { useState, useCallback, useEffect, Fragment, useMemo } from 'react'
+import { useState, useCallback, useEffect, Fragment } from 'react'
 
 const APPROVAL_BADGE: Record<ApprovalMode, { label: string; Icon: React.ComponentType<{ className?: string }>; cls: string }> = {
   manual: { label: 'Одобрение', Icon: Hand, cls: 'bg-amber-900/40 border-amber-800/60 text-amber-300' },
@@ -374,8 +374,10 @@ const KNOWN_FIELDS: FieldSpec[] = [
   { key: 'acceptance_checklist', label: 'Acceptance checklist', kind: 'objList', emphasis: true },
   { key: 'goal', label: 'Goal', kind: 'multiline', emphasis: true },
   { key: 'approach', label: 'Approach', kind: 'multiline' },
-  { key: 'files_to_touch', label: 'Files to touch', kind: 'list' },
-  { key: 'tools_to_use', label: 'Tools to use', kind: 'list' },
+  // Both are newline/comma strings per orchestrator schema, not arrays — rendering
+  // as 'list' produced spurious "—" placeholders. See plan_block.ts comment.
+  { key: 'files_to_touch', label: 'Files to touch', kind: 'multiline' },
+  { key: 'tools_to_use', label: 'Tools to use', kind: 'multiline' },
   { key: 'definition_of_done', label: 'Definition of Done', kind: 'multiline' },
   { key: 'retry_instruction', label: 'Retry instruction', kind: 'multiline' },
   { key: 'issues', label: 'Issues', kind: 'list' },
@@ -394,7 +396,6 @@ const KNOWN_FIELDS: FieldSpec[] = [
   { key: 'reason', label: 'Reason', kind: 'string' },
   { key: 'status', label: 'Status', kind: 'string' },
 ]
-const KNOWN_FIELD_KEYS = new Set(KNOWN_FIELDS.map(f => f.key))
 
 const TRUNCATE_LINE_LIMIT = 200
 const TRUNCATE_BYTE_LIMIT = 4096
@@ -496,18 +497,26 @@ function FieldValue({ value, kind }: { value: unknown; kind: FieldSpec['kind'] }
 
 /** Renders output using spec fields (if provided) or KNOWN_FIELDS fallback. */
 export function StructuredOutput({ output, specFields }: { output: Record<string, unknown>; specFields?: FieldSpec[] }) {
-  const [showJson, setShowJson] = useState(false)
   const fieldDefs = specFields ?? KNOWN_FIELDS
-  const specKeys = specFields ? new Set(specFields.map(f => f.key)) : KNOWN_FIELD_KEYS
 
-  const presentFields = fieldDefs.filter(f => f.key in output && output[f.key] !== null && output[f.key] !== undefined)
-  const unknownKeys = Object.keys(output).filter(k => !specKeys.has(k) && !k.startsWith('_'))
-  const jsonStr = JSON.stringify(output, null, 2)
-
+  // Skip fields whose value is empty — empty strings, empty arrays, and
+  // whitespace-only multiline content all rendered as a useless "—" before this.
+  const presentFields = fieldDefs.filter(f => {
+    if (!(f.key in output)) return false
+    const v = output[f.key]
+    if (v === null || v === undefined) return false
+    if (typeof v === 'string' && v.trim() === '') return false
+    if (Array.isArray(v) && v.length === 0) return false
+    return true
+  })
   if (presentFields.length === 0) {
     return <CompactJsonView output={output} />
   }
 
+  // The unknown-keys "Ещё N полей (JSON)" expander and the trailing CopyButton with
+  // the full output JSON were removed deliberately — operators report "общий JSON
+  // не нужен он нигде". If a per-block view declares a field we want to surface,
+  // add it to that view's spec.fields[] instead of relying on the catch-all JSON dump.
   return (
     <div className="space-y-2">
       {presentFields.map(f => (
@@ -516,19 +525,6 @@ export function StructuredOutput({ output, specFields }: { output: Record<string
           <FieldValue value={output[f.key]} kind={f.kind} />
         </div>
       ))}
-      {unknownKeys.length > 0 && (
-        <button type="button" onClick={() => setShowJson(v => !v)}
-          className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-blue-400 transition-colors">
-          {showJson ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-          {showJson ? 'Скрыть' : `Ещё ${unknownKeys.length} ${unknownKeys.length === 1 ? 'поле' : unknownKeys.length < 5 ? 'поля' : 'полей'} (JSON)`}
-        </button>
-      )}
-      {showJson && (
-        <pre className="text-[10px] text-slate-400 bg-slate-950 border border-slate-800 rounded p-2 overflow-auto max-h-48 whitespace-pre-wrap">{jsonStr}</pre>
-      )}
-      <div className="flex justify-end">
-        <CopyButton text={jsonStr} />
-      </div>
     </div>
   )
 }
@@ -717,7 +713,9 @@ function BlockExpandedDetail({ block, calls, llmCalls, runId, spec }: {
   runId?: string
   spec?: BlockViewSpec
 }) {
-  const [inputOpen, setInputOpen] = useState(false)
+  // Defaults open: expanding a block row should reveal the full picture immediately —
+  // input and iterations included — without forcing a second click on each sub-section.
+  const [inputOpen, setInputOpen] = useState(true)
   const [copied, setCopied] = useState(false)
 
   const hasIterations = calls.length > 0 || (llmCalls && llmCalls.length > 0)
@@ -727,7 +725,7 @@ function BlockExpandedDetail({ block, calls, llmCalls, runId, spec }: {
   const hasErrors = calls.some(c => c.isError) ||
     block.status === 'failed' ||
     (llmCalls?.some(lc => BAD_FINISH.has((lc.finishReason ?? '').toUpperCase())) ?? false)
-  const [iterOpen, setIterOpen] = useState(false)
+  const [iterOpen, setIterOpen] = useState(true)
   // Auto-open when errors are detected — even if llmCalls loaded after initial render
   useEffect(() => {
     if (hasErrors) setIterOpen(true)
@@ -758,22 +756,28 @@ function BlockExpandedDetail({ block, calls, llmCalls, runId, spec }: {
         </section>
       )}
 
-      {/* 2. Input — second, collapsed */}
-      {hasInput && (
-        <section className="px-5 py-3 border-t border-slate-800/60">
-          <button type="button" onClick={() => setInputOpen(v => !v)}
-            className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-slate-500 hover:text-slate-300 font-medium transition-colors">
-            {inputOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            Входные данные
-            <span className="text-slate-600 normal-case font-normal">({Object.keys(block.input!).length} {Object.keys(block.input!).length === 1 ? 'поле' : 'полей'})</span>
-          </button>
-          {inputOpen && (
-            <div className="mt-2">
-              <StructuredOutput output={block.input!} specFields={spec?.inputFields} />
-            </div>
-          )}
-        </section>
-      )}
+      {/* 2. Input — second, collapsed. Count visible (non-underscore) keys only;
+           hide the section entirely if nothing surfaces. */}
+      {hasInput && (() => {
+        const visibleKeys = Object.keys(block.input!).filter(k => !k.startsWith('_'))
+        if (visibleKeys.length === 0) return null
+        const word = visibleKeys.length === 1 ? 'поле' : visibleKeys.length < 5 ? 'поля' : 'полей'
+        return (
+          <section className="px-5 py-3 border-t border-slate-800/60">
+            <button type="button" onClick={() => setInputOpen(v => !v)}
+              className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-slate-500 hover:text-slate-300 font-medium transition-colors">
+              {inputOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              Входные данные
+              <span className="text-slate-600 normal-case font-normal">({visibleKeys.length} {word})</span>
+            </button>
+            {inputOpen && (
+              <div className="mt-2">
+                <StructuredOutput output={block.input!} specFields={spec?.inputFields} />
+              </div>
+            )}
+          </section>
+        )
+      })()}
 
       {/* 3. Iterations — third, collapsible */}
       {hasIterations && (
@@ -832,15 +836,6 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
     })
   }, [])
 
-  // Build blockId → last LLM call map (used for model chip on main row)
-  const lastLlmByBlockIteration = useMemo(() => {
-    const map = new Map<string, LlmCallEntry>()
-    for (const lc of (llmCalls ?? [])) {
-      map.set(`${lc.blockId}:${lc.iteration}`, lc)
-    }
-    return map
-  }, [llmCalls])
-
   if (blockStatuses.length === 0) {
     return (
       <div className="bg-slate-900 border border-slate-800 rounded-xl">
@@ -889,16 +884,28 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
               const Icon = cfg.Icon
               const blockIteration = block.iteration ?? 0
               const rowKey = `${block.blockId}:${blockIteration}`
-              const blockCalls = toolCalls?.filter(tc => tc.blockId === block.blockId && tc.iteration >= blockIteration * 0) ?? []
-              // For per-iteration blocks, filter calls to this iteration range
-              const iterCalls = (block.iteration != null)
-                ? toolCalls?.filter(tc => tc.blockId === block.blockId) ?? []
-                : blockCalls
-              const blockLlmCalls = (block.iteration != null)
-                ? llmCalls?.filter(lc => lc.blockId === block.blockId) ?? []
-                : llmCalls?.filter(lc => lc.blockId === block.blockId) ?? []
-              const lastLlmCall = lastLlmByBlockIteration.get(`${block.blockId}:${blockIteration}`)
-                ?? blockLlmCalls[blockLlmCalls.length - 1]
+              // Filter tool/LLM calls to THIS loopback iteration only — without this,
+              // every iteration row shows all calls from every iteration (audit's
+              // `iteration` field is the LLM-loop counter, which resets per invocation
+              // and collides across loopbacks). Use the block's startedAt/completedAt
+              // window when available; fall back to blockId-only if no timestamps yet.
+              const startMs = block.startedAt ? Date.parse(block.startedAt) : NaN
+              const endMs = block.completedAt ? Date.parse(block.completedAt) : NaN
+              const inWindow = (ts?: string): boolean => {
+                if (!ts) return true  // legacy rows w/o timestamp → keep them visible
+                const t = Date.parse(ts)
+                if (Number.isNaN(t)) return true
+                if (!Number.isNaN(startMs) && t < startMs - 1000) return false
+                if (!Number.isNaN(endMs) && t > endMs + 5000) return false
+                return true
+              }
+              const iterCalls = toolCalls?.filter(tc =>
+                tc.blockId === block.blockId && inWindow(tc.timestamp)) ?? []
+              const blockLlmCalls = llmCalls?.filter(lc =>
+                lc.blockId === block.blockId && inWindow(lc.timestamp)) ?? []
+              // blockLlmCalls already filtered to this loopback iteration's time window —
+              // the last one is the call we want for the model chip.
+              const lastLlmCall = blockLlmCalls[blockLlmCalls.length - 1]
               const shortModel = lastLlmCall?.model.replace(/^[^/]+\//, '').replace(/^claude-/, '')
               const badFinishReason = lastLlmCall?.finishReason && BAD_FINISH.has(lastLlmCall.finishReason.toUpperCase())
                 ? lastLlmCall.finishReason.toUpperCase() : null
@@ -964,13 +971,6 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                       </span>
                       {block.status === 'running' && block.progressDetail && (
                         <div className="mt-1 text-[11px] text-blue-400/80 font-mono">{block.progressDetail}</div>
-                      )}
-                      {hasDetails && (
-                        <button type="button" onClick={() => toggleBlock(rowKey)}
-                          className="mt-1.5 flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-300 transition-colors">
-                          {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                          детали
-                        </button>
                       )}
                     </td>
                     <td className="px-5 py-3.5 whitespace-nowrap">
