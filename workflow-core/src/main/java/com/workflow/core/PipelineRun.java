@@ -107,6 +107,22 @@ public class PipelineRun {
     @Column(nullable = false)
     private String projectSlug = "default";
 
+    /**
+     * JSON object {@code {blockId: {provider, model}}} applied by escalation cloud-steps
+     * to swap the block's model/provider on the next iteration. Read by {@code LlmClient}
+     * at request time; cleared when the run completes or escalation moves to a human step.
+     */
+    @Column(name = "runtime_overrides_json", columnDefinition = "TEXT")
+    private String runtimeOverridesJson = "{}";
+
+    /**
+     * JSON object {@code {blockId: {stepIndex, attemptsAtCurrentStep}}} tracking how far
+     * the escalation ladder has been descended per block. Persisted so a paused-for-approval
+     * run resumes at the correct ladder position.
+     */
+    @Column(name = "escalation_state_json", columnDefinition = "TEXT")
+    private String escalationStateJson = "{}";
+
     @PrePersist
     protected void onCreate() {
         if (startedAt == null) {
@@ -200,5 +216,15 @@ public class PipelineRun {
     public String getProjectSlug() { return projectSlug; }
     public void setProjectSlug(String projectSlug) {
         this.projectSlug = projectSlug != null ? projectSlug : "default";
+    }
+
+    public String getRuntimeOverridesJson() { return runtimeOverridesJson; }
+    public void setRuntimeOverridesJson(String runtimeOverridesJson) {
+        this.runtimeOverridesJson = runtimeOverridesJson != null ? runtimeOverridesJson : "{}";
+    }
+
+    public String getEscalationStateJson() { return escalationStateJson; }
+    public void setEscalationStateJson(String escalationStateJson) {
+        this.escalationStateJson = escalationStateJson != null ? escalationStateJson : "{}";
     }
 }

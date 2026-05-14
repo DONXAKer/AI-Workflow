@@ -27,6 +27,12 @@ public class OnFailureConfig {
     @JsonProperty("failed_statuses")
     private List<String> failedStatuses = Arrays.asList("failure", "failed", "timeout", "cancelled");
 
+    /**
+     * Ladder of fallback steps when {@link #maxIterations} is exhausted.
+     * See {@link OnFailConfig#getEscalation()} for semantics.
+     */
+    private EscalationConfig escalation = EscalationConfig.defaults();
+
     public String getAction() { return action; }
     public void setAction(String action) { this.action = action; }
 
@@ -44,5 +50,10 @@ public class OnFailureConfig {
     public List<String> getFailedStatuses() { return failedStatuses; }
     public void setFailedStatuses(List<String> failedStatuses) {
         this.failedStatuses = failedStatuses != null ? failedStatuses : this.failedStatuses;
+    }
+
+    public EscalationConfig getEscalation() { return escalation; }
+    public void setEscalation(EscalationConfig escalation) {
+        this.escalation = escalation != null ? escalation : EscalationConfig.defaults();
     }
 }

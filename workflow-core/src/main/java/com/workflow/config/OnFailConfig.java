@@ -23,6 +23,14 @@ public class OnFailConfig {
     @JsonProperty("inject_context")
     private Map<String, String> injectContext = new HashMap<>();
 
+    /**
+     * Ladder of fallback steps when {@link #maxIterations} is exhausted (or, in a
+     * future PR, when no-progress is detected). Defaults to {@link EscalationConfig#defaults()}
+     * — resolved at runtime to Project- or global-level defaults. Use {@code escalation: none}
+     * in YAML to opt out for a specific block.
+     */
+    private EscalationConfig escalation = EscalationConfig.defaults();
+
     public String getAction() { return action; }
     public void setAction(String action) { this.action = action; }
 
@@ -35,5 +43,10 @@ public class OnFailConfig {
     public Map<String, String> getInjectContext() { return injectContext; }
     public void setInjectContext(Map<String, String> injectContext) {
         this.injectContext = injectContext != null ? injectContext : new HashMap<>();
+    }
+
+    public EscalationConfig getEscalation() { return escalation; }
+    public void setEscalation(EscalationConfig escalation) {
+        this.escalation = escalation != null ? escalation : EscalationConfig.defaults();
     }
 }

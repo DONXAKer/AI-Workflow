@@ -63,6 +63,29 @@ public class PipelineConfigValidator {
     public static final String PHASE_MONOTONICITY       = "PHASE_MONOTONICITY";
     public static final String PHASE_LOOPBACK_FORWARD   = "PHASE_LOOPBACK_FORWARD";
     public static final String PHASE_OVERRIDE_MISSING   = "PHASE_OVERRIDE_MISSING";
+    public static final String WEAK_LLM_CHECK_PROMPT    = "WEAK_LLM_CHECK_PROMPT";
+    public static final String ESCALATION_EMPTY_LADDER  = "ESCALATION_EMPTY_LADDER";
+    public static final String ESCALATION_UNKNOWN_PROVIDER = "ESCALATION_UNKNOWN_PROVIDER";
+
+    /**
+     * Minimum acceptable length for {@code verify.llm_check.prompt}. Anything shorter
+     * is almost certainly a stub (the canonical bad example: "Оцени качество 0-10.").
+     */
+    static final int LLM_CHECK_PROMPT_MIN_LENGTH = 100;
+
+    /**
+     * Case-insensitive markers indicating the prompt actually names some evaluation
+     * criteria rather than asking the model to score in a vacuum. Matched as substrings
+     * after lowercasing; one hit is enough.
+     */
+    private static final List<String> LLM_CHECK_CRITERIA_MARKERS = List.of(
+        "security", "performance", "производительност",
+        "criteria", "criterion", "критер",
+        "dod", "definition of done", "acceptance",
+        "test", "тест",
+        "regression", "регресс",
+        "logic", "логи", "баг", "bug"
+    );
 
     /** Matches {@code ${...}} interpolations in YAML strings. */
     private static final Pattern DOLLAR_BRACE_REF = Pattern.compile("\\$\\{([^}]+)}");
@@ -184,7 +207,10 @@ public class PipelineConfigValidator {
                                 + "' is not a defined block",
                             "pipeline[" + i + "].verify.on_fail.target", b.getId()));
                     }
+                    validateEscalation(onFail.getEscalation(), b.getId(),
+                        "pipeline[" + i + "].verify.on_fail.escalation", errors);
                 }
+                validateLlmCheckPrompt(v, b.getId(), i, errors);
             }
 
             OnFailureConfig onFailure = b.getOnFailure();
@@ -196,6 +222,8 @@ public class PipelineConfigValidator {
                             + "' is not a defined block",
                         "pipeline[" + i + "].on_failure.target", b.getId()));
                 }
+                validateEscalation(onFailure.getEscalation(), b.getId(),
+                    "pipeline[" + i + "].on_failure.escalation", errors);
             }
         }
 
@@ -396,6 +424,78 @@ public class PipelineConfigValidator {
         Block bean = blockRegistry.get(b.getBlock());
         if (bean == null) return Phase.forBlockType(b.getBlock());
         return bean.getMetadata().phase();
+    }
+
+    /**
+     * Warns when {@code verify.llm_check.prompt} is too short to actually guide the model
+     * or doesn't reference any evaluation criteria. Catches stub prompts like
+     * "Оцени качество 0-10." that pass schema validation but produce useless reviews.
+     *
+     * <p>Always emits {@link Severity#WARN}, never {@link Severity#ERROR} — pipelines with
+     * weak prompts must still load (backwards compat for existing configs).
+     */
+    private void validateLlmCheckPrompt(VerifyConfig v, String blockId, int blockIdx,
+                                        List<ValidationError> errors) {
+        LLMCheckConfig llm = v.getLlmCheck();
+        if (llm == null || !llm.isEnabled()) return;
+        String prompt = llm.getPrompt();
+        if (prompt == null) return; // missing prompt is handled elsewhere via runtime defaults
+        String trimmed = prompt.trim();
+        String location = "pipeline[" + blockIdx + "].verify.llm_check.prompt";
+        if (trimmed.length() < LLM_CHECK_PROMPT_MIN_LENGTH) {
+            errors.add(new ValidationError(WEAK_LLM_CHECK_PROMPT,
+                "Block '" + blockId + "' verify.llm_check.prompt is too short ("
+                    + trimmed.length() + " chars, минимум " + LLM_CHECK_PROMPT_MIN_LENGTH
+                    + "). Stub prompts produce useless reviews — укажи роль, критерии "
+                    + "(security/performance/тесты/DoD), и шкалу оценки.",
+                location, blockId, Severity.WARN));
+            return;
+        }
+        String lower = trimmed.toLowerCase(java.util.Locale.ROOT);
+        boolean hasMarker = LLM_CHECK_CRITERIA_MARKERS.stream().anyMatch(lower::contains);
+        if (!hasMarker) {
+            errors.add(new ValidationError(WEAK_LLM_CHECK_PROMPT,
+                "Block '" + blockId + "' verify.llm_check.prompt не упоминает критериев оценки "
+                    + "(security / performance / DoD / acceptance / тесты / логика). "
+                    + "Модель будет выставлять оценки в вакууме — добавь явные критерии.",
+                location, blockId, Severity.WARN));
+        }
+    }
+
+    /**
+     * Validates {@code on_fail.escalation} / {@code on_failure.escalation} arrays.
+     * Polymorphic deserialization already rejects unknown tier values; here we surface
+     * semantic warnings that Jackson can't catch (empty ladder, unknown provider names).
+     */
+    private void validateEscalation(EscalationConfig escalation, String blockId, String location,
+                                     List<ValidationError> errors) {
+        if (escalation == null || escalation.policy() != EscalationConfig.Policy.EXPLICIT) return;
+        List<EscalationStep> steps = escalation.steps();
+
+        if (steps.isEmpty()) {
+            errors.add(ValidationError.info(ESCALATION_EMPTY_LADDER,
+                "Block '" + blockId + "' has an empty explicit escalation ladder — this behaves "
+                    + "identically to `escalation: none`. Did you mean to opt out, or to populate the list?",
+                location, blockId));
+            return;
+        }
+
+        for (int s = 0; s < steps.size(); s++) {
+            EscalationStep step = steps.get(s);
+            String stepLoc = location + "[" + s + "]";
+            if (step instanceof EscalationStep.Cloud cloud) {
+                if (cloud.provider() != null && !cloud.provider().isBlank()) {
+                    try {
+                        com.workflow.llm.LlmProvider.valueOf(cloud.provider().toUpperCase());
+                    } catch (IllegalArgumentException e) {
+                        errors.add(ValidationError.warn(ESCALATION_UNKNOWN_PROVIDER,
+                            "Block '" + blockId + "' escalation step " + s + " has unknown provider '"
+                                + cloud.provider() + "'. Known: OPENROUTER, OLLAMA, VLLM, CLAUDE_CODE_CLI, AITUNNEL.",
+                            stepLoc + ".provider", blockId));
+                    }
+                }
+            }
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

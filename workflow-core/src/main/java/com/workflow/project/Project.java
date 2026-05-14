@@ -73,6 +73,15 @@ public class Project {
     @Column(name = "default_provider")
     private LlmProvider defaultProvider;
 
+    /**
+     * Per-project override for the global escalation ladder. JSON array of polymorphic
+     * {@link com.workflow.config.EscalationStep} objects discriminated by {@code tier}.
+     * When null, blocks fall back to {@code workflow.escalation.defaults} in application.yaml.
+     * Block-level {@code escalation: [...]} in pipeline YAML overrides both.
+     */
+    @Column(name = "escalation_defaults_json", columnDefinition = "TEXT")
+    private String escalationDefaultsJson;
+
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -110,6 +119,8 @@ public class Project {
     public LlmProvider getEffectiveDefaultProvider() {
         return defaultProvider == null ? LlmProvider.OPENROUTER : defaultProvider;
     }
+    public String getEscalationDefaultsJson() { return escalationDefaultsJson; }
+    public void setEscalationDefaultsJson(String escalationDefaultsJson) { this.escalationDefaultsJson = escalationDefaultsJson; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 }

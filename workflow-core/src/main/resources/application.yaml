@@ -25,6 +25,24 @@ workflow:
   smart-detect:
     model: google/gemini-2.0-flash-001
     confidence-threshold: 0.7
+  escalation:
+    # Fallback ladder when a block's verify.on_fail / on_failure exhausts max_iterations
+    # AND the block did not provide its own escalation: [...]. Used by EscalationResolver
+    # as level-3 fallback (level-1 = block YAML, level-2 = Project.escalationDefaultsJson).
+    # Tier 'cloud' switches the block to a heavier model/provider and reruns with reset
+    # loop counter; tier 'human' pauses for operator approval.
+    defaults:
+      - tier: cloud
+        provider: openrouter
+        model: smart
+        max-iterations: 2
+      - tier: human
+        notify: [ui]
+        timeout: 86400
+    # Hard cap on cumulative cloud-tier LLM spend per run, in USD. Exceeded → cloud-tier
+    # escalation is skipped and the ladder jumps to the next human step (or fails if
+    # there is no human step). Read by cost-tracking integration in Phase B2.
+    max-budget-usd: 10.00
   encryption:
     # 32 bytes (AES-256), Base64-encoded. Override via WORKFLOW_ENCRYPTION_KEY in prod.
     # When absent, a development key is used with a loud warning at startup.

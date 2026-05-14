@@ -85,6 +85,9 @@ public class PipelineRunner {
     @Autowired
     private PipelineConfigValidator pipelineConfigValidator;
 
+    @Autowired
+    private EscalationService escalationService;
+
     private Map<String, Block> blockRegistry;
 
     @Autowired(required = false)
@@ -785,6 +788,108 @@ public class PipelineRunner {
         return targetIndex;
     }
 
+    /**
+     * Try to escalate after a loopback exhausted max_iterations. Consults
+     * {@link EscalationService} to walk the ladder (cloud → human). Returns:
+     * <ul>
+     *   <li>{@code >= 0}: new index to continue execution from (cloud retry succeeded
+     *       via a fresh handleLoopback, or human approve advanced past the failing block)</li>
+     *   <li>{@code -1}: ladder exhausted or human rejected — caller should fail
+     *       the run with its original error message</li>
+     * </ul>
+     */
+    private int tryEscalateAfterLoopback(
+            PipelineRun run, String failingBlockId, String targetId,
+            com.workflow.config.EscalationConfig blockEscalation, int maxIter,
+            Map<String, Object> currentOutput, Map<String, Object> blockInputs,
+            List<String> issues, Map<String, Object> extraCtx,
+            List<BlockConfig> sortedBlocks, int currentIdx, Instant blockStart) {
+
+        List<com.workflow.config.EscalationStep> ladder = escalationService.resolveLadder(run, blockEscalation);
+        if (ladder.isEmpty()) return -1;
+
+        Map<String, Object> failureContext = new LinkedHashMap<>();
+        failureContext.put("issues", issues);
+        if (currentOutput != null && currentOutput.get("score") != null) {
+            failureContext.put("verify_score", currentOutput.get("score"));
+        }
+
+        EscalationDecision decision = escalationService.attemptEscalation(
+                run, failingBlockId, targetId, ladder, failureContext);
+
+        if (decision instanceof EscalationDecision.RetryWithCloud) {
+            // Reset the loop counter for this target and re-enter handleLoopback.
+            String loopKey = "loopback:" + failingBlockId + ":" + targetId;
+            run.getLoopIterations().put(loopKey, 0);
+            runRepository.save(run);
+            int newI = handleLoopback(loopKey, targetId, failingBlockId, maxIter,
+                    issues, extraCtx, sortedBlocks, currentIdx, run);
+            if (newI >= 0) {
+                log.info("Escalation cloud-tier: run={} failingBlock={} retrying from idx {}",
+                        run.getId(), failingBlockId, newI);
+                return newI;
+            }
+            return -1;
+        }
+
+        if (decision instanceof EscalationDecision.PauseForHuman pause) {
+            // Save current (failed) output for the gate UI before pausing.
+            saveBlockOutput(run, failingBlockId, currentOutput, blockInputs, blockStart, Instant.now());
+            run.setStatus(RunStatus.PAUSED_FOR_APPROVAL);
+            run.setPausedAt(Instant.now());
+            long timeoutS = pause.step().timeoutSeconds();
+            run.setApprovalTimeoutSeconds((int) Math.min((long) Integer.MAX_VALUE, timeoutS));
+            run.setApprovalTimeoutAction("fail");
+            runRepository.save(run);
+
+            List<String> remainingIds = sortedBlocks.subList(currentIdx + 1, sortedBlocks.size())
+                    .stream().map(BlockConfig::getId).toList();
+
+            String desc = "Escalation: block '" + failingBlockId + "' exhausted retries (incl. cloud-tier). "
+                    + "Approve to accept the current output (override failure) or reject to fail the run.";
+
+            Map<String, Object> displayOutput = new LinkedHashMap<>();
+            if (currentOutput != null) displayOutput.putAll(currentOutput);
+            displayOutput.put("_escalation_bundle", pause.bundle());
+
+            if (wsHandler != null) wsHandler.sendApprovalRequest(run.getId(), failingBlockId, desc, displayOutput);
+            broadcastApprovalNotification(run, failingBlockId, desc);
+
+            try {
+                ApprovalResult ar = approvalGate.request(failingBlockId, "escalation_human", desc,
+                        blockInputs != null ? blockInputs : Map.of(), displayOutput, remainingIds);
+                clearApprovalTimeout(run);
+                if (ar != null && "APPROVED".equals(ar.getStatus())) {
+                    Map<String, Object> overrideOut = new LinkedHashMap<>(
+                            currentOutput != null ? currentOutput : Map.of());
+                    overrideOut.put("passed", true);
+                    overrideOut.put("escalation_override", true);
+                    overrideOut.put("escalation_step", "human");
+                    if (ar.getOutput() != null && ar.getOutput().get("reason") != null) {
+                        overrideOut.put("override_reason", ar.getOutput().get("reason"));
+                    }
+                    saveBlockOutput(run, failingBlockId, overrideOut, blockInputs, blockStart, Instant.now());
+                    if (!run.getCompletedBlocks().contains(failingBlockId)) {
+                        run.getCompletedBlocks().add(failingBlockId);
+                    }
+                    run.setStatus(RunStatus.RUNNING);
+                    runRepository.save(run);
+                    if (wsHandler != null) wsHandler.sendBlockComplete(run.getId(), failingBlockId, overrideOut);
+                    log.info("Escalation human gate: run={} failingBlock={} approved → continuing past idx {}",
+                            run.getId(), failingBlockId, currentIdx);
+                    return currentIdx + 1;
+                }
+            } catch (Exception e) {
+                log.warn("Human escalation approval failed for '{}': {}", failingBlockId, e.getMessage());
+            }
+            clearApprovalTimeout(run);
+            return -1;
+        }
+
+        // Exhausted — fall through to original failure.
+        return -1;
+    }
+
     private void executeBlocks(PipelineConfig config, PipelineRun run,
                                 String currentRequirement, boolean skipCompleted) {
         List<BlockConfig> sortedBlocks = topologicalSort(config.getPipeline());
@@ -867,6 +972,11 @@ public class PipelineRunner {
             effectiveBlockConfig.setAgent(agentProfileResolver.resolveAgent(effectiveBlockConfig, config.getDefaults()));
             effectiveBlockConfig.setSkills(agentProfileResolver.resolveSkills(effectiveBlockConfig));
 
+            // Apply any pending runtime override from a prior cloud-tier escalation.
+            // The override (model + provider) was written into run.runtimeOverridesJson by
+            // EscalationService.attemptEscalation when the verify-target hit max_iterations.
+            effectiveBlockConfig = escalationService.applyRuntimeOverride(effectiveBlockConfig, run);
+
             Block block = blockRegistry.get(blockConfig.getBlock());
             if (block == null) {
                 String error = "Unknown block type: " + blockConfig.getBlock();
@@ -912,7 +1022,8 @@ public class PipelineRunner {
             if (!cacheHit) try {
                 log.info("Running block: {} ({})", blockId, blockConfig.getBlock());
                 if (prodDeploy) prodDeployMutex.acquire(run.getId());
-                com.workflow.llm.LlmCallContext.set(run.getId(), blockId, resolveRunProvider(run));
+                com.workflow.llm.LlmCallContext.set(run.getId(), blockId,
+                    escalationService.effectiveProvider(run, blockId, resolveRunProvider(run)));
                 try {
                     output = runWithRetry(block, inputs, effectiveBlockConfig, run);
                     OutputValidator.validate(output, effectiveBlockConfig.getValidateOutput(), blockId);
@@ -1044,6 +1155,16 @@ public class PipelineRunner {
                                 ? List.of(s) : List.of();
                         Map<String, Object> extraCtx = resolveInjectContext(
                             verifyConfig.getOnFail().getInjectContext(), run);
+                        // Hardcode-promote reviewer's structured verdict into _loopback so the
+                        // downstream codegen block (agent_with_tools) can render the same per-id
+                        // table as the reviewer uses, without depending on per-pipeline YAML
+                        // inject_context. See OrchestratorBlock review-mode (PR1+PR2).
+                        if (output.get("checklist_status") instanceof List<?> cs && !cs.isEmpty()) {
+                            extraCtx.put("checklist_status", cs);
+                        }
+                        if (output.get("regressions") instanceof List<?> rg && !rg.isEmpty()) {
+                            extraCtx.put("regressions", rg);
+                        }
 
                         runRepository.save(run);
                         int newI = handleLoopback(loopKey, targetId, blockId, maxIter,
@@ -1052,10 +1173,18 @@ public class PipelineRunner {
                             if (wsHandler != null) wsHandler.sendBlockComplete(run.getId(), blockId, output);
                             i = newI;
                             continue;
-                        } else {
-                            markFailed(run, "Verify block '" + blockId + "' failed after max iterations");
-                            throw new RuntimeException("Verify '" + blockId + "' exceeded max loopback iterations");
                         }
+                        // Max iterations exhausted on local model — try escalation ladder.
+                        int escI = tryEscalateAfterLoopback(run, blockId, targetId,
+                                verifyConfig.getOnFail().getEscalation(), maxIter,
+                                output, inputs, issues, extraCtx, sortedBlocks, i, blockStart);
+                        if (escI >= 0) {
+                            if (wsHandler != null) wsHandler.sendBlockComplete(run.getId(), blockId, output);
+                            i = escI;
+                            continue;
+                        }
+                        markFailed(run, "Verify block '" + blockId + "' failed after max iterations");
+                        throw new RuntimeException("Verify '" + blockId + "' exceeded max loopback iterations");
                     }
                 }
             }
@@ -1088,6 +1217,17 @@ public class PipelineRunner {
                         if (newI >= 0) {
                             if (wsHandler != null) wsHandler.sendBlockComplete(run.getId(), blockId, output);
                             i = newI;
+                            continue;
+                        }
+                        // Try cloud/human escalation BEFORE the manual override gate — cloud
+                        // is cheaper than asking a human; human-step then plays the same role
+                        // as the existing override gate (just with a richer bundle).
+                        int escI = tryEscalateAfterLoopback(run, blockId, targetId,
+                                vFail.getEscalation(), maxIter,
+                                output, inputs, issues, extraCtx, sortedBlocks, i, blockStart);
+                        if (escI >= 0) {
+                            if (wsHandler != null) wsHandler.sendBlockComplete(run.getId(), blockId, output);
+                            i = escI;
                             continue;
                         }
                         // Max iterations exceeded — H3 manual override gate.
@@ -1150,6 +1290,15 @@ public class PipelineRunner {
                 if (newI >= 0) {
                     if (wsHandler != null) wsHandler.sendBlockComplete(run.getId(), blockId, output);
                     i = newI;
+                    continue;
+                }
+                // Max iterations exhausted on local model — try escalation ladder.
+                int escI = tryEscalateAfterLoopback(run, blockId, targetId,
+                        onFailure.getEscalation(), maxIter,
+                        output, inputs, issues, extraCtx, sortedBlocks, i, blockStart);
+                if (escI >= 0) {
+                    if (wsHandler != null) wsHandler.sendBlockComplete(run.getId(), blockId, output);
+                    i = escI;
                     continue;
                 }
                 // If max exceeded and action is warn/skip — fall through; otherwise fail
