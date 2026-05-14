@@ -1012,6 +1012,13 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                         const tokOut = blockLlmCalls.reduce((s, c) => s + (c.tokensOut ?? 0), 0)
                         const cost = blockLlmCalls.reduce((s, c) => s + (c.costUsd ?? 0), 0)
                         const calls = blockLlmCalls.length
+                        // "local" = провайдер физически бесплатен (Ollama/vLLM на нашей машине,
+                        // CLI на Max-подписке). AITUNNEL/OPENROUTER — платные, даже если
+                        // backend не получает costUsd из API (тогда показываем "—", не "local").
+                        const LOCAL_PROVIDERS = new Set(['OLLAMA', 'VLLM', 'CLAUDE_CODE_CLI'])
+                        const allLocal = blockLlmCalls.every(c =>
+                          c.provider != null && LOCAL_PROVIDERS.has(c.provider)
+                        )
                         // Per-model breakdown for tooltip
                         const modelMap = new Map<string, { calls: number; tokIn: number; tokOut: number; cost: number }>()
                         for (const c of blockLlmCalls) {
@@ -1032,8 +1039,10 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                             </div>
                             {cost > 0 ? (
                               <div className="text-emerald-400">${cost.toFixed(4)}</div>
-                            ) : (
+                            ) : allLocal ? (
                               <div className="text-slate-600">local</div>
+                            ) : (
+                              <div className="text-slate-600" title="Платный провайдер, но cost не получен от API">—</div>
                             )}
                             {models.length > 0 && (
                               <div className="text-slate-500 truncate max-w-[160px]">
