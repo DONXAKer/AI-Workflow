@@ -2,6 +2,7 @@ package com.workflow.api;
 
 import com.workflow.knowledge.ProjectIndexService;
 import com.workflow.knowledge.ProjectIndexer;
+import com.workflow.preflight.PreflightCacheService;
 import com.workflow.project.Project;
 import com.workflow.project.ProjectRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,6 +23,9 @@ public class ProjectController {
 
     @Autowired(required = false)
     private ProjectIndexService indexService;
+
+    @Autowired(required = false)
+    private PreflightCacheService preflightCacheService;
 
     @GetMapping
     public List<Project> list() {
@@ -130,5 +134,21 @@ public class ProjectController {
         return ResponseEntity.ok(Map.of(
             "file_count", s.fileCount(),
             "qdrant_enabled", s.qdrantEnabled()));
+    }
+
+    /**
+     * Drop all cached preflight snapshots for this project. Used when the local
+     * build environment changed in a way the cache can't auto-detect (JDK upgrade,
+     * npm registry pin, etc.). Next pipeline run forces a fresh preflight execution.
+     */
+    @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
+    @PostMapping("/{slug}/preflight/refresh")
+    public ResponseEntity<Map<String, Object>> preflightRefresh(@PathVariable String slug) {
+        if (repository.findBySlug(slug).isEmpty()) return ResponseEntity.notFound().build();
+        if (preflightCacheService == null) {
+            return ResponseEntity.ok(Map.of("removed", 0, "available", false));
+        }
+        int removed = preflightCacheService.invalidateForProject(slug);
+        return ResponseEntity.ok(Map.of("removed", removed, "available", true));
     }
 }

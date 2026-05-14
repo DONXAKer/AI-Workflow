@@ -25,6 +25,12 @@ workflow:
   smart-detect:
     model: google/gemini-2.0-flash-001
     confidence-threshold: 0.7
+  preflight:
+    # TTL for cached PreflightSnapshot rows. Snapshots older than this are treated as
+    # cache misses even on key match — protects against silent drift in dependency
+    # registries (npm/maven) that share a main commit SHA. Operator can force-refresh
+    # via POST /api/projects/{slug}/preflight/refresh.
+    cache-ttl: PT168H   # 7 days, ISO-8601 Duration
   escalation:
     # Fallback ladder when a block's verify.on_fail / on_failure exhausts max_iterations
     # AND the block did not provide its own escalation: [...]. Used by EscalationResolver
