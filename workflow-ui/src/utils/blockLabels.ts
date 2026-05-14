@@ -36,11 +36,19 @@ export const BLOCK_TYPE_LABELS: Record<string, string> = {
 
   // Phase 1 / agentic
   agent_with_tools:    'Агент с инструментами',
+  agent_verify:        'Агент-верификатор',
   orchestrator:        'Оркестратор',
   task_md_input:       'Чтение задачи',
   shell_exec:          'Команда Shell',
   claude_code_shell:   'Claude Code',
   http_get:            'HTTP-запрос',
+
+  // SDLC quality (preflight + intake_assessment + context_scan + test_planning + run_report)
+  preflight:           'Предполёт (build/test baseline)',
+  intake_assessment:   'Оценка ясности требования',
+  context_scan:        'Скан tech-стека и conventions',
+  test_planning:       'План тестов (стратегия + BVA)',
+  run_report:          'Финальный отчёт по run-у',
 }
 
 /** Returns Russian label for a block type, or the raw type if unknown. */
@@ -88,6 +96,14 @@ const BLOCK_ID_LABELS: Record<string, string> = {
   deploy:           'Деплой',
   rollback:         'Откат',
   release:          'Релиз',
+
+  // SDLC quality (block IDs match block types here, but explicit for clarity)
+  preflight:           'Предполёт',
+  intake_assessment:   'Оценка ясности',
+  context_scan:        'Скан стека',
+  test_planning:       'План тестов',
+  run_report:          'Отчёт по run-у',
+  verify_acceptance:   'Acceptance-верификация',
 }
 
 /**

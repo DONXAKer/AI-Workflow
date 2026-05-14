@@ -34,12 +34,24 @@ import { spec as shellExecSpec } from './shell_exec'
 import { spec as verifyBlockSpec } from './verify_block'
 import { spec as planBlockSpec } from './plan_block'
 import { spec as clarificationSpec } from './clarification'
+import { spec as preflightSpec } from './preflight'
+import { spec as intakeAssessmentSpec } from './intake_assessment'
+import { spec as contextScanSpec } from './context_scan'
+import { spec as testPlanningSpec } from './test_planning'
+import { spec as runReportSpec } from './run_report'
 
 const REGISTRY: Record<string, BlockViewSpec> = {
   // Task & analysis
   task_md: taskMdSpec,
   analysis: analysisSpec,
   clarification: clarificationSpec,
+
+  // SDLC quality sensors
+  preflight: preflightSpec,
+  intake_assessment: intakeAssessmentSpec,
+  context_scan: contextScanSpec,
+  test_planning: testPlanningSpec,
+  run_report: runReportSpec,
 
   // Shell exec blocks
   branch_setup: shellExecSpec,
