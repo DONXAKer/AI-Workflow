@@ -1,0 +1,180 @@
+name: sdlc-quality
+description: |
+  SDLC-quality pipeline per docs/plans/sdlc-quality-pipeline.md (grilled 2026-05-14).
+  Phases A (escalation, preflight), B (intake_assessment, cost tracking), C1 (context_scan),
+  D3 (run_report) wired into one runnable graph.
+
+  Gating model:
+  - preflight ALWAYS runs first; on RED_BLOCKED operator must intervene before downstream
+    blocks (use approval_mode: manual on the next block as a stop-gap until the runner-level
+    pause is wired).
+  - intake_assessment classifies the requirement into fast / full / clarify.
+  - fast-path skips: clarification, tasks-decomposition, test_gen-mandatory.
+  - All paths run: preflight, intake_assessment, analysis, context_scan, codegen,
+    verify_code, ai_review, run_report.
+
+integrations:
+  youtrack: youtrack-default
+  gitlab: gitlab-default
+  openrouter: openrouter-default
+
+entry_points:
+  - id: from_raw_text
+    name: "Бизнес-запрос свободным текстом"
+    from_block: preflight
+    requires_input: requirement
+  - id: from_tracker
+    name: "Задача в трекере (skip business_intake)"
+    from_block: preflight
+    requires_input: youtrack_issue
+    inject:
+      - { block_id: intake, source: empty }
+
+pipeline:
+  # 0. Preflight: build + tests against current main. SHA-keyed cache (TTL 7 days).
+  - id: preflight
+    block: preflight
+    depends_on: []
+    approval_mode: auto
+    config:
+      on_red: block          # operator intervention on red baseline
+      timeout_sec: 900
+
+  # 1. Formalize raw business ask → structured requirement.
+  - id: intake
+    block: business_intake
+    approval_mode: manual
+    depends_on: [preflight]
+    condition: "$.preflight.passed == true"
+
+  # 2. Clarity assessment — cheap-tier, decides clarify/full/fast path.
+  - id: intake_assessment
+    block: intake_assessment
+    approval_mode: auto
+    depends_on: [intake]
+    agent:
+      tier: fast
+      temperature: 0.3
+
+  # 3. Technical analysis — runs on full and clarify paths; skipped on fast.
+  - id: analysis
+    block: analysis
+    approval_mode: auto_notify
+    depends_on: [intake_assessment]
+    condition: "$.intake_assessment.recommended_path != 'fast'"
+    agent:
+      tier: smart
+      temperature: 1.0
+
+  # 4. Tech-stack + conventions + best-practices for the target project.
+  - id: context_scan
+    block: context_scan
+    approval_mode: auto
+    depends_on: [analysis]
+    condition: "$.intake_assessment.recommended_path != 'fast'"
+    agent:
+      tier: flash
+      temperature: 0.3
+
+  # 5. Interactive clarification — only when intake_assessment says clarify.
+  - id: clarification
+    block: clarification
+    approval_mode: manual
+    depends_on: [analysis, context_scan]
+    condition: "$.intake_assessment.recommended_path == 'clarify'"
+
+  # 6. Decomposition into tracker subtasks — skipped on fast path.
+  - id: tasks
+    block: youtrack_tasks
+    approval_mode: manual
+    depends_on: [analysis, clarification, context_scan]
+    condition: "$.intake_assessment.recommended_path != 'fast'"
+
+  # 7. Test scaffolding — skipped on fast path.
+  - id: test_gen
+    block: test_generation
+    approval_mode: auto_notify
+    enabled: true
+    depends_on: [tasks]
+    condition: "$.intake_assessment.recommended_path != 'fast'"
+
+  # 8. Implementation. Always runs. Receives context_scan output as part of run state.
+  - id: codegen
+    block: code_generation
+    approval_mode: auto_notify
+    depends_on: [tasks, test_gen, context_scan]
+    agent:
+      tier: flash
+      temperature: 0.2
+
+  # 9. Structural + LLM verify with loopback + escalation ladder (A1).
+  - id: verify_code
+    block: verify
+    approval_mode: auto
+    depends_on: [codegen]
+    verify:
+      subject: codegen
+      checks:
+        - { field: changes, rule: min_items, value: 1 }
+      llm_check:
+        enabled: true
+        prompt: |
+          Ты senior code reviewer. Оцени качество сгенерированных изменений кода 0-10.
+
+          Что важно: соответствие acceptance criteria из analysis, security (broken access,
+          SQL injection, утечки секретов), perf (N+1 в JPA, отсутствие индексов на FK),
+          логические баги, тесты покрывают новую логику.
+
+          Не снижай за: стиль, нейминг, форматирование, отсутствие Javadoc.
+
+          Шкала: 9-10 production-ready; 7-8 рабочее с мелкими огрехами; 5-6 функциональные
+          проблемы; 0-4 не решает задачу. Сомневаешься — выбирай большую. Число + 1-2 предложения.
+        min_score: 7
+      on_fail:
+        action: loopback
+        target: codegen
+        max_iterations: 2
+        # escalation: omitted → uses workflow.escalation.defaults (cloud → human)
+
+  # 10. AI code review — security/perf/anti-patterns focus.
+  - id: ai_review
+    block: ai_review
+    approval_mode: auto_notify
+    enabled: true
+    depends_on: [codegen, verify_code]
+    agent:
+      tier: smart
+      temperature: 0.3
+
+  # 11. MR / PR creation.
+  - id: mr
+    block: gitlab_mr
+    approval_mode: manual
+    depends_on: [ai_review]
+
+  # 12. CI — escalation ladder applies on failure.
+  - id: ci
+    block: gitlab_ci
+    approval_mode: auto
+    depends_on: [mr]
+    on_failure:
+      action: loopback
+      target: codegen
+      max_iterations: 2
+      failed_statuses: [failed, canceled]
+      # escalation: omitted → uses global defaults
+
+  # 13. Merge.
+  - id: merge
+    block: vcs_merge
+    approval_mode: manual
+    depends_on: [ci]
+    config:
+      strategy: squash
+      delete_branch_after: true
+
+  # 14. Final aggregator — never blocking.
+  - id: run_report
+    block: run_report
+    approval_mode: auto
+    depends_on: [merge]
