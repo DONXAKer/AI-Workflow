@@ -90,12 +90,22 @@ pipeline:
     depends_on: [analysis, clarification, context_scan]
     condition: "$.intake_assessment.recommended_path != 'fast'"
 
-  # 7. Test scaffolding — skipped on fast path.
+  # 7. Test plan — what to test (BVA, strategy: tdd/adaptive/none). Skipped on fast.
+  - id: test_planning
+    block: test_planning
+    approval_mode: auto_notify
+    depends_on: [analysis, context_scan]
+    condition: "$.intake_assessment.recommended_path != 'fast'"
+    agent:
+      tier: smart
+      temperature: 0.4
+
+  # 8. Test scaffolding — skipped on fast path. Consumes test_planning output.
   - id: test_gen
     block: test_generation
     approval_mode: auto_notify
     enabled: true
-    depends_on: [tasks]
+    depends_on: [tasks, test_planning]
     condition: "$.intake_assessment.recommended_path != 'fast'"
 
   # 8. Implementation. Always runs. Receives context_scan output as part of run state.
