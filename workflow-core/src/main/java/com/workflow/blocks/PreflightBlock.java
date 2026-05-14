@@ -24,11 +24,16 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Baseline check executed at the very start of a pipeline. Runs the target project's
@@ -147,6 +152,10 @@ public class PreflightBlock implements Block {
         long durationMs = System.currentTimeMillis() - started;
         boolean testOk = testResult.exitCode == 0;
 
+        // Extract failed test FQNs from the combined log so downstream verify/CI blocks
+        // can compute "tests we broke" = current failures \ baseline failures.
+        List<String> baselineFailures = extractFailedTestFqns(logExcerpt.toString(), cmds.fqnFormat());
+
         PreflightStatus status;
         if (buildOk && testOk) {
             status = PreflightStatus.PASSED;
@@ -166,7 +175,11 @@ public class PreflightBlock implements Block {
             snapshot.setStatus(status);
             snapshot.setBuildOk(buildOk);
             snapshot.setTestOk(testOk);
-            snapshot.setBaselineFailuresJson("[]");
+            try {
+                snapshot.setBaselineFailuresJson(objectMapper.writeValueAsString(baselineFailures));
+            } catch (Exception e) {
+                snapshot.setBaselineFailuresJson("[]");
+            }
             snapshot.setBuildCmd(cmds.buildCmd());
             snapshot.setTestCmd(cmds.testCmd());
             snapshot.setLogExcerpt(truncate(logExcerpt.toString(), LOG_EXCERPT_BYTES));
@@ -175,7 +188,67 @@ public class PreflightBlock implements Block {
         }
 
         return buildOutput(cmds, status, buildOk, testOk, mainSha, configHash,
-                false, durationMs, logExcerpt.toString(), List.of());
+                false, durationMs, logExcerpt.toString(), baselineFailures);
+    }
+
+    // ── failed-test FQN extraction ─────────────────────────────────────────────
+
+    /**
+     * Gradle / JUnit console: {@code ClassName > methodName(args)[idx] FAILED}.
+     * Class name may include {@code $} (inner classes) and {@code .} (FQ); method
+     * name is a single identifier; tail allows anything (parameterized indices,
+     * display names) before the literal FAILED at end-of-line.
+     */
+    private static final Pattern GRADLE_FAILED = Pattern.compile(
+            "^([\\w$.]+)\\s*>\\s*(\\w+)[^\\n]*?\\bFAILED\\s*$",
+            Pattern.MULTILINE);
+
+    /** pytest console: {@code FAILED path/to/test_file.py::TestClass::test_method - reason} */
+    private static final Pattern PYTEST_FAILED = Pattern.compile(
+            "^FAILED\\s+([^\\s]+)\\s*(?:-.*)?$",
+            Pattern.MULTILINE);
+
+    /** Jest console: {@code  FAIL src/foo.test.ts > describe > it} (× simplified to file path only here) */
+    private static final Pattern JEST_FAILED = Pattern.compile(
+            "^\\s*FAIL\\s+([^\\s]+)\\s*$",
+            Pattern.MULTILINE);
+
+    /** Go test console: {@code --- FAIL: TestFooBar (0.00s)} */
+    private static final Pattern GO_FAILED = Pattern.compile(
+            "^---\\s+FAIL:\\s+(\\w+)(?:\\s+\\([^)]*\\))?\\s*$",
+            Pattern.MULTILINE);
+
+    /**
+     * Parses test runner output for failed test identifiers. Returns a deduplicated
+     * insertion-ordered list of {@code "Class.method"} (or runner-equivalent) strings
+     * suitable for set-difference computation against later runs.
+     *
+     * <p>Supports {@code junit5} / {@code junit4} (gradle/maven), {@code pytest},
+     * {@code jest}, {@code go}. Unknown format → empty list.
+     */
+    static List<String> extractFailedTestFqns(String log, String fqnFormat) {
+        if (log == null || log.isBlank()) return List.of();
+        Set<String> seen = new LinkedHashSet<>();
+        switch (fqnFormat == null ? "" : fqnFormat.toLowerCase()) {
+            case "junit5", "junit4", "junit" -> {
+                Matcher m = GRADLE_FAILED.matcher(log);
+                while (m.find()) seen.add(m.group(1) + "." + m.group(2));
+            }
+            case "pytest" -> {
+                Matcher m = PYTEST_FAILED.matcher(log);
+                while (m.find()) seen.add(m.group(1));
+            }
+            case "jest" -> {
+                Matcher m = JEST_FAILED.matcher(log);
+                while (m.find()) seen.add(m.group(1));
+            }
+            case "go" -> {
+                Matcher m = GO_FAILED.matcher(log);
+                while (m.find()) seen.add(m.group(1));
+            }
+            default -> { /* none / unknown — return empty */ }
+        }
+        return new ArrayList<>(seen);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
@@ -222,8 +295,14 @@ public class PreflightBlock implements Block {
         out.put("cache_source_sha", mainSha != null ? mainSha : "");
         out.put("duration_ms", durationMs);
         out.put("log_excerpt", truncate(logExcerpt, LOG_EXCERPT_BYTES));
-        // Convenience boolean for ${preflight.passed} condition gating
-        out.put("passed", status == PreflightStatus.PASSED);
+        // Convenience boolean for ${preflight.passed} condition gating.
+        // PASSED + WARNING are both "downstream may proceed" — operator chose
+        // `on_red: warn` deliberately to continue past pre-existing red baseline.
+        // RED_BLOCKED is the only state that gates downstream.
+        out.put("passed", status != PreflightStatus.RED_BLOCKED);
+        // Distinct flag for "actually green vs proceeding-on-warning" so downstream
+        // blocks that care can branch (`$.preflight.green == true` for stricter gates).
+        out.put("green", status == PreflightStatus.PASSED);
         return out;
     }
 
