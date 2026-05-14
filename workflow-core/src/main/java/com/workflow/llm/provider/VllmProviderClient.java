@@ -65,9 +65,12 @@ public class VllmProviderClient implements LlmProviderClient {
      *  tool-use anyway. */
     private static final double VLLM_TEMP_UNSET_SENTINEL = 1.0;
     /** Tokens cap consistent with consumer-GPU vLLM deployments. vLLM streams
-     *  cleanly with larger values too, but 4096 keeps a tool-use iteration
-     *  responsive. */
-    private static final int VLLM_MAX_TOKENS_CAP = 4096;
+     *  cleanly with larger values too, but a tight cap keeps a tool-use iteration
+     *  responsive. Set to 3000 (not 4096) because Qwen3-4B-AWQ on 8GB serves
+     *  max_model_len=16384 — input+output must fit, and tool-use loops accumulate
+     *  Read results fast (4096 output left ~12K input headroom, which the agent
+     *  blew past after 5 file Reads on iteration 2). 3000 gives ~13K input. */
+    private static final int VLLM_MAX_TOKENS_CAP = 3000;
 
     private final ObjectMapper objectMapper;
     private final IntegrationConfigRepository integrationConfigRepository;

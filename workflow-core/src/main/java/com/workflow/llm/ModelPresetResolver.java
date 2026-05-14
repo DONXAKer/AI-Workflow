@@ -161,6 +161,20 @@ public class ModelPresetResolver {
      */
     public String resolveVllm(String presetOrModel) {
         if (presetOrModel == null || presetOrModel.isBlank()) return VLLM_DEFAULTS.get("smart");
+        // Ollama-style tag ("mychen76/qwen3_cline_roocode:8b") — vLLM doesn't serve these
+        // and 404s. Symmetric guard to resolveCli's claude-* fallback: keep YAMLs that
+        // pin Ollama tags usable after a project switches to VLLM.
+        if (presetOrModel.contains(":")) {
+            log.warn("Ollama-style tag '{}' requested under VLLM routing — falling back to '{}'",
+                presetOrModel, VLLM_DEFAULTS.get("smart"));
+            return VLLM_DEFAULTS.get("smart");
+        }
+        // Anthropic name under vLLM — same story.
+        if (looksLikeClaudeModel(presetOrModel) || looksLikeClaudeModel(presetOrModel.substring(presetOrModel.lastIndexOf('/') + 1))) {
+            log.warn("Anthropic-style model '{}' requested under VLLM routing — falling back to '{}'",
+                presetOrModel, VLLM_DEFAULTS.get("smart"));
+            return VLLM_DEFAULTS.get("smart");
+        }
         // Full HF repo id ("Qwen/Qwen3-8B-AWQ") — pass through, vLLM matches on this verbatim.
         if (presetOrModel.contains("/")) return presetOrModel;
         String lower = presetOrModel.toLowerCase();

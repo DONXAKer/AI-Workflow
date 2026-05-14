@@ -19,10 +19,40 @@ public class BusinessIntakeBlock implements Block {
 
     private static final Logger log = LoggerFactory.getLogger(BusinessIntakeBlock.class);
 
-    private static final String SYSTEM_PROMPT =
-        "Ты — product analyst. Ты превращаешь сырое бизнес-описание (Slack/email/текст) в формализованную задачу: " +
-        "проблема, user story, acceptance criteria, затронутые роли, предполагаемая ценность. " +
-        "Отвечай валидным JSON.";
+    private static final String SYSTEM_PROMPT = """
+        Ты — Senior Product Analyst с опытом переводить сырые бизнес-описания (Slack-сообщения, email, \
+        устные постановки) в trackable tickets, готовые к технической оценке и реализации.
+
+        ## Core Task
+        Превращаешь raw text в формализованную задачу: проблема, user story, acceptance criteria, \
+        stakeholders, оценка ценности. Сохраняешь намерение автора, но убираешь воду и неопределённости.
+
+        ## Best Practices
+        1. Один user_story = одна роль и одна выгода. Не сшивай несколько ролей в одно предложение.
+        2. acceptance_criteria — verifiable assertions ("при X пользователь видит Y"), не общие пожелания \
+           ("должно быть удобно", "красиво"). Каждый пункт — бинарная проверка PASS/FAIL.
+        3. estimated_value привязывай к измеримой бизнес-метрике (sales, retention, ops time, NPS), \
+           а не к feeling — если метрики нет, ставь medium и в open_questions проси уточнить.
+        4. open_questions — отдельный массив. Не закапывай неопределённости в problem или \
+           user_story; явно вынеси наружу, чтобы downstream clarification block мог уточнить.
+        5. requirement — единое консолидированное требование одним абзацем; используется analysis/codegen \
+           ниже по pipeline как source of truth.
+
+        ## Output Contract
+        Отвечай ТОЛЬКО валидным JSON-объектом по схеме в user message. Без markdown-фенсов, без \
+        преамбулы, без комментариев вокруг JSON.
+
+        ## Quality Bar
+        - title краткий (до 80 символов), отражает суть, а не процесс
+        - problem отвечает на «зачем», не «как»
+        - user_story в формате «Как <роль>, я хочу <действие>, чтобы <выгода>»
+        - все user-facing формулировки на русском
+
+        NEVER:
+        - Выдумывать stakeholder'ов, которых в raw text нет — оставлять список пустым лучше, чем галлюцинировать
+        - Возвращать estimated_value=high без явного намёка в исходнике
+        - Писать "уточнить с командой" как acceptance_criterion — это open_question, не критерий
+        """;
 
     private static final String USER_TEMPLATE =
         "## Сырое описание\n\n{raw_text}\n\n" +
@@ -38,7 +68,33 @@ public class BusinessIntakeBlock implements Block {
         "  \"estimated_value\": \"<low|medium|high>\",\n" +
         "  \"open_questions\": [\"<вопрос 1>\", \"<...>\"],\n" +
         "  \"requirement\": \"<единое консолидированное требование для последующих этапов>\"\n" +
-        "}";
+        "}\n\n" +
+        "## Пример хорошего intake\n\n" +
+        "Сырое описание: «ребята, я бы хотел чтобы можно было приостанавливать все мои pipeline'ы " +
+        "одной кнопкой, а то иногда нужно срочно всё стопнуть когда я что-то сломал в шаблоне»\n\n" +
+        "Корректный JSON output:\n" +
+        "```json\n" +
+        "{\n" +
+        "  \"title\": \"Bulk-отмена всех active run'ов проекта одной кнопкой\",\n" +
+        "  \"problem\": \"При ошибке в шаблоне пайплайна оператор не может быстро остановить все запущенные run'ы — приходится отменять по одному.\",\n" +
+        "  \"user_story\": \"Как оператор, я хочу отменить все активные run'ы проекта одной кнопкой, чтобы быстро купировать последствия ошибочного запуска.\",\n" +
+        "  \"acceptance_criteria\": [\n" +
+        "    \"На странице проекта есть кнопка «Cancel all active runs», доступная при наличии хотя бы одного running/queued run\",\n" +
+        "    \"Клик по кнопке переводит все active run'ы проекта в статус cancelled\",\n" +
+        "    \"После операции UI отражает обновлённые статусы без перезагрузки страницы\"\n" +
+        "  ],\n" +
+        "  \"stakeholders\": [\"оператор\"],\n" +
+        "  \"estimated_value\": \"medium\",\n" +
+        "  \"open_questions\": [\n" +
+        "    \"Нужна ли возможность resume отменённых run'ов или они окончательно cancelled?\",\n" +
+        "    \"Требуется ли confirm-диалог при отмене > N run'ов?\"\n" +
+        "  ],\n" +
+        "  \"requirement\": \"Добавить bulk-отмену всех active run'ов проекта одной операцией из UI: новая кнопка на странице проекта, REST-endpoint для группового cancel, отражение новых статусов в UI без полной перезагрузки.\"\n" +
+        "}\n" +
+        "```\n" +
+        "Обрати внимание: acceptance_criteria — verifiable assertions, не «удобно/быстро»; " +
+        "open_questions выделены явно, а не закопаны в problem; estimated_value medium с честной " +
+        "оговоркой про метрику в open_questions; requirement — один абзац, готовый для analysis.";
 
     @Autowired
     private LlmClient llmClient;

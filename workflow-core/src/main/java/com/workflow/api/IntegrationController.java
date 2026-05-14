@@ -155,7 +155,7 @@ public class IntegrationController {
                 result.put("message", "HTTP " + code + " from " + probeUrl
                     + " — wrong URL or service unhealthy");
             }
-        } catch (java.net.URISyntaxException | IllegalArgumentException e) {
+        } catch (IllegalArgumentException e) {
             // URI parse failure — provide explicit offset and a hex dump so the operator
             // can see hidden whitespace / Cyrillic characters that the UI strips visually.
             StringBuilder hex = new StringBuilder();

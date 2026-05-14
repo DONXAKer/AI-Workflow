@@ -109,6 +109,31 @@ public class AnalysisBlock implements Block {
         "  ],\n" +
         "  \"needs_clarification\": <true|false>\n" +
         "}\n\n" +
+        "## Пример хорошего анализа\n\n" +
+        "Требование: «Добавить endpoint `POST /api/projects/{id}/archive`, помечающий проект " +
+        "как archived и скрывающий его из списка активных проектов. История run'ов проекта " +
+        "должна сохраняться.»\n\n" +
+        "Корректный output:\n" +
+        "```json\n" +
+        "{\n" +
+        "  \"summary\": \"Endpoint архивации проекта с сохранением run-истории и фильтрацией активного списка.\",\n" +
+        "  \"affected_components\": [\"ProjectController\", \"ProjectService\", \"ProjectRepository\", \"projects (миграция: добавить колонку archived_at)\"],\n" +
+        "  \"technical_approach\": \"Добавить nullable колонку archived_at в projects (Flyway-миграция). В ProjectService.archive(id) выставлять archived_at = now() — soft delete, не физическое удаление. ProjectRepository.findActive() фильтрует archived_at IS NULL. Existing run-history запросы не трогать (FK на project_id сохраняется). REST: POST /api/projects/{id}/archive возвращает 204 при успехе, 404 если проекта нет, 409 если уже archived.\",\n" +
+        "  \"estimated_complexity\": \"medium\",\n" +
+        "  \"risks\": [\"Frontend-компоненты, фильтрующие проекты на клиенте, могут показать archived проект до обновления API-контракта\", \"Если у проекта есть active run'ы — нужно решить, отклонять архивацию или сначала отменять\"],\n" +
+        "  \"open_questions\": [\"Должен ли archive отменять active run'ы проекта, или возвращать 409 если они есть?\"],\n" +
+        "  \"acceptance_checklist\": [\n" +
+        "    {\"id\": \"a1\", \"text\": \"POST /api/projects/{id}/archive возвращает 204 при успешной архивации\", \"source\": \"requirement\", \"priority\": \"critical\"},\n" +
+        "    {\"id\": \"a2\", \"text\": \"GET /api/projects (список активных) не возвращает archived проекты\", \"source\": \"requirement\", \"priority\": \"critical\"},\n" +
+        "    {\"id\": \"a3\", \"text\": \"GET /api/runs?projectId=X возвращает run'ы archived проекта (история сохранена)\", \"source\": \"requirement\", \"priority\": \"important\"},\n" +
+        "    {\"id\": \"a4\", \"text\": \"Integration test покрывает archive + check, что проект не появляется в active list\", \"source\": \"derived\", \"priority\": \"important\"}\n" +
+        "  ],\n" +
+        "  \"needs_clarification\": false\n" +
+        "}\n" +
+        "```\n" +
+        "Обрати внимание в примере: affected_components называет конкретные классы и таблицу, " +
+        "а не вагое «backend»; risks выделяют не-очевидные побочные эффекты; каждый " +
+        "acceptance-item — бинарная проверка с явным priority и source.\n\n" +
         "Не включай никакого текста за пределами JSON объекта.";
 
     @Autowired

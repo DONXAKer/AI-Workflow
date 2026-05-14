@@ -1,5 +1,7 @@
 # Provider switching: OpenRouter ↔ Claude Code CLI
 
+> Полный реестр моделей по всем 4 провайдерам (OpenRouter / CLI / Ollama / vLLM), их плюсы/минусы и per-block рекомендации — в [`docs/models.md`](models.md).
+
 Same pipeline can run agentic blocks via two backends:
 
 | Provider | Implementing block | Billing | When to choose |

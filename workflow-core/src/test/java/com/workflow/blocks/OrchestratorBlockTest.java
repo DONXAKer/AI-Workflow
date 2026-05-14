@@ -352,4 +352,21 @@ class OrchestratorBlockTest {
         Map<?,?> first = (Map<?,?>) rc.get(0);
         assertEquals("Объявить", first.get("approach"));
     }
+
+    // ── buildReviewSystemPrompt anti-patterns ─────────────────────────────────
+
+    @Test
+    void buildReviewSystemPrompt_includesAntiPatternSection_whenChecklist() throws Exception {
+        var method = OrchestratorBlock.class.getDeclaredMethod(
+            "buildReviewSystemPrompt", String.class, String.class, boolean.class);
+        method.setAccessible(true);
+        String prompt = (String) method.invoke(null, "", "", true);
+
+        assertTrue(prompt.contains("Анти-паттерны retry"),
+            "haveChecklist branch must contain explicit Анти-паттерны retry header");
+        assertTrue(prompt.contains("Стиль, нейминг"),
+            "anti-pattern section must explicitly call out стиль/нейминг as non-blockers");
+        assertTrue(prompt.contains("Если сомневаешься"),
+            "anti-pattern section must contain the bias-to-accept rule");
+    }
 }

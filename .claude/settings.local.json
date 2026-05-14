@@ -318,7 +318,30 @@
       "Bash(find *)",
       "Bash(ls \"C:\\\\Users\\\\Root\\\\.claude\\\\plans\")",
       "Bash(mkdir \"C:\\\\Users\\\\Root\\\\.claude\\\\plans\")",
-      "WebFetch(domain:voice2me.beehiiv.com)"
+      "WebFetch(domain:voice2me.beehiiv.com)",
+      "Bash(python -c \"import json,sys; data=json.load\\(sys.stdin\\); [print\\(r.get\\('id'\\), r.get\\('status'\\), r.get\\('createdAt'\\), r.get\\('configPath'\\), r.get\\('currentBlock','-'\\), '|', \\(r.get\\('inputs'\\) or {}\\).get\\('task_file', '-'\\)\\) for r in \\(data if isinstance\\(data,list\\) else data.get\\('content',data.get\\('items',[]\\)\\)\\)]\")",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('configPath:', d.get\\('configPath'\\)\\); print\\('entryPointId:', d.get\\('entryPointId'\\)\\); print\\('fromBlock:', d.get\\('fromBlock'\\)\\); print\\('currentBlock:', d.get\\('currentBlock'\\)\\); print\\('status:', d.get\\('status'\\)\\); print\\('inputs:', json.dumps\\(d.get\\('inputs'\\), ensure_ascii=False, indent=2\\)\\); print\\('errorMessage:', \\(d.get\\('errorMessage'\\) or ''\\)[:500]\\)\")",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(list\\(d.keys\\(\\)\\)\\)\")",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('pipelineName:', d.get\\('pipelineName'\\)\\); print\\('entryPointId:', d.get\\('entryPointId'\\)\\); print\\('projectSlug:', d.get\\('projectSlug'\\)\\); print\\('currentBlock:', d.get\\('currentBlock'\\)\\); print\\('error:', \\(d.get\\('error'\\) or ''\\)[:800]\\); print\\('requirement:', \\(d.get\\('requirement'\\) or ''\\)[:200]\\); print\\('runInputsJson:', d.get\\('runInputsJson'\\)\\)\")",
+      "Bash(docker version *)",
+      "Bash(rm -rf \"/c/temp/ai-workflow-build/workflow-core/build\" \"/c/temp/ai-workflow-build/workflow-core/.gradle\")",
+      "Bash(mkdir -p \"/c/temp/ai-workflow-build\")",
+      "Bash(cp -r \"/d/Проекты/AI-Workflow/workflow-core\" \"/c/temp/ai-workflow-build/\")",
+      "Bash(cp \"/d/Проекты/AI-Workflow/build.gradle.kts\" \"/c/temp/ai-workflow-build/\")",
+      "Bash(cp \"/d/Проекты/AI-Workflow/settings.gradle.kts\" \"/c/temp/ai-workflow-build/\")",
+      "Read(//c/temp/ai-workflow-build//**)",
+      "Bash(cp \"/d/Проекты/AI-Workflow/workflow-core/src/main/java/com/workflow/config/EscalationStep.java\" \"/c/temp/ai-workflow-build/workflow-core/src/main/java/com/workflow/config/EscalationStep.java\")",
+      "Bash(cp \"/d/Проекты/AI-Workflow/workflow-core/src/test/java/com/workflow/config/EscalationConfigParsingTest.java\" \"/c/temp/ai-workflow-build/workflow-core/src/test/java/com/workflow/config/EscalationConfigParsingTest.java\")",
+      "Bash(cp \"/d/Проекты/AI-Workflow/workflow-core/src/test/java/com/workflow/core/EscalationResolverTest.java\" \"/c/temp/ai-workflow-build/workflow-core/src/test/java/com/workflow/core/EscalationResolverTest.java\")",
+      "Bash(cp \"/d/Проекты/AI-Workflow/workflow-core/src/main/java/com/workflow/core/EscalationResolver.java\" \"/c/temp/ai-workflow-build/workflow-core/src/main/java/com/workflow/core/EscalationResolver.java\")",
+      "Bash(cp \"/d/Проекты/AI-Workflow/workflow-core/src/main/java/com/workflow/config/EscalationConfig.java\" \"/c/temp/ai-workflow-build/workflow-core/src/main/java/com/workflow/config/EscalationConfig.java\")",
+      "Bash(rm -rf \"/c/temp/ai-workflow-build/workflow-core\")",
+      "Bash(cp -r \"/d/Проекты/AI-Workflow/workflow-core\" \"/c/temp/ai-workflow-build/workflow-core\")",
+      "Read(//c/projects/WarCard/.ai-workflow/**)",
+      "Read(//c/projects/WarCard/tasks/**)",
+      "Read(//d//**)",
+      "Bash(find /d -maxdepth 2 -name \"WarCard\" -type d)",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('returned', len\\(d.get\\('content', []\\)\\), 'runs'\\)\")"
     ]
   }
 }

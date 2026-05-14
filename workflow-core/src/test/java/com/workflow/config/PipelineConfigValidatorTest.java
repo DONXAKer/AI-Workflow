@@ -645,4 +645,72 @@ class PipelineConfigValidatorTest {
         assertFalse(codes(r).contains(PipelineConfigValidator.REF_UNKNOWN_FIELD),
             () -> "nested-segment path on known field must not warn, got: " + r.errors());
     }
+
+    // ── verify.llm_check.prompt weakness ──────────────────────────────────────
+
+    private static BlockConfig verifyWithLlmPrompt(String id, String prompt) {
+        BlockConfig b = block(id, "verify");
+        VerifyConfig vc = new VerifyConfig();
+        LLMCheckConfig llm = new LLMCheckConfig();
+        llm.setEnabled(true);
+        llm.setPrompt(prompt);
+        vc.setLlmCheck(llm);
+        b.setVerify(vc);
+        return b;
+    }
+
+    @Test
+    void llmCheckPrompt_validRich_noWarning() {
+        // Long prompt with explicit criteria: should not produce WEAK_LLM_CHECK_PROMPT.
+        String good = "Ты senior code reviewer. Оцени реализацию по шкале 0-10 учитывая: "
+            + "security (broken access control, SQL injection), производительность (N+1), "
+            + "соответствие DoD из плана, наличие тестов на новую логику. Стиль и нейминг — "
+            + "не повод снижать оценку.";
+        ValidationResult r = validator.validate(pipeline(verifyWithLlmPrompt("v", good)));
+        assertFalse(codes(r).contains(PipelineConfigValidator.WEAK_LLM_CHECK_PROMPT),
+            () -> "well-formed prompt must not warn, got: " + r.errors());
+    }
+
+    @Test
+    void llmCheckPrompt_tooShort_emitsWarn() {
+        // Canonical stub — the exact form that motivated this validator.
+        ValidationResult r = validator.validate(pipeline(
+            verifyWithLlmPrompt("v", "Оцени качество изменений кода 0-10.")));
+        List<ValidationError> hits = r.errors().stream()
+            .filter(e -> PipelineConfigValidator.WEAK_LLM_CHECK_PROMPT.equals(e.code()))
+            .toList();
+        assertEquals(1, hits.size(), () -> "expected one WEAK_LLM_CHECK_PROMPT, got: " + r.errors());
+        assertEquals(Severity.WARN, hits.get(0).severity());
+        // Run must still be valid overall — warnings don't block.
+        assertTrue(r.valid(), "weak prompt must be advisory, not blocking");
+    }
+
+    @Test
+    void llmCheckPrompt_longButNoCriteria_emitsWarn() {
+        // Long enough to clear the length gate but generic — model would score in a vacuum.
+        String wordy = "Пожалуйста посмотри внимательно на этот код и подумай хорошо что про него можно "
+            + "сказать в целом — насколько он удачный по твоему мнению и где видишь спорные места.";
+        assertTrue(wordy.length() >= PipelineConfigValidator.LLM_CHECK_PROMPT_MIN_LENGTH,
+            "fixture must satisfy length gate to test the criteria gate");
+        ValidationResult r = validator.validate(pipeline(verifyWithLlmPrompt("v", wordy)));
+        List<ValidationError> hits = r.errors().stream()
+            .filter(e -> PipelineConfigValidator.WEAK_LLM_CHECK_PROMPT.equals(e.code()))
+            .toList();
+        assertEquals(1, hits.size(), () -> "long prompt without criteria must warn, got: " + r.errors());
+    }
+
+    @Test
+    void llmCheckPrompt_disabled_skipsValidation() {
+        // enabled=false → prompt content is moot, validator must not warn.
+        BlockConfig b = block("v", "verify");
+        VerifyConfig vc = new VerifyConfig();
+        LLMCheckConfig llm = new LLMCheckConfig();
+        llm.setEnabled(false);
+        llm.setPrompt("Оцени 0-10.");
+        vc.setLlmCheck(llm);
+        b.setVerify(vc);
+        ValidationResult r = validator.validate(pipeline(b));
+        assertFalse(codes(r).contains(PipelineConfigValidator.WEAK_LLM_CHECK_PROMPT),
+            () -> "disabled llm_check must skip prompt validation, got: " + r.errors());
+    }
 }

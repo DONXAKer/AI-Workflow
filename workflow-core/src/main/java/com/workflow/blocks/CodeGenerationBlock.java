@@ -74,7 +74,29 @@ public class CodeGenerationBlock implements Block {
         "  ],\n" +
         "  \"commit_message\": \"feat: <краткое описание изменений>\",\n" +
         "  \"test_changes\": [...]\n" +
-        "}";
+        "}\n\n" +
+        "## Пример хорошего output (минимальный валидный)\n\n" +
+        "Задача: «Добавить метод `cancelAll(projectId)` в `RunsService` — останавливает все active run'ы " +
+        "проекта одной операцией».\n\n" +
+        "Корректный JSON output:\n" +
+        "```json\n" +
+        "{\n" +
+        "  \"branch_name\": \"feature/runs-cancel-all\",\n" +
+        "  \"changes\": [\n" +
+        "    {\n" +
+        "      \"file_path\": \"workflow-core/src/main/java/com/workflow/api/RunsService.java\",\n" +
+        "      \"action\": \"modify\",\n" +
+        "      \"content\": \"// полное содержимое файла, включая существующие методы + новый cancelAll(long projectId) с @Transactional, который вызывает runRepository.findActiveByProject(projectId).forEach(this::cancel)\",\n" +
+        "      \"description\": \"Добавлен метод cancelAll(projectId), отменяет все active run'ы проекта через существующий cancel(runId)\"\n" +
+        "    }\n" +
+        "  ],\n" +
+        "  \"commit_message\": \"feat(runs): add cancelAll for project-wide cancellation\",\n" +
+        "  \"test_changes\": []\n" +
+        "}\n" +
+        "```\n" +
+        "Обрати внимание: file_path — точный путь от корня репо, не пакет; action один из " +
+        "create/modify/delete; commit_message в Conventional Commits с scope; test_changes=[] " +
+        "допустимо если задача не требует новых тестов, но это поле должно присутствовать.";
 
     @Autowired
     private LlmClient llmClient;
