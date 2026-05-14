@@ -128,9 +128,14 @@ public class PipelineRun {
      * in USD. Snapshot updated when the run reaches a terminal state
      * (COMPLETED / FAILED) — live cost during execution is fetched from
      * {@link com.workflow.llm.LlmCallRepository#sumCostByRunId} on demand.
+     *
+     * <p>Boxed {@link Double} because the column is added by ddl-auto: update against
+     * an existing schema — pre-migration rows have NULL here, which would crash
+     * Hibernate when loading into a primitive {@code double} setter. Getter normalizes
+     * to 0.0 for callers that don't care about the distinction.
      */
     @Column(name = "total_cost_usd")
-    private double totalCostUsd = 0.0;
+    private Double totalCostUsd;
 
     @PrePersist
     protected void onCreate() {
@@ -237,6 +242,6 @@ public class PipelineRun {
         this.escalationStateJson = escalationStateJson != null ? escalationStateJson : "{}";
     }
 
-    public double getTotalCostUsd() { return totalCostUsd; }
+    public double getTotalCostUsd() { return totalCostUsd != null ? totalCostUsd : 0.0; }
     public void setTotalCostUsd(double totalCostUsd) { this.totalCostUsd = Math.max(0.0, totalCostUsd); }
 }
