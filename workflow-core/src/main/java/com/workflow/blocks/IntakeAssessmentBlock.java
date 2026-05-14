@@ -182,6 +182,14 @@ public class IntakeAssessmentBlock implements Block {
                 Object req = m.get("requirement");
                 if (req != null && !req.toString().isBlank()) return req.toString();
             }
+            // task_md_input (used by task-file-driven pipelines like WarCard) puts the
+            // requirement-equivalent text in `body`. Falls through to run.requirement
+            // when this path also misses.
+            Object taskMd = input.get("task_md");
+            if (taskMd instanceof Map<?, ?> tm) {
+                Object body = tm.get("body");
+                if (body != null && !body.toString().isBlank()) return body.toString();
+            }
         }
         if (run != null && run.getRequirement() != null && !run.getRequirement().isBlank()) {
             return run.getRequirement();
