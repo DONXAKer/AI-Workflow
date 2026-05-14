@@ -84,7 +84,11 @@ public class OllamaEmbedder {
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(String.class)
-                .timeout(Duration.ofSeconds(60))
+                // 300s — chat-side blocks (impl_server agentic loop) hold the Ollama
+                // queue for minutes at a time on 8 GB GPUs (OLLAMA_NUM_PARALLEL=1
+                // serialises everything). 60s was getting silently swallowed by
+                // KnowledgeBase.search → 0-hit fallback during every pipeline run.
+                .timeout(Duration.ofSeconds(300))
                 .block();
             if (responseBody == null) return List.of();
             JsonNode json = mapper.readTree(responseBody);

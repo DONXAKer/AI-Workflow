@@ -18,8 +18,26 @@ public final class Models {
     private Models() {}
 
     // ── Ollama (local) ─────────────────────────────────────────────────────
-    /** Cline/Roocode-tuned qwen3 — all-around default for Ollama agentic loops. */
-    public static final String OLLAMA_CLINE_ROOCODE = "mychen76/qwen3_cline_roocode:8b";
+    /**
+     * Meta Llama 3.1 8B Instruct, local derivative {@code llama31:8b-ctx16k}
+     * — pins {@code num_ctx=16384} + {@code repeat_penalty=1.1}. All-around
+     * default for Ollama on 8 GB consumer GPUs.
+     *
+     * <p>Unified across every tier (smart/flash/fast/reasoning/cheap) by
+     * design: model swaps on 4060-class cards cause VRAM thrashing and
+     * "Connection prematurely closed" errors mid-pipeline when an embed
+     * call (RAG) races a chat-mode load. One resident model + the 274 MB
+     * nomic embedder coexist comfortably in 8 GB.
+     *
+     * <p>Native /api/chat-only — Ollama's OpenAI-compat layer drops
+     * {@code options.num_ctx} silently and only maps {@code tool_calls}
+     * for qwen3 templates, so Llama 3.1 tool-calling needs native.
+     *
+     * <p>Field name kept for backwards-compat with existing YAML configs
+     * that referenced the previous {@code cline_roocode} default; the
+     * stored model tag is what actually drives behaviour.
+     */
+    public static final String OLLAMA_CLINE_ROOCODE = "llama31:8b-ctx16k";
     /** Embedding model for Qdrant RAG. Must match what the project index was built with. */
     public static final String OLLAMA_EMBED_NOMIC = "nomic-embed-text:v1.5";
     /** Hard fallback when no preset resolver is wired (defensive). */

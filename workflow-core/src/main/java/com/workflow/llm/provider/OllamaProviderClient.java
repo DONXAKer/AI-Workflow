@@ -32,15 +32,41 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Local Ollama provider — speaks Ollama's OpenAI-compat dialect but with platform-
- * specific quirks that don't belong on the OpenAI-compat base class:
+ * Local Ollama provider — speaks Ollama's <b>native</b> {@code /api/chat} dialect.
+ *
+ * <p>Switched off OpenAI-compat ({@code /v1/chat/completions}) after 2026-05-14
+ * because its bridge layer drops {@code options.num_ctx} from request body and
+ * fails to map non-qwen3 model output (Llama 3.1, Hermes 3, R1-distill) into the
+ * OpenAI {@code tool_calls} array — those models emit their tool-call envelope
+ * into {@code content} as plain JSON, which our loop reads as "no tools called"
+ * and returns {@code END_TURN} on iteration 1.
+ *
+ * <p>Native-vs-OpenAI-compat differences this client handles:
+ * <ul>
+ *   <li>Generation params live under {@code options}: {@code num_predict} (was
+ *       {@code max_tokens}), {@code temperature}, {@code num_ctx}, {@code think}
+ *       (qwen3-family).
+ *   <li>Response shape: {@code message.content / message.tool_calls} at root,
+ *       not {@code choices[0].message}. {@code done_reason} replaces
+ *       {@code finish_reason} and never carries the value {@code "tool_calls"} —
+ *       tool-call presence must be detected from {@code tool_calls.size() > 0}
+ *       directly.
+ *   <li>{@code message.tool_calls[*].function.arguments} arrives as a JSON
+ *       <i>object</i>, not a serialized string as in OpenAI-compat.
+ *   <li>Token usage: {@code prompt_eval_count} / {@code eval_count} at the root,
+ *       not {@code usage.prompt_tokens / completion_tokens}.
+ *   <li>JSON-format requests use {@code format: "json"} (string), not the
+ *       OpenAI envelope {@code response_format: {type: "json_object"}}.
+ * </ul>
+ *
+ * <p>Other platform-specific behaviour:
  * <ul>
  *   <li>{@code think:false} option for qwen3-family models (disables reasoning to
  *       cut latency on agentic tool-use loops). Excludes qwen3.6 — empirically
  *       returns empty content when {@code think:false} is set.
  *   <li>{@code options.num_ctx = 16384} — Modelfile-overriding context window cap,
  *       tuned for 8 GB VRAM (qwen3-8B at 32K ctx OOMs after ~5 iterations).
- *   <li>{@code max_tokens} cap of 3000 for single-shot calls (longer outputs push
+ *   <li>{@code num_predict} cap of 3000 for single-shot calls (longer outputs push
  *       past context window and timeout on consumer GPUs).
  *   <li>VRAM-unload utility ({@link #unloadModelsExcept(String)}) — flushes every
  *       resident model except the named one via Ollama's {@code keep_alive: 0}
@@ -113,27 +139,29 @@ public class OllamaProviderClient implements LlmProviderClient {
     }
 
     /**
-     * Multi-turn chat completion via Ollama OpenAI-compat endpoint. Honours the
-     * same {@code think:false} / num_ctx settings as the single-turn call. Bypasses
-     * {@link #OLLAMA_MAX_TOKENS_CAP} since continuation calls may need more headroom.
+     * Multi-turn chat completion via Ollama native {@code /api/chat}. All
+     * generation params live under {@code options}; response shape has
+     * {@code message} at root.
      */
     private String chat(String model, ArrayNode messages, int maxTokens, double temperature) {
         WebClient client = buildWebClient();
 
         ObjectNode requestBody = objectMapper.createObjectNode();
         requestBody.put("model", model);
-        requestBody.put("max_tokens", maxTokens);
-        requestBody.put("temperature", temperature);
+        requestBody.put("stream", false);
+        ObjectNode options = requestBody.putObject("options");
+        options.put("num_predict", maxTokens);
+        options.put("temperature", temperature);
+        options.put("num_ctx", OLLAMA_NUM_CTX);
         if (isQwen3Model(model)) requestBody.put("think", false);
-        requestBody.putObject("options").put("num_ctx", OLLAMA_NUM_CTX);
         requestBody.set("messages", messages);
 
-        log.info("Calling Ollama model: {} (maxTokens={}, temperature={}, msgs={})",
+        log.info("Calling Ollama model: {} (num_predict={}, temperature={}, msgs={})",
             model, maxTokens, temperature, messages.size());
         long startedAt = System.currentTimeMillis();
         try {
             String responseBody = client.post()
-                .uri("/chat/completions")
+                .uri("/api/chat")
                 .bodyValue(requestBody)
                 .retrieve()
                 .bodyToMono(String.class)
@@ -142,7 +170,7 @@ public class OllamaProviderClient implements LlmProviderClient {
             if (responseBody == null) throw new RuntimeException("Empty response from Ollama");
 
             JsonNode responseJson = objectMapper.readTree(responseBody);
-            String content = responseJson.path("choices").path(0).path("message").path("content").asText();
+            String content = responseJson.path("message").path("content").asText("");
             if (content == null || content.isBlank()) {
                 log.warn("Ollama returned empty content. Full response: {}", responseBody);
                 throw new RuntimeException("Empty content in Ollama response");
@@ -212,8 +240,11 @@ public class OllamaProviderClient implements LlmProviderClient {
 
             ObjectNode body = objectMapper.createObjectNode();
             body.put("model", resolvedModel);
-            body.put("max_tokens", Math.min(request.maxTokens(), OLLAMA_MAX_TOKENS_CAP));
-            body.put("temperature", request.temperature());
+            body.put("stream", false);
+            ObjectNode options = body.putObject("options");
+            options.put("num_predict", Math.min(request.maxTokens(), OLLAMA_MAX_TOKENS_CAP));
+            options.put("temperature", request.temperature());
+            options.put("num_ctx", OLLAMA_NUM_CTX);
             body.set("messages", messages);
             // qwen3 plans tool_calls inside its thinking block; setting think:false
             // makes it emit a plain chat completion with zero tool_calls. Keep
@@ -221,24 +252,24 @@ public class OllamaProviderClient implements LlmProviderClient {
             // no point in saving tokens if the model never uses the tools we gave it.
             boolean hasTools = toolsJson.size() > 0;
             if (isQwen3Model(resolvedModel) && !hasTools) body.put("think", false);
-            body.putObject("options").put("num_ctx", OLLAMA_NUM_CTX);
             if (hasTools) {
                 body.set("tools", toolsJson);
-                body.put("tool_choice", "auto");
+                // Note: native /api/chat has no `tool_choice` field — model decides
+                // whether to call tools based on the system/user prompt alone.
             }
-            // Caller-requested response format. We hit Ollama's OpenAI-compat endpoint
-            // (/v1/chat/completions), which ignores the native `format` field but honours
-            // OpenAI's `response_format: {type: "json_object"}`. Used by OrchestratorBlock
-            // to make small local models reliably emit final-state JSON.
+            // Caller-requested JSON-format. Native /api/chat takes `format: "json"`
+            // (string) — used by OrchestratorBlock to coax structured final state out
+            // of small local models. (OpenAI-compat's `response_format` envelope
+            // does not apply here.)
             if ("json".equalsIgnoreCase(request.responseFormat())) {
-                body.putObject("response_format").put("type", "json_object");
+                body.put("format", "json");
             }
 
             long startedAt = System.currentTimeMillis();
             JsonNode responseJson;
             try {
                 String responseBody = client.post()
-                    .uri("/chat/completions")
+                    .uri("/api/chat")
                     .bodyValue(body)
                     .retrieve()
                     .bodyToMono(String.class)
@@ -250,15 +281,14 @@ public class OllamaProviderClient implements LlmProviderClient {
                 throw new RuntimeException("Ollama completeWithTools iteration " + iterations + " failed: " + e.getMessage(), e);
             }
 
-            JsonNode choice = responseJson.path("choices").path(0);
-            JsonNode messageNode = choice.path("message");
-            String finishReason = choice.path("finish_reason").asText("");
+            JsonNode messageNode = responseJson.path("message");
+            String doneReason = responseJson.path("done_reason").asText("");
             String content = messageNode.path("content").isNull() ? "" : messageNode.path("content").asText("");
             JsonNode toolCalls = messageNode.path("tool_calls");
 
-            JsonNode usage = responseJson.path("usage");
-            int tokensIn = usage.path("prompt_tokens").asInt(0);
-            int tokensOut = usage.path("completion_tokens").asInt(0);
+            // Native /api/chat reports token usage at the root, not under `usage`.
+            int tokensIn = responseJson.path("prompt_eval_count").asInt(0);
+            int tokensOut = responseJson.path("eval_count").asInt(0);
             totalTokensIn += tokensIn;
             totalTokensOut += tokensOut;
 
@@ -268,7 +298,7 @@ public class OllamaProviderClient implements LlmProviderClient {
             }
             recordToolUseUsage(resolvedModel, iterations,
                 (int)(System.currentTimeMillis() - startedAt),
-                tokensIn, tokensOut, toolNames, finishReason);
+                tokensIn, tokensOut, toolNames, doneReason);
 
             String strippedContent = LlmTextUtils.stripThinkingBlocks(content);
             if (!strippedContent.isBlank()) finalText = strippedContent;
@@ -280,9 +310,12 @@ public class OllamaProviderClient implements LlmProviderClient {
                     StopReason.COMPLETION_SIGNAL, history, iterations, totalTokensIn, totalTokensOut, 0.0);
             }
 
-            boolean hasToolCalls = "tool_calls".equals(finishReason) && toolCalls.isArray() && toolCalls.size() > 0;
+            // Native /api/chat never sets done_reason="tool_calls" — tool-call presence
+            // must be detected from the array directly. done_reason is one of "stop"
+            // or "length" (or empty).
+            boolean hasToolCalls = toolCalls.isArray() && toolCalls.size() > 0;
             if (!hasToolCalls) {
-                StopReason stop = "length".equals(finishReason) ? StopReason.MAX_TOKENS : StopReason.END_TURN;
+                StopReason stop = "length".equals(doneReason) ? StopReason.MAX_TOKENS : StopReason.END_TURN;
                 log.info("Ollama tool-use loop finished: iterations={} stop={} tokens={}/{}",
                     iterations, stop, totalTokensIn, totalTokensOut);
                 return new ToolUseResponse(LlmTextUtils.stripCodeFences(finalText.strip()), stop, history,
@@ -298,15 +331,30 @@ public class OllamaProviderClient implements LlmProviderClient {
             }
             messages.add(historyMsg);
 
+            int toolCallIdx = 0;
             for (JsonNode tc : toolCalls) {
+                // Native API sometimes omits the id — synthesise a stable one per
+                // iteration to keep the tool-result correlation working downstream.
                 String callId = tc.path("id").asText("");
+                if (callId.isBlank()) {
+                    callId = "call_" + iterations + "_" + toolCallIdx;
+                }
+                toolCallIdx++;
                 String toolName = tc.path("function").path("name").asText("");
-                String argsStr = tc.path("function").path("arguments").asText("{}");
+                // Native /api/chat returns `arguments` as a JSON object, not the
+                // serialized string OpenAI-compat sends. Accept either shape — keeps
+                // future provider swaps painless and survives Ollama version drift.
+                JsonNode argsNode = tc.path("function").path("arguments");
                 JsonNode input;
-                try {
-                    input = objectMapper.readTree(argsStr == null || argsStr.isBlank() ? "{}" : argsStr);
-                } catch (Exception e) {
-                    input = objectMapper.createObjectNode();
+                if (argsNode.isObject()) {
+                    input = argsNode;
+                } else {
+                    String argsStr = argsNode.asText("{}");
+                    try {
+                        input = objectMapper.readTree(argsStr == null || argsStr.isBlank() ? "{}" : argsStr);
+                    } catch (Exception e) {
+                        input = objectMapper.createObjectNode();
+                    }
                 }
                 ToolCall call = new ToolCall(callId, toolName, input);
                 ToolResult result;
@@ -386,7 +434,9 @@ public class OllamaProviderClient implements LlmProviderClient {
                 baseUrl = cfg.getBaseUrl().replaceAll("/+$", "");
             }
         }
-        if (!baseUrl.endsWith("/v1")) baseUrl = baseUrl + "/v1";
+        // Native /api/chat lives at the root, not under /v1 — strip the OpenAI-compat
+        // suffix if a legacy IntegrationConfig still carries it.
+        if (baseUrl.endsWith("/v1")) baseUrl = baseUrl.substring(0, baseUrl.length() - 3);
         return webClientBuilder
             .baseUrl(baseUrl)
             .defaultHeader("Content-Type", "application/json")

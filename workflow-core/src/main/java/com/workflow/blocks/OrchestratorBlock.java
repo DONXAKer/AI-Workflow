@@ -283,7 +283,7 @@ public class OrchestratorBlock implements Block {
             // real `ru.gritsay.warcardserver/...`) because it has only CLAUDE.md + tree
             // summary to go on. RAG gives it actual source chunks for the task.
             if (asBool(cfg, "auto_inject_rag", false) && knowledgeBase != null) {
-                String ragSection = buildRagSection(cfg, input);
+                String ragSection = buildRagSection(cfg, input, run);
                 if (!ragSection.isEmpty()) {
                     userMsg.insert(0, ragSection + "\n---\n\n");
                 }
@@ -628,43 +628,8 @@ public class OrchestratorBlock implements Block {
     }
 
     private List<String> findFilesChangedByLastInvocation(UUID runId, String targetBlockId) {
-        if (auditRepository == null || runId == null || targetBlockId == null) return List.of();
-        List<com.workflow.tools.ToolCallAudit> records;
-        try {
-            records = auditRepository.findByRunIdAndBlockIdOrderByTimestampAsc(runId, targetBlockId);
-        } catch (Exception e) {
-            return List.of();
-        }
-        if (records == null || records.isEmpty()) return List.of();
-        // Find start index of latest invocation: walk backward, the first iteration=1 marker is it.
-        int start = 0;
-        for (int i = records.size() - 1; i >= 0; i--) {
-            Integer it = records.get(i).getIteration();
-            if (it != null && it == 1) { start = i; break; }
-        }
-        java.util.LinkedHashSet<String> files = new java.util.LinkedHashSet<>();
-        for (int i = start; i < records.size(); i++) {
-            var r = records.get(i);
-            String tool = r.getToolName();
-            if (!"Write".equals(tool) && !"Edit".equals(tool)) continue;
-            String path = extractFilePathFromToolInput(r.getInputJson());
-            if (path != null && !path.isBlank()) files.add(path);
-        }
-        return new ArrayList<>(files);
-    }
-
-    /** Pulls {@code file_path} (Claude Code convention) from a tool-call inputJson. */
-    private String extractFilePathFromToolInput(String inputJson) {
-        if (inputJson == null || inputJson.isBlank()) return null;
-        try {
-            Map<String, Object> parsed = objectMapper.readValue(inputJson,
-                new TypeReference<Map<String, Object>>() {});
-            for (String key : List.of("file_path", "path", "filename")) {
-                Object v = parsed.get(key);
-                if (v instanceof String s && !s.isBlank()) return s;
-            }
-        } catch (Exception ignore) {}
-        return null;
+        return com.workflow.tools.AuditUtils.findFilesChangedByLastInvocation(
+            auditRepository, objectMapper, runId, targetBlockId);
     }
 
     /** Pure-function output of {@link #computeReviewVerdict}. */
@@ -1058,6 +1023,19 @@ PRINCIPLES (важно — иначе уйдёшь в патологически
   (UE Editor, полный UE build, post-pipeline шаги вроде архивации task файла, внешние GUI) —
   ставь passed=true с evidence="Not verifiable in pipeline context: <причина>".
   Никогда не ставь passed=false для того, что физически невозможно проверить.
+
+## Анти-паттерны retry (НЕ повод откатывать на codegen)
+
+- Стиль, нейминг переменных, отсутствие Javadoc/docstring/комментариев, неполная документация —
+  НЕ повод выставлять passed=false. Это всегда nice-to-have.
+- "Улучшилось бы если...", "хорошо бы ещё добавить X", "можно красивее" — НЕ поводы.
+- Бар прохождения: код решает задачу, не ломает существующее, не несёт security/perf-регрессий.
+  Этого ДОСТАТОЧНО — даже если реализация не идеальна.
+- Если предыдущая итерация уже учла твоё замечание разумно (даже не идеально) — passed=true,
+  НЕ ищи новое замечание на ту же тему.
+- Каждый passed=false должен указывать на КОНКРЕТНУЮ ФУНКЦИОНАЛЬНУЮ проблему с измеримым fix,
+  не "хорошо бы ещё...".
+- Если сомневаешься passed=true или passed=false — выбирай passed=true.
 
 MANDATORY FINAL RESPONSE FORMAT — output ONLY this JSON block when done:
 ```json
@@ -1685,15 +1663,28 @@ Rules:
      * the query is missing, or the knowledge layer is disabled.
      */
     @SuppressWarnings("unchecked")
-    private String buildRagSection(Map<String, Object> cfg, Map<String, Object> input) {
+    private String buildRagSection(Map<String, Object> cfg, Map<String, Object> input,
+                                   com.workflow.core.PipelineRun run) {
         String slug = com.workflow.project.ProjectContext.get();
-        if (slug == null || slug.isBlank()) return "";
-        String query = pickPlannerRagQuery(cfg, input);
-        if (query == null || query.isBlank()) return "";
+        if (slug == null || slug.isBlank()) {
+            log.warn("orchestrator auto_inject_rag: skipped — ProjectContext slug empty");
+            return "";
+        }
+        String query = pickPlannerRagQuery(cfg, input, run);
+        if (query == null || query.isBlank()) {
+            log.warn("orchestrator auto_inject_rag: skipped — search query empty (no auto_search_query, no task_md.to_be/title in input or run outputs)");
+            return "";
+        }
         try {
+            log.info("orchestrator auto_inject_rag: querying slug={} query='{}...' top_k={}",
+                slug, query.length() > 60 ? query.substring(0, 60) : query, ORCH_RAG_TOP_K);
             java.util.List<com.workflow.knowledge.KnowledgeHit> hits =
                 knowledgeBase.search(slug, query, ORCH_RAG_TOP_K);
-            if (hits.isEmpty()) return "";
+            if (hits.isEmpty()) {
+                log.warn("orchestrator auto_inject_rag: skipped — 0 hits from knowledgeBase for slug={}", slug);
+                return "";
+            }
+            log.info("orchestrator auto_inject_rag: got {} hits", hits.size());
             StringBuilder sb = new StringBuilder();
             sb.append("## Релевантный код (top-").append(hits.size())
               .append(" семантически по запросу: «")
@@ -1712,27 +1703,47 @@ Rules:
             }
             return sb.toString();
         } catch (Exception e) {
-            log.debug("orchestrator auto_inject_rag skipped: {}", e.getMessage());
+            log.warn("orchestrator auto_inject_rag: skipped — knowledgeBase.search threw: {}", e.toString());
             return "";
         }
     }
 
     @SuppressWarnings("unchecked")
-    private static String pickPlannerRagQuery(Map<String, Object> cfg, Map<String, Object> input) {
+    private String pickPlannerRagQuery(Map<String, Object> cfg, Map<String, Object> input,
+                                       com.workflow.core.PipelineRun run) {
         Object q = cfg.get("auto_search_query");
         if (q != null && !q.toString().isBlank()) return q.toString();
-        // Fallback: pull task_md.to_be (full task spec) — best signal for what the
-        // plan is about, embedder picks up domain terms naturally.
-        Object taskMd = input.get("task_md");
-        if (taskMd instanceof Map<?, ?> m) {
-            Object toBe = m.get("to_be");
-            if (toBe != null && !toBe.toString().isBlank()) {
-                String s = toBe.toString();
-                return s.length() > 1500 ? s.substring(0, 1500) : s;
+        // Fallback chain: input map first (direct dep), then any task_md output in
+        // the run (transitive). PipelineRunner.gatherInputs only pulls direct deps,
+        // so a plan_impl that depends only on create_branch loses access to task_md
+        // unless we look it up via the run.
+        String fromMap = extractToBeOrTitle(input.get("task_md"));
+        if (fromMap != null) return fromMap;
+        if (run != null && run.getOutputs() != null) {
+            for (com.workflow.core.BlockOutput out : run.getOutputs()) {
+                if (!"task_md".equals(out.getBlockId())) continue;
+                try {
+                    Map<String, Object> data = objectMapper.readValue(
+                        out.getOutputJson(),
+                        new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                    String s = extractToBeOrTitle(data);
+                    if (s != null) return s;
+                } catch (Exception ignored) {}
             }
-            Object title = m.get("title");
-            if (title != null && !title.toString().isBlank()) return title.toString();
         }
+        return null;
+    }
+
+    /** Pulls task_md.to_be (truncated to 1500) or task_md.title from a deserialized map. */
+    private static String extractToBeOrTitle(Object taskMd) {
+        if (!(taskMd instanceof Map<?, ?> m)) return null;
+        Object toBe = m.get("to_be");
+        if (toBe != null && !toBe.toString().isBlank()) {
+            String s = toBe.toString();
+            return s.length() > 1500 ? s.substring(0, 1500) : s;
+        }
+        Object title = m.get("title");
+        if (title != null && !title.toString().isBlank()) return title.toString();
         return null;
     }
 

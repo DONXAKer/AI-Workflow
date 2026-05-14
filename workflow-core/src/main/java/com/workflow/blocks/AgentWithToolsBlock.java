@@ -234,12 +234,13 @@ public class AgentWithToolsBlock implements Block {
             log.info("agent_with_tools[{}]: focus_on_failure engaged — narrow prompt ({} chars) for build/test failure",
                 blockConfig.getId(), userMessage.length());
         } else {
-            userMessage = prependLoopbackFeedback(interpolate(expanded, input), input);
+            userMessage = prependLoopbackFeedback(interpolate(expanded, input), input,
+                run, blockConfig, workingDir);
         }
         userMessage = prependCodebaseTree(userMessage, workingDir);
         userMessage = prependClaudeMd(userMessage, workingDir);
         userMessage = prependPreloadedFiles(userMessage, cfg, input, workingDir);
-        userMessage = prependRagHits(userMessage, cfg, input);
+        userMessage = prependRagHits(userMessage, cfg, input, run);
 
         List<String> allowedTools = asStringList(cfg, "allowed_tools");
         if (allowedTools.isEmpty()) {
@@ -530,6 +531,11 @@ public class AgentWithToolsBlock implements Block {
     private static final int PRELOAD_MAX_FILES = 12;
     /** Hard cap on total characters across all inlined files (~8K tokens at avg ratio). */
     private static final int PRELOAD_MAX_CHARS = 32_000;
+    /** Tighter budget for the loopback changed-files section — runs on top of the
+     *  reviewer's checklist, retry instruction, regressions, codebase tree and task
+     *  spec, so we have less headroom than a cold start. 12K chars ~ 3K tokens. */
+    private static final int LOOPBACK_FILES_MAX_FILES = 6;
+    private static final int LOOPBACK_FILES_MAX_CHARS = 12_000;
 
     /**
      * When the block declares {@code preload_from: <plan_block_id>}, looks up the upstream
@@ -558,19 +564,45 @@ public class AgentWithToolsBlock implements Block {
      * <p>No-op when: knowledge layer is disabled, no project context, search returns
      * zero hits, or task description is empty.
      */
-    private String prependRagHits(String userMessage, Map<String, Object> cfg, Map<String, Object> input) {
-        if (!asBool(cfg, "auto_inject_rag", false)) return userMessage;
-        if (knowledgeBase == null) return userMessage;
+    private String prependRagHits(String userMessage, Map<String, Object> cfg, Map<String, Object> input,
+                                  com.workflow.core.PipelineRun run) {
+        if (!asBool(cfg, "auto_inject_rag", false)) {
+            log.debug("auto_inject_rag: disabled in block config");
+            return userMessage;
+        }
+        if (knowledgeBase == null) {
+            log.warn("auto_inject_rag: skipped — knowledgeBase bean is null (Qdrant/embeddings layer not wired)");
+            return userMessage;
+        }
+        // Loopback case: agent already has the changed-files list, RAG would be noise.
+        // Plan-preload case was previously skipped here too — removed because plans
+        // can contain hallucinated paths (e.g. com.example.* placeholders) and RAG
+        // is the only thing that grounds the agent in real package structure.
+        if (userMessage.contains("### Файлы, изменённые тобой")) {
+            log.info("auto_inject_rag: skipped — loopback already has changed-files list");
+            return userMessage;
+        }
         String slug = com.workflow.project.ProjectContext.get();
-        if (slug == null || slug.isBlank()) return userMessage;
+        if (slug == null || slug.isBlank()) {
+            log.warn("auto_inject_rag: skipped — ProjectContext slug is empty (no X-Project-Slug header?)");
+            return userMessage;
+        }
 
-        String query = pickSearchQuery(cfg, input);
-        if (query == null || query.isBlank()) return userMessage;
+        String query = pickSearchQuery(cfg, input, run);
+        if (query == null || query.isBlank()) {
+            log.warn("auto_inject_rag: skipped — search query is empty (no auto_search_query, and no task_md.to_be/title found in input or in any run output)");
+            return userMessage;
+        }
 
         try {
+            log.info("auto_inject_rag: querying slug={} query='{}...' top_k={}",
+                slug, query.length() > 60 ? query.substring(0, 60) : query, RAG_INJECTION_TOP_K);
             java.util.List<com.workflow.knowledge.KnowledgeHit> hits =
                 knowledgeBase.search(slug, query, RAG_INJECTION_TOP_K);
-            if (hits.isEmpty()) return userMessage;
+            if (hits.isEmpty()) {
+                log.warn("auto_inject_rag: skipped — knowledgeBase returned 0 hits for slug={} (collection empty? embedding model mismatch? query unrelated?)", slug);
+                return userMessage;
+            }
             StringBuilder sb = new StringBuilder();
             sb.append("## Релевантный код (top-").append(hits.size())
               .append(" семантически)\n\n");
@@ -586,35 +618,58 @@ public class AgentWithToolsBlock implements Block {
                 totalChars += header.length() + content.length() + tail.length();
             }
             sb.append("---\n\n");
+            log.info("auto_inject_rag: prepended {} hits ({} chars total)", hits.size(), totalChars);
             return sb + userMessage;
         } catch (Exception e) {
-            log.debug("auto_inject_rag skipped: {}", e.getMessage());
+            log.warn("auto_inject_rag: skipped — knowledgeBase.search threw: {}", e.toString());
             return userMessage;
         }
     }
 
     @SuppressWarnings("unchecked")
-    private String pickSearchQuery(Map<String, Object> cfg, Map<String, Object> input) {
+    private String pickSearchQuery(Map<String, Object> cfg, Map<String, Object> input,
+                                   com.workflow.core.PipelineRun run) {
         Object q = cfg.get("auto_search_query");
         if (q != null && !q.toString().isBlank()) {
-            // Resolve ${...} placeholders against block outputs.
+            // Resolve ${...} placeholders. Pass the run so ${task_md.to_be} works even
+            // when task_md isn't a direct dep (and therefore not in input).
             if (stringInterpolator != null) {
-                try { return stringInterpolator.interpolate(q.toString(), null, input); }
+                try { return stringInterpolator.interpolate(q.toString(), run, input); }
                 catch (Exception ignored) { return q.toString(); }
             }
             return q.toString();
         }
-        // Fallback: pull task_md.to_be from inputs if present.
-        Object taskMd = input.get("task_md");
-        if (taskMd instanceof Map<?, ?> m) {
-            Object toBe = m.get("to_be");
-            if (toBe != null && !toBe.toString().isBlank()) {
-                String s = toBe.toString();
-                return s.length() > 1500 ? s.substring(0, 1500) : s;
+        // Fallback chain: input map first (direct dep), then any block output in the
+        // run (transitive). PipelineRunner.gatherInputs only pulls direct deps into
+        // `input` — without the run-wide lookup, blocks that don't depend_on task_md
+        // (e.g. impl_server depends only on plan_impl) silently lose RAG injection.
+        String fromMap = extractToBeOrTitle(input.get("task_md"));
+        if (fromMap != null) return fromMap;
+        if (run != null && run.getOutputs() != null) {
+            for (com.workflow.core.BlockOutput out : run.getOutputs()) {
+                if (!"task_md".equals(out.getBlockId())) continue;
+                try {
+                    Map<String, Object> data = objectMapper.readValue(
+                        out.getOutputJson(),
+                        new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                    String s = extractToBeOrTitle(data);
+                    if (s != null) return s;
+                } catch (Exception ignored) {}
             }
-            Object title = m.get("title");
-            if (title != null && !title.toString().isBlank()) return title.toString();
         }
+        return null;
+    }
+
+    /** Pulls task_md.to_be (truncated) or task_md.title from a deserialized map. */
+    private static String extractToBeOrTitle(Object taskMd) {
+        if (!(taskMd instanceof Map<?, ?> m)) return null;
+        Object toBe = m.get("to_be");
+        if (toBe != null && !toBe.toString().isBlank()) {
+            String s = toBe.toString();
+            return s.length() > 1500 ? s.substring(0, 1500) : s;
+        }
+        Object title = m.get("title");
+        if (title != null && !title.toString().isBlank()) return title.toString();
         return null;
     }
 
@@ -630,6 +685,11 @@ public class AgentWithToolsBlock implements Block {
                                           Map<String, Object> input, Path workingDir) {
         Object pf = cfg.get("preload_from");
         if (!(pf instanceof String planBlockId) || planBlockId.isBlank()) return userMessage;
+        // On loopback, prependLoopbackFeedback already preloaded the *current* state of
+        // files the previous iteration actually touched — strict subset of plan files,
+        // and the post-edit content is more useful than plan's stale snapshot. Skip the
+        // plan-preload to avoid duplicating tokens (busted vLLM 16K context in testing).
+        if (userMessage.contains("### Файлы, изменённые тобой")) return userMessage;
 
         Object planOut = input.get(planBlockId);
         if (!(planOut instanceof Map<?, ?> planMap)) {
@@ -747,7 +807,13 @@ public class AgentWithToolsBlock implements Block {
     @SuppressWarnings("unchecked")
     // Loopback context is prepended (not appended) so LLMs prioritise retry instructions
     // over the main task description — they tend to weight the beginning of the prompt more.
-    private static String prependLoopbackFeedback(String userMessage, Map<String, Object> input) {
+    //
+    // Instance method (not static) because on N>1 we look up audit records and read the
+    // current on-disk content of files the previous codegen iteration touched — gives
+    // the model the same delta-awareness the reviewer already has, so it can act on
+    // checklist_status entries instead of re-Reading files and hitting the duplicate-guard.
+    private String prependLoopbackFeedback(String userMessage, Map<String, Object> input,
+                                            PipelineRun run, BlockConfig blockConfig, Path workingDir) {
         Object raw = input.get("_loopback");
         if (!(raw instanceof Map<?, ?> loopback) || loopback.isEmpty()) return userMessage;
 
@@ -762,13 +828,118 @@ public class AgentWithToolsBlock implements Block {
             sb.append("### Инструкция от ревьюера\n").append(ri).append("\n\n");
         }
 
-        Object issues = loopback.get("issues");
-        if (issues instanceof List<?> list && !list.isEmpty()) {
-            sb.append("### Проблемы для исправления\n");
-            for (Object item : list) {
-                sb.append("- ").append(item).append('\n');
+        // Structured per-id verdict from reviewer — rendered as table so the model can
+        // act on specific failing items. PipelineRunner promotes this from the reviewer's
+        // output into _loopback regardless of YAML inject_context. Falls back to flat
+        // `issues` for legacy reviewers that don't emit checklist_status.
+        Object cs = loopback.get("checklist_status");
+        if (cs instanceof List<?> csList && !csList.isEmpty()) {
+            sb.append("### Чеклист приёмки — failing items\n");
+            sb.append("| id | priority | passed | fix |\n");
+            sb.append("|---|---|---|---|\n");
+            int failingCount = 0;
+            for (Object item : csList) {
+                if (!(item instanceof Map<?, ?> m)) continue;
+                Object passed = m.get("passed");
+                if (passed instanceof Boolean b && b) continue;  // skip passed items, focus on failing
+                Object idVal = m.get("id");
+                Object prioVal = m.get("priority");
+                Object fixVal = m.get("fix");
+                if (fixVal == null) fixVal = m.get("evidence");
+                String id = idVal != null ? idVal.toString() : "?";
+                String prio = prioVal != null ? prioVal.toString() : "?";
+                String fix = fixVal != null ? fixVal.toString() : "";
+                fix = fix.replace("|", "\\|").replace("\n", " ");
+                if (fix.length() > 240) fix = fix.substring(0, 237) + "...";
+                sb.append("| ").append(id).append(" | ").append(prio).append(" | ✗ | ")
+                  .append(fix).append(" |\n");
+                failingCount++;
+            }
+            if (failingCount == 0) sb.append("| — | — | — | (нет failing items) |\n");
+            sb.append('\n');
+        } else {
+            // Legacy / non-orchestrator loopback path
+            Object issues = loopback.get("issues");
+            if (issues instanceof List<?> list && !list.isEmpty()) {
+                sb.append("### Проблемы для исправления\n");
+                for (Object item : list) {
+                    sb.append("- ").append(item).append('\n');
+                }
+                sb.append('\n');
+            }
+        }
+
+        Object regr = loopback.get("regressions");
+        if (regr instanceof List<?> rList && !rList.isEmpty()) {
+            sb.append("### Регрессии (build/test broken)\n");
+            for (Object item : rList) {
+                if (item instanceof Map<?, ?> m) {
+                    Object ev = m.get("evidence");
+                    if (ev == null) ev = m.get("description");
+                    sb.append("- ").append(ev != null ? ev : item).append('\n');
+                } else {
+                    sb.append("- ").append(item).append('\n');
+                }
             }
             sb.append('\n');
+        }
+
+        // Show the model exactly what *it* changed last time (via ToolCallAudit Write/Edit
+        // calls) with the *current* file contents from disk. This is the load-bearing
+        // delta context — without it the model re-Reads files, hits the duplicate-call
+        // guard, and emits zero edits (the failure mode the operator observed).
+        if (run != null && blockConfig != null && workingDir != null) {
+            String ownId = blockConfig.getId();
+            List<String> filesChanged = com.workflow.tools.AuditUtils.findFilesChangedByLastInvocation(
+                auditRepository, objectMapper, run.getId(), ownId);
+            if (!filesChanged.isEmpty()) {
+                sb.append("### Файлы, изменённые тобой на прошлой итерации (текущее состояние с диска)\n\n");
+                int filesShown = 0;
+                int charsUsed = 0;
+                List<String> skipped = new ArrayList<>();
+                for (String relPath : filesChanged) {
+                    if (filesShown >= LOOPBACK_FILES_MAX_FILES || charsUsed >= LOOPBACK_FILES_MAX_CHARS) {
+                        skipped.add(relPath);
+                        continue;
+                    }
+                    Path resolved;
+                    try {
+                        resolved = workingDir.resolve(relPath).normalize();
+                    } catch (Exception e) {
+                        skipped.add(relPath);
+                        continue;
+                    }
+                    if (!resolved.startsWith(workingDir) || !java.nio.file.Files.isRegularFile(resolved)) {
+                        skipped.add(relPath);
+                        continue;
+                    }
+                    String content;
+                    try {
+                        content = readWithCache(resolved);
+                    } catch (Exception e) {
+                        skipped.add(relPath);
+                        continue;
+                    }
+                    int budgetLeft = LOOPBACK_FILES_MAX_CHARS - charsUsed;
+                    boolean truncated = false;
+                    if (content.length() > budgetLeft) {
+                        content = content.substring(0, budgetLeft);
+                        truncated = true;
+                    }
+                    String fenceLang = guessFence(relPath);
+                    sb.append("#### ").append(relPath).append("\n```").append(fenceLang).append("\n")
+                      .append(content);
+                    if (!content.endsWith("\n")) sb.append('\n');
+                    if (truncated) sb.append("... (truncated — Read for full content)\n");
+                    sb.append("```\n\n");
+                    charsUsed += content.length();
+                    filesShown++;
+                }
+                if (!skipped.isEmpty()) {
+                    sb.append("Не предзагружены (читай явно при необходимости): ")
+                      .append(String.join(", ", skipped)).append("\n\n");
+                }
+            }
         }
 
         Object bo = loopback.get("build_output");
@@ -780,9 +951,11 @@ public class AgentWithToolsBlock implements Block {
         }
 
         // Include any other keys from inject_context (e.g. carry_forward)
+        Set<String> handled = Set.of("iteration", "issues", "retry_instruction", "build_output",
+            "checklist_status", "regressions");
         for (Map.Entry<?, ?> e : ((Map<?, ?>) loopback).entrySet()) {
             String key = e.getKey().toString();
-            if (Set.of("iteration", "issues", "retry_instruction", "build_output").contains(key)) continue;
+            if (handled.contains(key)) continue;
             if (e.getValue() != null && !e.getValue().toString().isBlank()) {
                 sb.append("**").append(key).append(":** ").append(e.getValue()).append('\n');
             }
