@@ -1323,6 +1323,7 @@ public class PipelineRunner {
         run.setCurrentOperation(null);
         run.setLastActivityAt(Instant.now());
         run.setCompletedAt(Instant.now());
+        finalizeCost(run);
         runRepository.save(run);
 
         if (wsHandler != null) wsHandler.sendRunComplete(run.getId(), "COMPLETED");
@@ -1411,6 +1412,7 @@ public class PipelineRunner {
         run.setStatus(RunStatus.FAILED);
         run.setError(error);
         run.setCompletedAt(Instant.now());
+        finalizeCost(run);
         runRepository.save(run);
         if (wsHandler != null) wsHandler.sendRunComplete(run.getId(), "FAILED");
         if (metrics != null) metrics.recordRunComplete("failed");
@@ -1420,9 +1422,26 @@ public class PipelineRunner {
         run.setStatus(RunStatus.FAILED);
         run.setError(summary + "\n\n" + formatStackTrace(cause));
         run.setCompletedAt(Instant.now());
+        finalizeCost(run);
         runRepository.save(run);
         if (wsHandler != null) wsHandler.sendRunComplete(run.getId(), "FAILED");
         if (metrics != null) metrics.recordRunComplete("failed");
+    }
+
+    /**
+     * Snapshot {@link PipelineRun#getTotalCostUsd()} at terminal state. Reads the
+     * sum of every {@link com.workflow.llm.LlmCall#getCostUsd()} attached to this
+     * run via {@link com.workflow.llm.LlmCallRepository#sumCostByRunId(java.util.UUID)}.
+     * Robust to repository being absent in tests.
+     */
+    private void finalizeCost(PipelineRun run) {
+        if (llmCallRepository == null || run == null || run.getId() == null) return;
+        try {
+            double total = llmCallRepository.sumCostByRunId(run.getId());
+            run.setTotalCostUsd(total);
+        } catch (Exception e) {
+            log.debug("finalizeCost failed for run {}: {}", run.getId(), e.getMessage());
+        }
     }
 
     private static String formatStackTrace(Throwable t) {

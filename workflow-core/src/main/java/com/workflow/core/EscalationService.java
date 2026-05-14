@@ -5,11 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.workflow.config.AgentConfig;
 import com.workflow.config.BlockConfig;
 import com.workflow.config.EscalationStep;
+import com.workflow.llm.LlmCallRepository;
 import com.workflow.llm.LlmProvider;
 import com.workflow.project.Project;
 import com.workflow.project.ProjectRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -40,12 +42,25 @@ public class EscalationService {
     private final ObjectMapper objectMapper;
     private final ProjectRepository projectRepository;
 
+    /**
+     * Optional — used for the per-run cloud-budget cap. When null (e.g. unit tests
+     * without a JPA context), {@link #budgetExceededForRun(PipelineRun)} returns
+     * false and cloud steps are never skipped on budget grounds.
+     */
+    @Autowired(required = false)
+    private LlmCallRepository llmCallRepository;
+
     public EscalationService(EscalationResolver resolver,
                              ObjectMapper objectMapper,
                              ProjectRepository projectRepository) {
         this.resolver = resolver;
         this.objectMapper = objectMapper;
         this.projectRepository = projectRepository;
+    }
+
+    /** Setter for tests that want to inject a mock LlmCallRepository post-construction. */
+    public void setLlmCallRepository(LlmCallRepository llmCallRepository) {
+        this.llmCallRepository = llmCallRepository;
     }
 
     /**
@@ -79,6 +94,16 @@ public class EscalationService {
             if (step instanceof EscalationStep.Cloud cloud) {
                 if (state.attemptsAtCurrentStep() >= cloud.maxIterations()) {
                     state = state.advanceStep();
+                    continue;
+                }
+                // Per-run cloud budget cap — when exceeded, skip cloud steps entirely
+                // and try to advance to the next non-cloud step (e.g. human gate).
+                // Human steps are unaffected because they don't incur LLM spend.
+                if (budgetExceededForRun(run)) {
+                    log.warn("Escalation: run={} failingBlock={} cloud step skipped — budget cap exceeded ({}>={})",
+                            run.getId(), failingBlockId, currentRunCostUsd(run), maxBudgetUsd());
+                    state = state.advanceStep();
+                    persistState(run, failingBlockId, state, stateMap);
                     continue;
                 }
                 state = state.incrementAttempt();
@@ -173,6 +198,32 @@ public class EscalationService {
     }
 
     public double maxBudgetUsd() { return resolver.maxBudgetUsd(); }
+
+    /**
+     * Returns true when this run's cumulative cloud-tier spend (sum of every
+     * {@link com.workflow.llm.LlmCall#getCostUsd()} attached to this run) has
+     * reached or exceeded {@link EscalationProperties#getMaxBudgetUsd()}.
+     *
+     * <p>Returns false when {@link LlmCallRepository} is not wired (test contexts)
+     * — cap is advisory in those cases.
+     */
+    public boolean budgetExceededForRun(PipelineRun run) {
+        if (llmCallRepository == null || run == null || run.getId() == null) return false;
+        double cap = maxBudgetUsd();
+        if (cap <= 0) return false;   // 0 / negative cap = disabled
+        return currentRunCostUsd(run) >= cap;
+    }
+
+    /** Live cost for an in-flight run. Returns 0 when LlmCallRepository is absent. */
+    public double currentRunCostUsd(PipelineRun run) {
+        if (llmCallRepository == null || run == null || run.getId() == null) return 0.0;
+        try {
+            return llmCallRepository.sumCostByRunId(run.getId());
+        } catch (Exception e) {
+            log.debug("currentRunCostUsd failed for run {}: {}", run.getId(), e.getMessage());
+            return 0.0;
+        }
+    }
 
     // --- helpers ---
 

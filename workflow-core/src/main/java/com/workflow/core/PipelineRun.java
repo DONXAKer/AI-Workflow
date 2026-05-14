@@ -123,6 +123,15 @@ public class PipelineRun {
     @Column(name = "escalation_state_json", columnDefinition = "TEXT")
     private String escalationStateJson = "{}";
 
+    /**
+     * Cumulative cost of every {@link com.workflow.llm.LlmCall} attached to this run,
+     * in USD. Snapshot updated when the run reaches a terminal state
+     * (COMPLETED / FAILED) — live cost during execution is fetched from
+     * {@link com.workflow.llm.LlmCallRepository#sumCostByRunId} on demand.
+     */
+    @Column(name = "total_cost_usd")
+    private double totalCostUsd = 0.0;
+
     @PrePersist
     protected void onCreate() {
         if (startedAt == null) {
@@ -227,4 +236,7 @@ public class PipelineRun {
     public void setEscalationStateJson(String escalationStateJson) {
         this.escalationStateJson = escalationStateJson != null ? escalationStateJson : "{}";
     }
+
+    public double getTotalCostUsd() { return totalCostUsd; }
+    public void setTotalCostUsd(double totalCostUsd) { this.totalCostUsd = Math.max(0.0, totalCostUsd); }
 }

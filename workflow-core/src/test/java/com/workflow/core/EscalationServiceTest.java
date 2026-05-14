@@ -3,6 +3,7 @@ package com.workflow.core;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.workflow.config.EscalationConfig;
 import com.workflow.config.EscalationStep;
+import com.workflow.llm.LlmCallRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -11,20 +12,24 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 /**
  * Covers the ladder-walking semantics of {@link EscalationService}:
- * cloud-step retries, transition to human-step, exhaustion, state persistence.
+ * cloud-step retries, transition to human-step, exhaustion, state persistence,
+ * and per-run cloud-budget enforcement.
  */
 class EscalationServiceTest {
 
     private EscalationService service;
+    private EscalationProperties props;
     private ObjectMapper mapper;
 
     @BeforeEach
     void setUp() {
         mapper = new ObjectMapper();
-        EscalationProperties props = new EscalationProperties();
+        props = new EscalationProperties();
         EscalationResolver resolver = new EscalationResolver(props, mapper);
         service = new EscalationService(resolver, mapper, null);
     }
@@ -247,5 +252,121 @@ class EscalationServiceTest {
         // Should not throw — corrupt state silently resets
         EscalationDecision d = service.attemptEscalation(run, "v", "t", ladder, Map.of());
         assertInstanceOf(EscalationDecision.RetryWithCloud.class, d);
+    }
+
+    // ── B2 cost budget ──────────────────────────────────────────────────────
+
+    @Test
+    void budgetExceededForRun_repoNull_returnsFalse() {
+        // Default setUp leaves llmCallRepository null
+        PipelineRun run = newRun();
+        assertFalse(service.budgetExceededForRun(run));
+    }
+
+    @Test
+    void budgetExceededForRun_underCap_returnsFalse() {
+        PipelineRun run = newRun();
+        LlmCallRepository repo = mock(LlmCallRepository.class);
+        when(repo.sumCostByRunId(run.getId())).thenReturn(2.50);
+        service.setLlmCallRepository(repo);
+        props.setMaxBudgetUsd(10.00);
+
+        assertFalse(service.budgetExceededForRun(run));
+    }
+
+    @Test
+    void budgetExceededForRun_overCap_returnsTrue() {
+        PipelineRun run = newRun();
+        LlmCallRepository repo = mock(LlmCallRepository.class);
+        when(repo.sumCostByRunId(run.getId())).thenReturn(11.20);
+        service.setLlmCallRepository(repo);
+        props.setMaxBudgetUsd(10.00);
+
+        assertTrue(service.budgetExceededForRun(run));
+    }
+
+    @Test
+    void budgetExceededForRun_capZero_returnsFalseEvenWithSpend() {
+        // 0 cap = disabled (no enforcement)
+        PipelineRun run = newRun();
+        LlmCallRepository repo = mock(LlmCallRepository.class);
+        when(repo.sumCostByRunId(run.getId())).thenReturn(50.00);
+        service.setLlmCallRepository(repo);
+        props.setMaxBudgetUsd(0.0);
+
+        assertFalse(service.budgetExceededForRun(run));
+    }
+
+    @Test
+    void attemptEscalation_budgetExceeded_skipsCloudAndAdvancesToHuman() {
+        PipelineRun run = newRun();
+        LlmCallRepository repo = mock(LlmCallRepository.class);
+        when(repo.sumCostByRunId(run.getId())).thenReturn(15.0);
+        service.setLlmCallRepository(repo);
+        props.setMaxBudgetUsd(10.00);
+
+        var ladder = List.<EscalationStep>of(
+                new EscalationStep.Cloud("openrouter", "smart", 3),
+                new EscalationStep.Human(List.of("ui"), 60L)
+        );
+
+        EscalationDecision d = service.attemptEscalation(run, "verify", "codegen", ladder, Map.of());
+        // Budget cap means we don't even try the cloud step — straight to human.
+        assertInstanceOf(EscalationDecision.PauseForHuman.class, d,
+                "Cloud step must be skipped when run budget is exceeded");
+    }
+
+    @Test
+    void attemptEscalation_budgetExceeded_humanOnlyLadder_stillPauses() {
+        // Human steps aren't budgeted — they should still execute even if cloud is over cap.
+        PipelineRun run = newRun();
+        LlmCallRepository repo = mock(LlmCallRepository.class);
+        when(repo.sumCostByRunId(run.getId())).thenReturn(50.0);
+        service.setLlmCallRepository(repo);
+        props.setMaxBudgetUsd(10.00);
+
+        var ladder = List.<EscalationStep>of(
+                new EscalationStep.Human(List.of("ui"), 60L)
+        );
+
+        EscalationDecision d = service.attemptEscalation(run, "v", "t", ladder, Map.of());
+        assertInstanceOf(EscalationDecision.PauseForHuman.class, d);
+    }
+
+    @Test
+    void attemptEscalation_budgetExceeded_cloudOnlyLadder_isExhausted() {
+        // No human step to fall back to — budget cap turns this into Exhausted.
+        PipelineRun run = newRun();
+        LlmCallRepository repo = mock(LlmCallRepository.class);
+        when(repo.sumCostByRunId(run.getId())).thenReturn(15.0);
+        service.setLlmCallRepository(repo);
+        props.setMaxBudgetUsd(10.00);
+
+        var ladder = List.<EscalationStep>of(
+                new EscalationStep.Cloud("openrouter", "smart", 3)
+        );
+
+        EscalationDecision d = service.attemptEscalation(run, "v", "t", ladder, Map.of());
+        assertInstanceOf(EscalationDecision.Exhausted.class, d);
+    }
+
+    @Test
+    void currentRunCostUsd_returnsRepoValue() {
+        PipelineRun run = newRun();
+        LlmCallRepository repo = mock(LlmCallRepository.class);
+        when(repo.sumCostByRunId(run.getId())).thenReturn(3.14);
+        service.setLlmCallRepository(repo);
+
+        assertEquals(3.14, service.currentRunCostUsd(run), 0.001);
+    }
+
+    @Test
+    void currentRunCostUsd_repoThrows_returnsZero() {
+        PipelineRun run = newRun();
+        LlmCallRepository repo = mock(LlmCallRepository.class);
+        when(repo.sumCostByRunId(any(UUID.class))).thenThrow(new RuntimeException("db down"));
+        service.setLlmCallRepository(repo);
+
+        assertEquals(0.0, service.currentRunCostUsd(run), 0.001);
     }
 }

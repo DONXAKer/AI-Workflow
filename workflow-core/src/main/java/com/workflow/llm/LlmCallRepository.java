@@ -32,4 +32,13 @@ public interface LlmCallRepository extends JpaRepository<LlmCall, Long> {
         ORDER BY SUM(c.costUsd) DESC
         """)
     java.util.List<LlmCostSummary> summarizeByModelForProject(Instant from, Instant to, String projectSlug);
+
+    /**
+     * Sum cost of every {@link LlmCall} attached to this run, in USD. Used both for
+     * the running-total badge on the run-detail page and for the per-run escalation
+     * budget cap ({@code workflow.escalation.max-budget-usd}). Returns 0.0 when the
+     * run has no calls.
+     */
+    @Query("SELECT COALESCE(SUM(c.costUsd), 0.0) FROM LlmCall c WHERE c.runId = :runId")
+    double sumCostByRunId(UUID runId);
 }
