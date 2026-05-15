@@ -181,6 +181,20 @@ public class VllmProviderClient implements LlmProviderClient {
         messages.addObject().put("role", "user").put("content", request.userMessage());
 
         ArrayNode toolsJson = LlmTextUtils.buildToolsJson(request.tools(), objectMapper);
+        // Schema for force-finalize text injection (see OpenAICompatibleProviderClient
+        // for the full rationale — providers ignore tool_choice and tool list constraints,
+        // so we drop tools entirely at force time and inject the schema as a user message).
+        com.fasterxml.jackson.databind.node.ObjectNode vllmFinalizeSchema = null;
+        if (request.finalizeToolName() != null && !request.finalizeToolName().isBlank()) {
+            String fn = request.finalizeToolName();
+            for (com.workflow.llm.tooluse.ToolDefinition td : request.tools()) {
+                if (fn.equals(td.name())) {
+                    vllmFinalizeSchema = td.inputSchema();
+                    break;
+                }
+            }
+        }
+        boolean vllmForceFinalizePromptInjected = false;
 
         List<ToolUseResponse.ToolCallTrace> history = new ArrayList<>();
         int iterations = 0;
@@ -227,8 +241,19 @@ public class VllmProviderClient implements LlmProviderClient {
             body.put("top_k", VLLM_DEFAULT_TOP_K);
             body.put("repetition_penalty", VLLM_DEFAULT_REPETITION_PENALTY);
             body.set("messages", messages);
-            boolean hasTools = toolsJson.size() > 0;
-            if (hasTools) {
+            boolean shouldForce = vllmFinalizeSchema != null
+                && request.forceFinalizeAfter() > 0
+                && iterations >= request.forceFinalizeAfter();
+            if (shouldForce && !vllmForceFinalizePromptInjected) {
+                String schemaStr = vllmFinalizeSchema.toPrettyString();
+                messages.addObject().put("role", "user").put("content",
+                    "STOP USING TOOLS. The `tools` field is removed from this request — "
+                        + "no tool call is possible.\n\nOutput ONLY a JSON object matching this schema "
+                        + "(no preamble, no fenced block):\n```\n" + schemaStr + "\n```\n\n"
+                        + "Use whatever evidence you have so far. Partial answers beat no answer.");
+                vllmForceFinalizePromptInjected = true;
+            }
+            if (toolsJson.size() > 0 && !shouldForce) {
                 body.set("tools", toolsJson);
                 body.put("tool_choice", "auto");
             }
@@ -299,6 +324,29 @@ public class VllmProviderClient implements LlmProviderClient {
                 if (!stripped.isBlank()) historyMsg.put("content", stripped);
             }
             messages.add(historyMsg);
+
+            // Finalize-tool short-circuit (mirrors OpenAI-compat path).
+            String finalizeName = request.finalizeToolName();
+            if (finalizeName != null && !finalizeName.isBlank()) {
+                for (JsonNode tc : toolCalls) {
+                    String tn = tc.path("function").path("name").asText("");
+                    if (finalizeName.equals(tn)) {
+                        String argsStr = tc.path("function").path("arguments").asText("{}");
+                        if (argsStr == null || argsStr.isBlank()) argsStr = "{}";
+                        String callId = tc.path("id").asText("");
+                        try {
+                            JsonNode parsed = objectMapper.readTree(argsStr);
+                            history.add(new ToolUseResponse.ToolCallTrace(iterations,
+                                new ToolCall(callId, finalizeName, parsed),
+                                ToolResult.ok(callId, "[finalize] short-circuit")));
+                        } catch (Exception ignore) { /* extractJson on caller handles malformed */ }
+                        log.info("vLLM tool-use loop finished: FINALIZE_TOOL={} at iter={}",
+                            finalizeName, iterations);
+                        return new ToolUseResponse(argsStr, StopReason.END_TURN, history,
+                            iterations, totalTokensIn, totalTokensOut, 0.0);
+                    }
+                }
+            }
 
             for (JsonNode tc : toolCalls) {
                 String callId = tc.path("id").asText("");

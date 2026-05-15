@@ -109,6 +109,7 @@ public class OrchestratorBlock implements Block {
     @Autowired(required = false) private StringInterpolator stringInterpolator;
     @Autowired(required = false) private RunWebSocketHandler wsHandler;
     @Autowired(required = false) private com.workflow.knowledge.KnowledgeBase knowledgeBase;
+    @Autowired(required = false) private com.workflow.mcp.McpToolLoader mcpToolLoader;
 
     @Override public String getName() { return "orchestrator"; }
 
@@ -160,7 +161,21 @@ public class OrchestratorBlock implements Block {
                     "Если модель вернула free-form текст вместо JSON — синтезировать "
                         + "структурированный output (plan: prose→approach; review: passed=true). "
                         + "Полезно для 8B локальных моделей, которые срываются на сложных JSON-схемах. "
-                        + "В review-mode рискованно: пайплайн пойдёт дальше, реальные баги ловят build/tests/verify_acceptance.")
+                        + "В review-mode рискованно: пайплайн пойдёт дальше, реальные баги ловят build/tests/verify_acceptance."),
+                FieldSchema.stringArray("tools", "Tools (override)",
+                    "Переопределяет дефолтный список tools для режима. "
+                        + "Plan default: Read, Grep, Glob. Review default: Read, Grep, Glob, Bash. "
+                        + "Можно сузить (например убрать Bash) или расширить MCP-инструментами. "
+                        + "Пустой = дефолт."),
+                FieldSchema.stringArray("bash_allowlist", "Bash allowlist (override)",
+                    "Переопределяет дефолтный allowlist для Bash в стиле Claude Code (`Bash(git diff*)`). "
+                        + "Plan default: git log/status/show. Review default: git diff/log/status/show. "
+                        + "Пустой = дефолт; явный пустой список с tools=[..., Bash] полностью запретит Bash."),
+                FieldSchema.stringArray("mcp_servers", "MCP-серверы",
+                    "Имена зарегистрированных MCP-серверов проекта. Каждый remote-tool становится "
+                        + "доступен агенту как `mcp_<server>__<tool>` поверх native tools. "
+                        + "Полезно для review-mode, который должен проверять, например, UE5 Blueprints "
+                        + "через mcp_unreal_mcp__find_actors_by_name (бинарные .uasset через Read не разобрать).")
             ),
             false,
             Map.of(),
@@ -733,6 +748,109 @@ public class OrchestratorBlock implements Block {
 
     private static <T> T firstNonNull(T a, T b) { return a != null ? a : b; }
 
+    // ── Finalize tool definitions ──────────────────────────────────────────────
+    // The "finalize" tool is a synthetic tool with no backing executor. The model calls
+    // it to emit the structured verdict; the provider's tool-use loop short-circuits on
+    // the matching name (see OpenAICompatibleProviderClient + OllamaProviderClient) and
+    // returns the call's `arguments` JSON as finalText. This bypasses the entire
+    // text-JSON parse-and-rescue cascade. Schemas mirror the same shape we used to ask
+    // the model to emit in fenced ```json blocks.
+
+    private ToolDefinition finalizeReviewToolDef() {
+        com.fasterxml.jackson.databind.node.ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        com.fasterxml.jackson.databind.node.ObjectNode props = schema.putObject("properties");
+
+        com.fasterxml.jackson.databind.node.ObjectNode cs = props.putObject("checklist_status");
+        cs.put("type", "array");
+        cs.put("description",
+            "Per-item verdict for EVERY id in the acceptance_checklist (one entry per id, no extras).");
+        com.fasterxml.jackson.databind.node.ObjectNode csItem = cs.putObject("items");
+        csItem.put("type", "object");
+        com.fasterxml.jackson.databind.node.ObjectNode csProps = csItem.putObject("properties");
+        csProps.putObject("id").put("type", "string")
+            .put("description", "Id from the acceptance_checklist table — must match exactly, do not invent.");
+        csProps.putObject("passed").put("type", "boolean");
+        csProps.putObject("evidence").put("type", "string")
+            .put("description", "Concrete file:line / grep hit / test output that proves the verdict.");
+        csProps.putObject("fix").put("type", "string")
+            .put("description", "If passed=false: one-sentence concrete fix instruction. Else empty string.");
+        csItem.putArray("required").add("id").add("passed").add("evidence").add("fix");
+
+        com.fasterxml.jackson.databind.node.ObjectNode reg = props.putObject("regressions");
+        reg.put("type", "array");
+        reg.put("description",
+            "Functional regressions only (build/compile/test failures or previously-working features now broken). "
+                + "Empty array if build/tests are green. NEVER include style or 'could be better' notes.");
+        com.fasterxml.jackson.databind.node.ObjectNode regItem = reg.putObject("items");
+        regItem.put("type", "object");
+        com.fasterxml.jackson.databind.node.ObjectNode regProps = regItem.putObject("properties");
+        regProps.putObject("description").put("type", "string");
+        regProps.putObject("evidence").put("type", "string")
+            .put("description", "git diff snippet or test failure output.");
+        regItem.putArray("required").add("description").add("evidence");
+
+        props.putObject("carry_forward").put("type", "string")
+            .put("description", "Brief summary of what was accomplished (1-2 sentences).");
+        com.fasterxml.jackson.databind.node.ObjectNode action = props.putObject("action");
+        action.put("type", "string");
+        action.putArray("enum").add("retry").add("escalate");
+        action.put("description",
+            "Always 'retry' by default. Use 'escalate' ONLY for architectural conflicts the implementor "
+                + "literally cannot resolve without spec changes (e.g. requirements contradict the plan).");
+
+        schema.putArray("required").add("checklist_status").add("regressions").add("carry_forward").add("action");
+
+        return new ToolDefinition("finalize_review",
+            "Submit the final review verdict. Call this tool ONCE when you have gathered enough evidence. "
+                + "The arguments ARE the final answer — do not also write JSON in the text response. "
+                + "Every id from the acceptance_checklist must appear exactly once in checklist_status.",
+            schema);
+    }
+
+    private ToolDefinition finalizePlanToolDef() {
+        com.fasterxml.jackson.databind.node.ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        com.fasterxml.jackson.databind.node.ObjectNode props = schema.putObject("properties");
+
+        props.putObject("goal").put("type", "string")
+            .put("description", "One-sentence description of what needs to be implemented (derived from the task spec).");
+
+        com.fasterxml.jackson.databind.node.ObjectNode rc = props.putObject("requirements_coverage");
+        rc.put("type", "array");
+        rc.put("description",
+            "One entry per discrete requirement found in the task spec (numbered step / heading / bullet). "
+                + "Be exhaustive — empty/short lists are bugs.");
+        com.fasterxml.jackson.databind.node.ObjectNode rcItem = rc.putObject("items");
+        rcItem.put("type", "object");
+        com.fasterxml.jackson.databind.node.ObjectNode rcProps = rcItem.putObject("properties");
+        rcProps.putObject("requirement").put("type", "string")
+            .put("description", "Verbatim or tightly-paraphrased line from the task spec.");
+        rcProps.putObject("approach").put("type", "string");
+        rcProps.putObject("files").put("type", "string")
+            .put("description", "Newline-separated real paths.");
+        rcItem.putArray("required").add("requirement").add("approach").add("files");
+
+        props.putObject("files_to_touch").put("type", "string")
+            .put("description", "Newline-separated UNION of all paths in requirements_coverage[].files (deduplicated). "
+                + "Real paths from Glob/Grep or new files inside existing package layout — no placeholders.");
+        props.putObject("approach").put("type", "string")
+            .put("description", "Step-by-step technical approach summarising the work across all requirements.");
+        props.putObject("definition_of_done").put("type", "string")
+            .put("description", "Newline-separated verifiable completion checklist. MUST include: "
+                + "(1) tests covering new/changed logic exist and pass; (2) public API contracts updated; "
+                + "(3) README/CLAUDE.md updated if external behavior changed; (4) no compiler errors.");
+        props.putObject("tools_to_use").put("type", "string")
+            .put("description", "Comma-separated tool names the implementor should use.");
+
+        schema.putArray("required").add("goal").add("files_to_touch").add("approach").add("definition_of_done");
+
+        return new ToolDefinition("finalize_plan",
+            "Submit the final implementation plan. Call this tool ONCE when you have gathered enough information. "
+                + "The arguments ARE the final answer — do not also write JSON in the text response.",
+            schema);
+    }
+
     // ── Agent loop ─────────────────────────────────────────────────────────────
 
     private Map<String, Object> runLoop(BlockConfig blockConfig, PipelineRun run,
@@ -740,12 +858,37 @@ public class OrchestratorBlock implements Block {
             List<String> toolNames, List<String> bashAllowlist,
             int maxIter, double budget, String mode) throws Exception {
 
-        List<Tool> tools = toolRegistry.resolve(toolNames);
-        List<ToolDefinition> defs = tools.stream()
-            .map(t -> new ToolDefinition(t.name(), t.description(), t.inputSchema(objectMapper)))
-            .toList();
+        // Per-block tool overrides. cfg.tools / cfg.bash_allowlist replace the mode-defaults
+        // entirely (additive merge would mask the operator's intent — empty list means "no Bash").
+        // cfg.mcp_servers pulls remote MCP tools (same as agent_with_tools); names are
+        // mcp_<server>__<tool>. Unknown native names throw via toolRegistry.resolve so YAML
+        // typos are caught at run start, not buried in iteration logs.
+        Map<String, Object> cfg = blockConfig.getConfig() != null ? blockConfig.getConfig() : Map.of();
+        List<String> resolvedToolNames = cfg.containsKey("tools") ? asStringList(cfg, "tools") : toolNames;
+        List<String> resolvedBashAllowlist = cfg.containsKey("bash_allowlist")
+            ? asStringList(cfg, "bash_allowlist") : bashAllowlist;
+        List<String> mcpServerNames = asStringList(cfg, "mcp_servers");
 
-        ToolContext toolCtx = new ToolContext(workingDir, bashAllowlist);
+        List<Tool> nativeTools = toolRegistry.resolve(resolvedToolNames);
+        List<Tool> mcpTools = (mcpToolLoader != null && !mcpServerNames.isEmpty())
+            ? mcpToolLoader.loadFor(mcpServerNames) : List.of();
+
+        List<ToolDefinition> defs = new ArrayList<>(nativeTools.size() + mcpTools.size() + 1);
+        for (Tool t : nativeTools) {
+            defs.add(new ToolDefinition(t.name(), t.description(), t.inputSchema(objectMapper)));
+        }
+        for (Tool t : mcpTools) {
+            defs.add(new ToolDefinition(t.name(), t.description(), t.inputSchema(objectMapper)));
+        }
+        // Append the finalize tool — its arguments ARE the model's structured verdict.
+        // Provider's tool-use loop short-circuits on this name (no execution), so we don't
+        // register a backing Tool. With forceFinalizeAfter set below, tool_choice gets pinned
+        // to this tool past mid-loop — guarantees structured output even when a model
+        // (e.g. glm-4.6 with tool_choice=auto) keeps preferring exploratory tools forever.
+        String finalizeName = "review".equals(mode) ? "finalize_review" : "finalize_plan";
+        defs.add("review".equals(mode) ? finalizeReviewToolDef() : finalizePlanToolDef());
+
+        ToolContext toolCtx = new ToolContext(workingDir, resolvedBashAllowlist);
 
         AgentConfig agent = blockConfig.getAgent() != null ? blockConfig.getAgent() : new AgentConfig();
         // Project.orchestratorModel wins over tier-resolved agent.model (AgentProfileResolver
@@ -764,6 +907,11 @@ public class OrchestratorBlock implements Block {
         // alternative is degraded prose_fallback every time.
         boolean forceJson = model != null && model.toLowerCase().startsWith(com.workflow.llm.Models.FAMILY_QWEN36);
 
+        // Force the finalize tool past mid-loop. maxIter/2 leaves room for exploration first
+        // but doesn't let the model burn the entire budget tool-looping. Floor of 2 so 3-4
+        // iter budgets still benefit (force kicks in by iter 2, model is allowed 1 free turn).
+        int forceFinalizeAfter = Math.max(2, maxIter / 2);
+
         ToolUseRequest request = ToolUseRequest.builder()
             .model(model)
             .systemPrompt(systemPrompt)
@@ -780,12 +928,14 @@ public class OrchestratorBlock implements Block {
             // entirely (they output a single JSON immediately without exploring the codebase).
             // For other models we leave it unconstrained — qwen3.6 is the one model
             // that *only* produces usable JSON when forced.
+            .finalizeToolName(finalizeName)
+            .forceFinalizeAfter(forceFinalizeAfter)
             .progressCallback(wsHandler != null ? detail ->
                 wsHandler.sendBlockProgress(runId, blockId, detail) : null)
             .build();
 
         DefaultToolExecutor executor = new DefaultToolExecutor(
-            toolRegistry, toolCtx, objectMapper, auditRepository);
+            toolRegistry, toolCtx, objectMapper, auditRepository, mcpTools);
 
         log.info("orchestrator[{}] mode={} model={} workingDir={}", blockId, mode, model, workingDir);
         // Free VRAM from any other Ollama model still cached before we start —
@@ -948,7 +1098,12 @@ MANDATORY COVERAGE — before writing the JSON:
    bug — re-read the spec and try again. Do not produce a plan that addresses only a
    subset of the task.
 
-When you have enough information, respond with a JSON object inside a ```json block:
+When you have enough information, you MUST call the `finalize_plan` tool with the structured plan
+as its arguments. The tool's arguments ARE the final answer — do NOT also emit JSON in the text
+response. (Legacy fallback only: if you cannot call the tool, you may emit a fenced ```json block
+matching the same schema; the tool path is preferred and required by the loop.)
+
+Schema for `finalize_plan`:
 ```json
 {
   "goal": "one-sentence description of what needs to be implemented (derived from the task spec, not invented)",
@@ -1037,7 +1192,13 @@ PRINCIPLES (важно — иначе уйдёшь в патологически
   не "хорошо бы ещё...".
 - Если сомневаешься passed=true или passed=false — выбирай passed=true.
 
-MANDATORY FINAL RESPONSE FORMAT — output ONLY this JSON block when done:
+FINAL VERDICT — call the `finalize_review` tool. Its arguments ARE the final answer:
+the structured per-id verdict goes directly into tool_call.arguments. Do NOT also emit
+JSON in the text response. (Legacy fallback only: if for some reason you cannot call the
+tool, emit the same JSON shape inside a fenced ```json block; the tool path is preferred
+and is forced past mid-loop.)
+
+Schema mirrored by the tool:
 ```json
 {
   "checklist_status": [

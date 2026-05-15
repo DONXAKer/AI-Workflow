@@ -174,6 +174,27 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
         messages.addObject().put("role", "user").put("content", request.userMessage());
 
         ArrayNode toolsJson = LlmTextUtils.buildToolsJson(request.tools(), objectMapper);
+        // Past forceFinalizeAfter, we drop the entire `tools` field from the request so the
+        // model physically cannot emit a tool_call. Empirically OpenRouter/glm-4.6 ignores
+        // both tool_choice="required" and the explicit list of allowed tools — the model
+        // happily calls Read/Glob from conversation memory even when neither is in the
+        // current `tools` array. The only way that survives every provider quirk is to omit
+        // tools entirely AND inject a user-message with the schema so the model knows what
+        // to write. Whether this works depends purely on plain text generation, which is
+        // the most reliable mode of every chat-completion API.
+        // Render the finalize tool's schema as JSON for the user-message, so the inline
+        // text the model is forced to emit matches the same shape it would have submitted
+        // through tool args. extractJson on the text yields the same map.
+        com.fasterxml.jackson.databind.node.ObjectNode finalizeSchema = null;
+        String finalizeName = request.finalizeToolName();
+        if (finalizeName != null && !finalizeName.isBlank()) {
+            for (com.workflow.llm.tooluse.ToolDefinition td : request.tools()) {
+                if (finalizeName.equals(td.name())) {
+                    finalizeSchema = td.inputSchema();
+                    break;
+                }
+            }
+        }
 
         List<ToolUseResponse.ToolCallTrace> history = new ArrayList<>();
         int iterations = 0;
@@ -192,6 +213,7 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
         // future prompt-cache compatibility; mutating it would invalidate the prefix.
         boolean earlyReminderSent  = false;
         boolean softCapReminderSent = false;
+        boolean forceFinalizePromptInjected = false;
         int earlyReminderAt = Math.max(5, request.maxIterations() / 3);
 
         while (iterations < request.maxIterations()) {
@@ -235,12 +257,45 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
                     "[" + resolvedModel + "] Итерация " + iterations + "/" + request.maxIterations());
             }
 
+            // Decide whether this iteration runs in force-finalize mode. Force is hit when
+            // the loop has burned half its iteration budget — at that point we want the
+            // model to stop exploring and emit the structured final answer.
+            boolean shouldForce = finalizeSchema != null
+                && request.forceFinalizeAfter() > 0
+                && iterations >= request.forceFinalizeAfter();
+
+            // Inject the schema-bearing user message ONCE at force onset. Empirically OpenRouter/
+            // glm-4.6 ignores `tool_choice="required"` AND ignores constrained tool lists — the
+            // model still emits Read/Glob calls it remembers from earlier iterations. The only
+            // surviving force is to omit `tools` entirely (so no tool_call is structurally
+            // possible) PLUS tell the model what to output via a user message with the schema.
+            if (shouldForce && !forceFinalizePromptInjected) {
+                ObjectNode reminder = messages.addObject();
+                reminder.put("role", "user");
+                String schemaStr = finalizeSchema != null
+                    ? finalizeSchema.toPrettyString() : "{}";
+                reminder.put("content",
+                    "STOP USING TOOLS. You have spent half the iteration budget. The `tools` field "
+                        + "is removed from this request — no tool call is possible.\n\n"
+                        + "Output ONLY a JSON object matching this exact schema (no preamble, no fenced block):\n"
+                        + "```\n" + schemaStr + "\n```\n\n"
+                        + "Use whatever evidence you have gathered so far. If a field is uncertain, "
+                        + "give your best guess — partial answers beat no answer. Do not narrate; "
+                        + "the JSON is the entire response.");
+                forceFinalizePromptInjected = true;
+                logger().info("Force-finalize prompt injected at iter {}/{} for {} (tools removed from request)",
+                    iterations, request.maxIterations(), request.finalizeToolName());
+            }
+
             ObjectNode body = objectMapper.createObjectNode();
             body.put("model", resolvedModel);
             body.put("max_tokens", request.maxTokens());
             body.put("temperature", request.temperature());
             body.set("messages", messages);
-            if (toolsJson.size() > 0) {
+            // Include `tools` only when we are NOT forcing finalize. Removing the field at
+            // force time strips the model's structural ability to emit a tool_call —
+            // every OpenAI-compatible provider honors "no tools => text-only response".
+            if (toolsJson.size() > 0 && !shouldForce) {
                 body.set("tools", toolsJson);
                 body.put("tool_choice", "auto");
             }
@@ -375,6 +430,36 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
                 }
             }
             messages.add(historyMsg);
+
+            // Finalize-tool short-circuit: if the model called the configured finalize tool
+            // (either by force or by its own choice), take its arguments JSON as the final
+            // answer and stop. Don't execute it — there's no real tool behind it. Caller
+            // gets clean JSON in finalText, no rescue cascade needed.
+            // (finalizeName already captured in the outer scope above for schema lookup.)
+            if (finalizeName != null && !finalizeName.isBlank()) {
+                for (JsonNode tc : toolCalls) {
+                    String tn = tc.path("function").path("name").asText("");
+                    if (finalizeName.equals(tn)) {
+                        String argsStr = tc.path("function").path("arguments").asText("{}");
+                        if (argsStr == null || argsStr.isBlank()) argsStr = "{}";
+                        // Record a synthetic trace so observability sees the finalize call.
+                        String callId = tc.path("id").asText("");
+                        try {
+                            JsonNode argsNode = objectMapper.readTree(argsStr);
+                            history.add(new ToolUseResponse.ToolCallTrace(iterations,
+                                new ToolCall(callId, finalizeName, argsNode),
+                                ToolResult.ok(callId, "[finalize] short-circuit")));
+                        } catch (Exception ignore) {
+                            // Even unparseable args go through — extractJson on caller side
+                            // will surface the malformed payload via the rescue path.
+                        }
+                        logger().info("Tool-use loop finished: FINALIZE_TOOL={} at iter={} cost=${}",
+                            finalizeName, iterations, totalCostUsd);
+                        return new ToolUseResponse(argsStr, StopReason.END_TURN, history,
+                            iterations, totalTokensIn, totalTokensOut, totalCostUsd);
+                    }
+                }
+            }
 
             for (JsonNode tc : toolCalls) {
                 String callId = tc.path("id").asText("");

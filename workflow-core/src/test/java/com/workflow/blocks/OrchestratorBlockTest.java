@@ -145,6 +145,107 @@ class OrchestratorBlockTest {
         assertNotNull(result.get("total_cost_usd"));
     }
 
+    // ── Finalize-tool wiring (PR: configurable tools + finalize) ──────────────
+
+    @Test
+    void run_reviewIncludesFinalizeToolAndForcePastMidLoop(@TempDir Path wd) throws Exception {
+        String reviewJson = """
+            ```json
+            {"passed":true,"issues":"","action":"continue","retry_instruction":"","carry_forward":"done"}
+            ```""";
+        ArgumentCaptor<ToolUseRequest> captor = ArgumentCaptor.forClass(ToolUseRequest.class);
+        when(llmClient.completeWithTools(captor.capture(), any()))
+            .thenReturn(response(reviewJson, StopReason.END_TURN));
+
+        BlockConfig cfg = reviewConfig(wd, Map.of("max_iterations", 8));
+        block.run(new HashMap<>(), cfg, new PipelineRun());
+
+        ToolUseRequest req = captor.getValue();
+        assertEquals("finalize_review", req.finalizeToolName(),
+            "review-mode must wire finalize_review as the finalize tool");
+        assertTrue(req.forceFinalizeAfter() > 0 && req.forceFinalizeAfter() <= 8,
+            "forceFinalizeAfter must be set within iteration budget; was " + req.forceFinalizeAfter());
+        assertTrue(req.tools().stream().anyMatch(t -> "finalize_review".equals(t.name())),
+            "tools list must contain the finalize_review definition");
+    }
+
+    @Test
+    void run_planUsesFinalizePlanTool(@TempDir Path wd) throws Exception {
+        String planJson = """
+            ```json
+            {"goal":"implement feature foo across api/","files_to_touch":"a.java","approach":"add endpoint then wire UI","definition_of_done":"tests pass","tools_to_use":"Read,Edit",
+             "requirements_coverage":[
+               {"requirement":"r1","approach":"impl","files":"a.java"},
+               {"requirement":"r2","approach":"impl","files":"b.java"},
+               {"requirement":"r3","approach":"impl","files":"c.java"}
+             ]}
+            ```""";
+        ArgumentCaptor<ToolUseRequest> captor = ArgumentCaptor.forClass(ToolUseRequest.class);
+        when(llmClient.completeWithTools(captor.capture(), any()))
+            .thenReturn(response(planJson, StopReason.END_TURN));
+
+        BlockConfig cfg = planConfig(wd, Map.of("context_blocks", List.of("task_md")));
+        Map<String, Object> input = new HashMap<>();
+        input.put("task_md", Map.of("title", "T", "body", "B"));
+        block.run(input, cfg, new PipelineRun());
+
+        ToolUseRequest req = captor.getValue();
+        assertEquals("finalize_plan", req.finalizeToolName());
+        assertTrue(req.tools().stream().anyMatch(t -> "finalize_plan".equals(t.name())));
+    }
+
+    @Test
+    void run_finalizeArgsParsedDirectlyAsFinalText(@TempDir Path wd) throws Exception {
+        // Simulates the provider-level short-circuit: model called finalize_review and the
+        // provider returned the raw arguments JSON object (no fence, no preamble) as finalText.
+        // Verifies extractJson handles bare JSON object → orchestrator output is correct.
+        String rawArgs =
+            "{\"passed\":true,\"issues\":\"\",\"action\":\"continue\",\"retry_instruction\":\"\",\"carry_forward\":\"ok\"}";
+        when(llmClient.completeWithTools(any(), any())).thenReturn(response(rawArgs, StopReason.END_TURN));
+
+        Map<String, Object> result = block.run(new HashMap<>(), reviewConfig(wd, Map.of()), new PipelineRun());
+
+        assertEquals(true, result.get("passed"));
+        assertEquals("continue", result.get("action"));
+        assertEquals("ok", result.get("carry_forward"));
+        assertFalse(result.containsKey("raw_text"),
+            "raw bare-JSON args from finalize tool must parse cleanly via extractJson");
+    }
+
+    // ── Configurable tools / bash_allowlist override ──────────────────────────
+
+    @Test
+    void run_cfgToolsOverrideReplacesDefaults(@TempDir Path wd) throws Exception {
+        String reviewJson = "{\"passed\":true,\"action\":\"continue\",\"carry_forward\":\"all good\"}";
+        when(llmClient.completeWithTools(any(), any())).thenReturn(response(reviewJson, StopReason.END_TURN));
+
+        ArgumentCaptor<List<String>> namesCaptor = ArgumentCaptor.forClass(List.class);
+        when(toolRegistry.resolve(namesCaptor.capture())).thenReturn(List.of());
+
+        BlockConfig cfg = reviewConfig(wd, Map.of("tools", List.of("Read", "Glob")));
+        block.run(new HashMap<>(), cfg, new PipelineRun());
+
+        List<String> resolved = namesCaptor.getValue();
+        assertEquals(List.of("Read", "Glob"), resolved,
+            "cfg.tools must replace default REVIEW_TOOLS (no Bash, no Grep)");
+    }
+
+    @Test
+    void run_defaultsKeptWhenNoOverride(@TempDir Path wd) throws Exception {
+        String reviewJson = "{\"passed\":true,\"action\":\"continue\",\"carry_forward\":\"all good\"}";
+        when(llmClient.completeWithTools(any(), any())).thenReturn(response(reviewJson, StopReason.END_TURN));
+
+        ArgumentCaptor<List<String>> namesCaptor = ArgumentCaptor.forClass(List.class);
+        when(toolRegistry.resolve(namesCaptor.capture())).thenReturn(List.of());
+
+        block.run(new HashMap<>(), reviewConfig(wd, Map.of()), new PipelineRun());
+
+        List<String> resolved = namesCaptor.getValue();
+        assertTrue(resolved.contains("Read") && resolved.contains("Glob")
+                && resolved.contains("Grep") && resolved.contains("Bash"),
+            "default REVIEW_TOOLS must be passed when cfg.tools absent; was " + resolved);
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     @SuppressWarnings("unchecked")
@@ -167,6 +268,20 @@ class OrchestratorBlockTest {
         bc.setAgent(agent);
         Map<String, Object> cfg = new HashMap<>(extra);
         cfg.put("mode", "review");
+        cfg.put("working_dir", wd.toString());
+        bc.setConfig(cfg);
+        return bc;
+    }
+
+    private BlockConfig planConfig(Path wd, Map<String, Object> extra) {
+        BlockConfig bc = new BlockConfig();
+        bc.setId("plan_test");
+        bc.setBlock("orchestrator");
+        AgentConfig agent = new AgentConfig();
+        agent.setModel("anthropic/claude-sonnet-4-6");
+        bc.setAgent(agent);
+        Map<String, Object> cfg = new HashMap<>(extra);
+        cfg.put("mode", "plan");
         cfg.put("working_dir", wd.toString());
         bc.setConfig(cfg);
         return bc;

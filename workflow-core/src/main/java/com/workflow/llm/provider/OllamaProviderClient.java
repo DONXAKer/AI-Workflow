@@ -331,6 +331,42 @@ public class OllamaProviderClient implements LlmProviderClient {
             }
             messages.add(historyMsg);
 
+            // Finalize-tool short-circuit (mirrors OpenAI-compat path). Native /api/chat
+            // has no tool_choice, so we can't force the model toward this tool — relying
+            // on prompt + finalize tool definition. When the model does call it, we
+            // extract args as finalText and stop, no execution.
+            String finalizeName = request.finalizeToolName();
+            if (finalizeName != null && !finalizeName.isBlank()) {
+                for (JsonNode tc : toolCalls) {
+                    String tn = tc.path("function").path("name").asText("");
+                    if (finalizeName.equals(tn)) {
+                        JsonNode argsNode = tc.path("function").path("arguments");
+                        String argsStr;
+                        if (argsNode.isObject()) {
+                            argsStr = argsNode.toString();
+                        } else {
+                            argsStr = argsNode.asText("{}");
+                            if (argsStr == null || argsStr.isBlank()) argsStr = "{}";
+                        }
+                        String callId = tc.path("id").asText("");
+                        if (callId.isBlank()) callId = "call_" + iterations + "_finalize";
+                        try {
+                            JsonNode parsed = argsNode.isObject()
+                                ? argsNode : objectMapper.readTree(argsStr);
+                            history.add(new ToolUseResponse.ToolCallTrace(iterations,
+                                new ToolCall(callId, finalizeName, parsed),
+                                ToolResult.ok(callId, "[finalize] short-circuit")));
+                        } catch (Exception ignore) {
+                            // pass through; caller's extractJson handles malformed payload.
+                        }
+                        log.info("Ollama tool-use loop finished: FINALIZE_TOOL={} at iter={}",
+                            finalizeName, iterations);
+                        return new ToolUseResponse(argsStr, StopReason.END_TURN, history,
+                            iterations, totalTokensIn, totalTokensOut, 0.0);
+                    }
+                }
+            }
+
             int toolCallIdx = 0;
             for (JsonNode tc : toolCalls) {
                 // Native API sometimes omits the id — synthesise a stable one per

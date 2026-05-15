@@ -31,7 +31,9 @@ public record ToolUseRequest(
     Consumer<String> progressCallback,
     java.nio.file.Path workingDir,
     String completionSignal,
-    String responseFormat
+    String responseFormat,
+    String finalizeToolName,
+    int forceFinalizeAfter
 ) {
 
     public static Builder builder() {
@@ -51,6 +53,8 @@ public record ToolUseRequest(
         private java.nio.file.Path workingDir;
         private String completionSignal;
         private String responseFormat;
+        private String finalizeToolName;
+        private int forceFinalizeAfter;
 
         public Builder model(String v) { this.model = v; return this; }
         public Builder systemPrompt(String v) { this.systemPrompt = v; return this; }
@@ -66,13 +70,21 @@ public record ToolUseRequest(
         /** Forces the provider to return JSON. Ollama supports {@code "json"} (free-form JSON);
          * passed through as the {@code format} field on Ollama requests. Null/blank = unconstrained. */
         public Builder responseFormat(String v) { this.responseFormat = v; return this; }
+        /** Name of a "finalize" tool whose tool_call arguments are taken as the final answer.
+         *  When the model invokes a tool with this name, the loop short-circuits with stopReason=END_TURN
+         *  and finalText is populated from the tool_call arguments JSON (no execution). Null/blank disables. */
+        public Builder finalizeToolName(String v) { this.finalizeToolName = v; return this; }
+        /** Iteration index after which {@code tool_choice} is forced to the finalize tool to guarantee
+         *  the model produces structured output. 0 = never force (rely on auto + prompt). Ignored on
+         *  providers without {@code tool_choice} support (Ollama). Has no effect if finalizeToolName is unset. */
+        public Builder forceFinalizeAfter(int v) { this.forceFinalizeAfter = v; return this; }
 
         public ToolUseRequest build() {
             if (model == null || model.isBlank()) throw new IllegalArgumentException("model required");
             if (userMessage == null) throw new IllegalArgumentException("userMessage required");
             return new ToolUseRequest(model, systemPrompt, userMessage, tools,
                 maxTokens, temperature, maxIterations, budgetUsdCap, progressCallback, workingDir,
-                completionSignal, responseFormat);
+                completionSignal, responseFormat, finalizeToolName, forceFinalizeAfter);
         }
     }
 }

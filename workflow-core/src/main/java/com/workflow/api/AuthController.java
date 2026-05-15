@@ -15,6 +15,8 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.authentication.RememberMeServices;
+import org.springframework.security.web.authentication.logout.LogoutHandler;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.web.bind.annotation.*;
@@ -37,6 +39,9 @@ public class AuthController {
     @Autowired
     private com.workflow.security.audit.AuditService auditService;
 
+    @Autowired
+    private RememberMeServices rememberMeServices;
+
     /**
      * Session repo must be populated explicitly when authentication is set outside the
      * filter chain (e.g. inside a controller), otherwise the user appears logged in for
@@ -46,11 +51,14 @@ public class AuthController {
         new HttpSessionSecurityContextRepository();
 
     @PostMapping("/login")
-    public ResponseEntity<Map<String, Object>> login(@RequestBody Map<String, String> body,
+    public ResponseEntity<Map<String, Object>> login(@RequestBody Map<String, Object> body,
                                                       HttpServletRequest request,
                                                       HttpServletResponse response) {
-        String username = body.get("username");
-        String password = body.get("password");
+        Object usernameRaw = body.get("username");
+        Object passwordRaw = body.get("password");
+        String username = usernameRaw instanceof String s ? s : null;
+        String password = passwordRaw instanceof String s ? s : null;
+        boolean rememberMe = Boolean.TRUE.equals(body.get("rememberMe"));
         if (username == null || password == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "username and password are required"));
         }
@@ -62,6 +70,11 @@ public class AuthController {
             SecurityContextHolder.setContext(context);
             securityContextRepository.saveContext(context, request, response);
 
+            if (rememberMe) {
+                // Sets the signed "remember-me" cookie with the configured TTL.
+                rememberMeServices.loginSuccess(request, response, auth);
+            }
+
             return ResponseEntity.ok(currentUserPayload(username));
         } catch (BadCredentialsException e) {
             return ResponseEntity.status(401).body(Map.of("error", "Invalid credentials"));
@@ -72,12 +85,18 @@ public class AuthController {
     }
 
     @PostMapping("/logout")
-    public ResponseEntity<Map<String, Object>> logout(HttpServletRequest request) {
+    public ResponseEntity<Map<String, Object>> logout(HttpServletRequest request, HttpServletResponse response) {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         String actor = auth != null ? auth.getName() : null;
         // Record BEFORE clearing the context so AuditService can pick up the real actor.
         if (actor != null && !"anonymousUser".equals(actor)) {
             auditService.record("LOGOUT", "user", actor, Map.of());
+        }
+        // Clear the remember-me cookie so the next request isn't silently re-authenticated.
+        // RememberMeServices interface has no logout(); the standard impl
+        // (AbstractRememberMeServices) implements LogoutHandler — cast to invoke.
+        if (rememberMeServices instanceof LogoutHandler lh) {
+            lh.logout(request, response, auth);
         }
         HttpSession session = request.getSession(false);
         if (session != null) session.invalidate();
