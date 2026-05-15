@@ -131,41 +131,86 @@ public class McpClient {
     }
 
     private JsonNode postEnvelope(McpServer server, ObjectNode envelope) {
+        return postEnvelope(server, envelope, /*allowSessionRetry*/ true);
+    }
+
+    private JsonNode postEnvelope(McpServer server, ObjectNode envelope, boolean allowSessionRetry) {
         WebClient client = WebClient.builder()
             .baseUrl(server.getUrl())
             .defaultHeader(HttpHeaders.ACCEPT, "application/json, text/event-stream")
             .defaultHeader(HttpHeaders.CONTENT_TYPE, "application/json")
             .build();
+        final int[] statusBox = {0};
+        String body;
         try {
-            String body = client.post()
+            body = client.post()
                 .headers(h -> {
                     String sid = sessionIds.get(server.getId());
                     if (sid != null && !sid.isEmpty()) h.set("Mcp-Session-Id", sid);
                 })
                 .bodyValue(envelope)
                 .exchangeToMono(resp -> {
+                    statusBox[0] = resp.statusCode().value();
                     String sid = resp.headers().asHttpHeaders().getFirst("Mcp-Session-Id");
                     if (sid != null && !sid.isEmpty()) sessionIds.put(server.getId(), sid);
-                    return resp.bodyToMono(String.class);
+                    return resp.bodyToMono(String.class).defaultIfEmpty("");
                 })
                 .timeout(RPC_TIMEOUT)
                 .block();
-            if (body == null || body.isBlank()) return mapper.createObjectNode();
-            // Some MCP servers reply with text/event-stream framing; strip the SSE
-            // wrapper if present so the parser sees raw JSON.
-            String payload = body;
-            if (body.startsWith("data:")) {
-                StringBuilder sb = new StringBuilder();
-                for (String line : body.split("\n")) {
-                    if (line.startsWith("data:")) sb.append(line.substring(5).trim());
-                }
-                payload = sb.toString();
-                if (payload.isBlank()) return mapper.createObjectNode();
-            }
-            return mapper.readTree(payload);
         } catch (Exception e) {
             throw new RuntimeException("MCP " + server.getName() + " transport failed: " + e.getMessage(), e);
         }
+        int status = statusBox[0];
+        if (body == null) body = "";
+        // 4xx + non-JSON body indicates a session/protocol problem. The streamable
+        // HTTP transport responds with text/plain "Invalid Mcp-Session-Id" when the
+        // server has rebooted (in-memory session map lost). Drop our cached state
+        // and retry once with a fresh initialize handshake.
+        if (status >= 400 && status < 500 && allowSessionRetry && !looksLikeJson(body)) {
+            String method = envelope.path("method").asText("");
+            String preview = body.length() > 200 ? body.substring(0, 200) : body;
+            // 421 = persistent transport-level reject (host header, protocol). Do NOT
+            // retry — server config is wrong, retry will produce the same failure and
+            // we'd recurse forever (ensureInitialized → postEnvelope → 421 → ...).
+            if (status == 421) {
+                throw new RuntimeException("MCP " + server.getName() + " HTTP 421 on '"
+                    + method + "' — server rejected transport: " + preview);
+            }
+            // 400/403/404 with non-JSON typically means stale session id (server rebooted).
+            // Drop cache and retry once; do not re-enter ensureInitialized from inside
+            // initialize itself (recursion guard via "initialize".equals(method)).
+            log.warn("MCP server '{}' returned HTTP {} on '{}' with non-JSON body — invalidating session and retrying. body[0..200]={}",
+                server.getName(), status, method, preview);
+            reset(server);
+            if (!"initialize".equals(method)) {
+                ensureInitialized(server);
+            }
+            return postEnvelope(server, envelope, /*allowSessionRetry*/ false);
+        }
+        if (body.isBlank()) return mapper.createObjectNode();
+        // SSE-framed response: strip "event:" / ":..." lines and concatenate "data:" payloads.
+        String payload = body;
+        if (body.startsWith("event:") || body.startsWith("data:") || body.startsWith(":")) {
+            StringBuilder sb = new StringBuilder();
+            for (String line : body.split("\n")) {
+                if (line.startsWith("data:")) sb.append(line.substring(5).trim());
+            }
+            payload = sb.toString();
+            if (payload.isBlank()) return mapper.createObjectNode();
+        }
+        try {
+            return mapper.readTree(payload);
+        } catch (Exception e) {
+            String preview = payload.length() > 300 ? payload.substring(0, 300) : payload;
+            throw new RuntimeException("MCP " + server.getName() + " transport failed: HTTP " + status
+                + " unparseable body: " + e.getMessage() + " | preview: " + preview, e);
+        }
+    }
+
+    private static boolean looksLikeJson(String s) {
+        if (s == null) return false;
+        String t = s.stripLeading();
+        return !t.isEmpty() && (t.charAt(0) == '{' || t.charAt(0) == '[' || t.startsWith("event:") || t.startsWith("data:"));
     }
 
     /** Drops cached session/initialised state — call from admin UI to force re-handshake. */

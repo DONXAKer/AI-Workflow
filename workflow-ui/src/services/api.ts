@@ -59,10 +59,10 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
 export const api = {
   // Auth
-  login: (username: string, password: string): Promise<CurrentUser> =>
+  login: (username: string, password: string, rememberMe?: boolean): Promise<CurrentUser> =>
     request<CurrentUser>(
       `${BASE}/auth/login`,
-      { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ username, password }) }
+      { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ username, password, rememberMe: !!rememberMe }) }
     ),
 
   logout: (): Promise<{ success: boolean }> =>

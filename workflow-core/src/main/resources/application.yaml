@@ -1,16 +1,19 @@
 spring:
   datasource:
-    url: jdbc:h2:file:./.workflow/workflow-db;AUTO_SERVER=TRUE
-    driver-class-name: org.h2.Driver
-    username: sa
-    password: ""
+    # Datasource overridable through env (DB_URL/DB_USER/DB_PASSWORD) so docker-compose
+    # can point this at the warcard-postgres container without rebuilding.
+    url: ${DB_URL:jdbc:postgresql://host.docker.internal:5433/workflow_ai}
+    driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
+    username: ${DB_USER:warcard}
+    password: ${DB_PASSWORD:warcard123}
+    hikari:
+      connection-timeout: 10000
+      maximum-pool-size: 10
   jpa:
     hibernate:
       ddl-auto: update
+    database-platform: ${DB_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
     show-sql: false
-  h2:
-    console:
-      enabled: true
   main:
     banner-mode: off
 
@@ -18,6 +21,32 @@ workflow:
   mode: cli  # cli | gui
   config-dir: ./config
   state-dir: ./.workflow/state
+  # Per-tier model overrides applied uniformly across providers (consumed by
+  # ModelPresetResolver.resolve). Bare AITunnel IDs work transparently on
+  # OpenRouter route too — both APIs accept the same vendor-prefixed names.
+  # Picked 2026-05-14 from aitunnel.ru/models (price/quality balance).
+  model-presets:
+    # Analytical roles (analysis, plan, review, agent_verify) — needs Tools+Reasoning.
+    # glm-4.6: ₽33.6/288 cached, 200k ctx, validated for WarCard.
+    smart: glm-4.6
+    # Executor / agent_with_tools (impl_*) — cheapest tool-capable flash with reasoning.
+    # glm-4.7-flash: ₽9.61/76.8, 200k ctx.
+    flash: glm-4.7-flash
+    # Quick / cheap intake / clarification — cheapest tool-capable with vision.
+    # gpt-4.1-nano: ₽9.6/76.8 cached, 1M ctx.
+    fast: gpt-4.1-nano
+    # Hard cases / escalation — best reasoning under cache discount.
+    # gemini-3.1-pro-preview: ₽38.4/2304 cached, 1.04M ctx, Vision+Tools+Reasoning.
+    reasoning: gemini-3.1-pro-preview
+    # Bulk / non-critical — absolute cheapest with tools.
+    # gpt-5-nano: ₽0.96/76.8 cached.
+    cheap: gpt-5-nano
+    # Extended (referenced when a block pins `tier: coder` etc).
+    coder: qwen3-coder
+    deepseek: deepseek-v3.2
+    gemini-pro: gemini-3.1-pro-preview
+    gemini-flash: gemini-2.5-flash
+    glm: glm-4.7
   orchestrator:
     # Tier name — ModelPresetResolver picks the concrete model per provider:
     # OpenRouter route → z-ai/glm-4.6, CLI route → claude-sonnet-4-6.
@@ -53,6 +82,14 @@ workflow:
     # 32 bytes (AES-256), Base64-encoded. Override via WORKFLOW_ENCRYPTION_KEY in prod.
     # When absent, a development key is used with a loud warning at startup.
     key: ${WORKFLOW_ENCRYPTION_KEY:}
+  security:
+    remember-me:
+      # Secret used to sign the TokenBasedRememberMeServices cookie. MUST be overridden via
+      # REMEMBER_ME_KEY in production — changing this invalidates every outstanding cookie.
+      key: ${REMEMBER_ME_KEY:dev-change-me-in-prod-2026}
+      # Cookie TTL in seconds. Default: 30 days. Operator picks via the "remember me"
+      # checkbox on LoginPage; without it only the regular 24h JSESSIONID is issued.
+      token-validity-seconds: ${REMEMBER_ME_TTL:2592000}
   # Root directory for the filesystem browser. Override via BROWSE_ROOT_PATH env var.
   # In Docker: set to the mounted projects volume (e.g. /projects).
   browse-root: ${BROWSE_ROOT_PATH:#{systemProperties['user.home']}}

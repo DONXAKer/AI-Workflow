@@ -552,6 +552,14 @@ public class PipelineRunner {
 
     private boolean evaluateCondition(String expr, PipelineRun run) {
         if (expr == null || expr.isBlank()) return true;
+        // Precedence: && binds tighter than ||. Split on top-level || first,
+        // then each disjunct is an AND-chain of clauses.
+        if (expr.contains("||")) {
+            for (String disjunct : expr.split("\\|\\|")) {
+                if (evaluateCondition(disjunct.trim(), run)) return true;
+            }
+            return false;
+        }
         if (expr.contains("&&")) {
             for (String clause : expr.split("&&")) {
                 if (!evaluateClause(clause.trim(), run)) return false;

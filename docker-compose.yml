@@ -31,6 +31,15 @@ services:
       # Knowledge layer (project source RAG). qdrant service in same compose net.
       QDRANT_URL: http://qdrant:6333
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text:v1.5}
+      # Postgres (warcard-postgres container, port 5433 on host). Override via .env
+      # if hosting Postgres elsewhere.
+      DB_URL: ${DB_URL:-jdbc:postgresql://host.docker.internal:5433/workflow_ai}
+      DB_USER: ${DB_USER:-warcard}
+      DB_PASSWORD: ${DB_PASSWORD:-warcard123}
+      DB_DRIVER: ${DB_DRIVER:-org.postgresql.Driver}
+      DB_DIALECT: ${DB_DIALECT:-org.hibernate.dialect.PostgreSQLDialect}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - qdrant
 

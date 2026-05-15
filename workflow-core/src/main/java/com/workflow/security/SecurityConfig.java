@@ -1,10 +1,12 @@
 package com.workflow.security;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
+import org.springframework.security.authentication.RememberMeAuthenticationProvider;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -12,6 +14,10 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import org.springframework.security.web.authentication.RememberMeServices;
+import org.springframework.security.web.authentication.rememberme.RememberMeAuthenticationFilter;
+import org.springframework.security.web.authentication.rememberme.TokenBasedRememberMeServices;
+import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.http.HttpStatus;
@@ -43,19 +49,48 @@ public class SecurityConfig {
 
     @Bean
     public AuthenticationManager authenticationManager(LocalUserDetailsService uds, PasswordEncoder encoder,
+                                                        RememberMeAuthenticationProvider rememberMeProvider,
                                                         org.springframework.context.ApplicationEventPublisher publisher) {
         DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
         provider.setUserDetailsService(uds);
         provider.setPasswordEncoder(encoder);
-        ProviderManager manager = new ProviderManager(provider);
+        // Order matters: Dao first for fresh login, RememberMe second to honour the cookie
+        // on subsequent requests via RememberMeAuthenticationFilter.
+        ProviderManager manager = new ProviderManager(provider, rememberMeProvider);
         // Enable AuthenticationSuccessEvent / AuthenticationFailureEvent so AuthEventAuditor records them.
         manager.setAuthenticationEventPublisher(
             new org.springframework.security.authentication.DefaultAuthenticationEventPublisher(publisher));
         return manager;
     }
 
+    /**
+     * Token-based (stateless) RememberMe: cookie payload is signed by {@code key} and bound
+     * to the user's current password hash, so a password change invalidates outstanding tokens
+     * automatically. No persistent_logins table required.
+     */
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    public RememberMeServices rememberMeServices(
+            LocalUserDetailsService uds,
+            @Value("${workflow.security.remember-me.key:dev-change-me-in-prod-2026}") String key,
+            @Value("${workflow.security.remember-me.token-validity-seconds:2592000}") int tokenValiditySeconds) {
+        TokenBasedRememberMeServices svc = new TokenBasedRememberMeServices(key, uds);
+        svc.setTokenValiditySeconds(tokenValiditySeconds);
+        svc.setCookieName("remember-me");
+        // Dev runs over http; production should set this to true via reverse proxy + override property.
+        svc.setUseSecureCookie(false);
+        return svc;
+    }
+
+    @Bean
+    public RememberMeAuthenticationProvider rememberMeAuthenticationProvider(
+            @Value("${workflow.security.remember-me.key:dev-change-me-in-prod-2026}") String key) {
+        return new RememberMeAuthenticationProvider(key);
+    }
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http,
+                                           AuthenticationManager authenticationManager,
+                                           RememberMeServices rememberMeServices) throws Exception {
         // Plain CsrfTokenRequestAttributeHandler (no XOR) so curl/PS can send the raw
         // cookie value in X-XSRF-TOKEN without client-side XOR math.
         CsrfTokenRequestAttributeHandler requestHandler = new CsrfTokenRequestAttributeHandler();
@@ -89,7 +124,13 @@ public class SecurityConfig {
             .exceptionHandling(e -> e.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
             .formLogin(form -> form.disable())
             .httpBasic(basic -> basic.disable())
-            .logout(l -> l.disable());  // custom logout in AuthController
+            .logout(l -> l.disable())  // custom logout in AuthController
+            // Restore Authentication from "remember-me" cookie on requests that hit the chain
+            // without a valid JSESSIONID (e.g. after server restart or 24h session expiry).
+            // Placed right after SecurityContextHolderFilter so the cookie-derived auth lands
+            // in the SecurityContext before AuthorizationFilter runs.
+            .addFilterAfter(new RememberMeAuthenticationFilter(authenticationManager, rememberMeServices),
+                            SecurityContextHolderFilter.class);
 
         return http.build();
     }

@@ -5,7 +5,7 @@ import { CurrentUser } from '../types'
 interface AuthState {
   user: CurrentUser | null
   loading: boolean
-  login: (username: string, password: string) => Promise<void>
+  login: (username: string, password: string, rememberMe?: boolean) => Promise<void>
   logout: () => Promise<void>
   refresh: () => Promise<void>
 }
@@ -33,8 +33,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => refresh().finally(() => setLoading(false)))
   }, [refresh])
 
-  const login = useCallback(async (username: string, password: string) => {
-    const me = await api.login(username, password)
+  const login = useCallback(async (username: string, password: string, rememberMe?: boolean) => {
+    const me = await api.login(username, password, rememberMe)
     setUser(me)
   }, [])
 
