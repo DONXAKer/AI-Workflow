@@ -4,6 +4,7 @@ import { Save, Loader2, AlertCircle, Trash2, Plug, FileCode, FolderOpen, Brain, 
 import { api } from '../../services/api'
 import { ProjectInfo, IntegrationConfig, LlmProvider } from '../../types'
 import PathInput from '../../components/PathInput'
+import TechStackEditor from '../../components/TechStackEditor'
 import { PipelineEditor } from '../../components/PipelineEditor'
 
 const INTEGRATION_TYPE_LABELS: Record<string, string> = {
@@ -36,6 +37,7 @@ export default function SettingsTab() {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [activeTab, setActiveTab] = useState<'project' | 'pipeline'>('project')
+  const [techStackJson, setTechStackJson] = useState<string>('')
 
   const load = useCallback(async () => {
     if (!slug) return
@@ -62,6 +64,7 @@ export default function SettingsTab() {
         setOrchModel(found.orchestratorModel ?? '')
         setOrchExtra(found.orchestratorSystemPromptExtra ?? '')
         setDefaultProvider(found.defaultProvider ?? 'OPENROUTER')
+        setTechStackJson(found.techStackJson ?? '')
       }
       setIntegrations(integs)
     } catch (e) {
@@ -108,6 +111,7 @@ export default function SettingsTab() {
         orchestratorModel: orchModel.trim() || null,
         orchestratorSystemPromptExtra: orchExtra.trim() || null,
         defaultProvider,
+        techStackJson: techStackJson.trim() || null,
       })
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
@@ -303,6 +307,13 @@ export default function SettingsTab() {
           </button>
         </div>
       </div>
+
+      {/* Tech Stack */}
+      <TechStackEditor
+        projectSlug={slug || ''}
+        initialTechStack={techStackJson}
+        onTechStackChange={setTechStackJson}
+      />
 
       {/* Integrations summary */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">

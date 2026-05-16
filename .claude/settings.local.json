@@ -341,7 +341,8 @@
       "Read(//c/projects/WarCard/tasks/**)",
       "Read(//d//**)",
       "Bash(find /d -maxdepth 2 -name \"WarCard\" -type d)",
-      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('returned', len\\(d.get\\('content', []\\)\\), 'runs'\\)\")"
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('returned', len\\(d.get\\('content', []\\)\\), 'runs'\\)\")",
+      "Bash(kill -9 59237)"
     ]
   }
 }
