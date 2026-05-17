@@ -151,7 +151,7 @@ export const api = {
       { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ requestId, approved, allowAll, blockId }) }
     ),
 
-  listPipelines: (): Promise<{ path: string; name: string; pipelineName?: string; description?: string; error?: string }[]> =>
+  listPipelines: (): Promise<{ path: string; name: string; pipelineName?: string; description?: string; source?: string; error?: string }[]> =>
     request(`${BASE}/pipelines`),
 
   /** Returns the FULL PipelineConfig as a JSON object — used by Pipeline Editor. */

@@ -6,7 +6,7 @@ import { runHref } from '../../utils/runHref'
 import clsx from 'clsx'
 
 type DetectResult = Awaited<ReturnType<typeof api.smartDetect>>
-type PipelineInfo = { path: string; name: string; pipelineName?: string }
+type PipelineInfo = { path: string; name: string; pipelineName?: string; source?: string; description?: string }
 
 const ENTRY_POINT_OPTIONS = [
   { id: 'from_scratch',  label: 'С нуля (анализ → задачи → кодинг)' },
@@ -120,7 +120,10 @@ export default function SmartStartTab() {
                     : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-500 hover:text-white'
                 )}
               >
-                {p.pipelineName || p.name}
+                <span>{p.pipelineName || p.name}</span>
+                {p.source === 'project' && (
+                  <span className="ml-1.5 text-[10px] font-semibold bg-emerald-900/60 text-emerald-400 border border-emerald-700/50 rounded px-1 py-0.5 leading-none">проект</span>
+                )}
               </button>
             ))}
           </div>
