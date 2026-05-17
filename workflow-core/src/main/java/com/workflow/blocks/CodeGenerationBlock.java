@@ -8,7 +8,9 @@ import com.workflow.core.PipelineRun;
 import com.workflow.knowledge.KnowledgeBase;
 import com.workflow.llm.LlmClient;
 import com.workflow.project.ProjectClaudeMd;
+import com.workflow.project.ProjectContext;
 import com.workflow.project.ProjectRepository;
+import com.workflow.project.TechContextInjector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -109,6 +111,9 @@ public class CodeGenerationBlock implements Block {
 
     @Autowired(required = false)
     private ProjectRepository projectRepository;
+
+    @Autowired(required = false)
+    private TechContextInjector techContextInjector;
 
     @Override
     public String getName() {
@@ -244,9 +249,20 @@ public class CodeGenerationBlock implements Block {
                 }
             }
 
-            String contextForTask = claudeMdPreamble.isEmpty()
+            String fullContext = claudeMdPreamble.isEmpty()
                 ? context
                 : claudeMdPreamble + "\n---\n\n" + context;
+
+            // Prepend tech-specific guidelines based on project's tech stack
+            if (techContextInjector != null) {
+                String projectSlug = ProjectContext.get();
+                String techContext = techContextInjector.buildContext(projectSlug);
+                if (!techContext.isEmpty()) {
+                    fullContext = techContext + "\n---\n\n" + fullContext;
+                }
+            }
+
+            String contextForTask = fullContext;
             String userMessage = USER_TEMPLATE
                 .replace("{task_summary}", taskSummary)
                 .replace("{task_description}", taskDescription != null ? taskDescription : "")

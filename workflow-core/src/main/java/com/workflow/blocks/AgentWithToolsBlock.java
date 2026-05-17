@@ -14,6 +14,7 @@ import com.workflow.project.Project;
 import com.workflow.project.ProjectClaudeMd;
 import com.workflow.project.ProjectContext;
 import com.workflow.project.ProjectRepository;
+import com.workflow.project.TechContextInjector;
 import com.workflow.tools.DefaultToolExecutor;
 import com.workflow.tools.ProjectTreeSummary;
 import com.workflow.tools.Tool;
@@ -121,6 +122,8 @@ public class AgentWithToolsBlock implements Block {
     @Autowired(required = false) private com.workflow.tools.FileSystemCache fileSystemCache;
     @Autowired(required = false) private com.workflow.mcp.McpToolLoader mcpToolLoader;
     @Autowired(required = false) private com.workflow.knowledge.KnowledgeBase knowledgeBase;
+
+    @Autowired(required = false) private TechContextInjector techContextInjector;
 
     @Override public String getName() { return "agent_with_tools"; }
 
@@ -239,6 +242,7 @@ public class AgentWithToolsBlock implements Block {
         }
         userMessage = prependCodebaseTree(userMessage, workingDir);
         userMessage = prependClaudeMd(userMessage, workingDir);
+        userMessage = prependTechContext(userMessage);
         userMessage = prependPreloadedFiles(userMessage, cfg, input, workingDir);
         userMessage = prependRagHits(userMessage, cfg, input, run);
 
@@ -525,6 +529,15 @@ public class AgentWithToolsBlock implements Block {
         String claudeMd = ProjectClaudeMd.readForPrompt(workingDir);
         if (claudeMd.isEmpty()) return userMessage;
         return claudeMd + "\n---\n\n" + userMessage;
+    }
+
+    private String prependTechContext(String userMessage) {
+        if (techContextInjector == null) return userMessage;
+        String projectSlug = ProjectContext.get();
+        if (projectSlug == null || projectSlug.isBlank()) return userMessage;
+        String techContext = techContextInjector.buildContext(projectSlug);
+        if (techContext.isEmpty()) return userMessage;
+        return techContext + "\n---\n\n" + userMessage;
     }
 
     /** Hard cap on number of files we'll inline from a plan handoff. */
