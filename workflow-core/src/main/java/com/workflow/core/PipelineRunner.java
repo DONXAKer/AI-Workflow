@@ -826,9 +826,11 @@ public class PipelineRunner {
                 run, failingBlockId, targetId, ladder, failureContext);
 
         if (decision instanceof EscalationDecision.RetryWithCloud) {
-            // Reset the loop counter for this target and re-enter handleLoopback.
+            // Allow exactly one more retry under the cloud tier — set counter to maxIter-1
+            // so handleLoopback permits one iteration and then stops.
+            // Resetting to 0 here was the bug: it allowed a full maxIter extra cycle.
             String loopKey = "loopback:" + failingBlockId + ":" + targetId;
-            run.getLoopIterations().put(loopKey, 0);
+            run.getLoopIterations().put(loopKey, Math.max(0, maxIter - 1));
             runRepository.save(run);
             int newI = handleLoopback(loopKey, targetId, failingBlockId, maxIter,
                     issues, extraCtx, sortedBlocks, currentIdx, run);
