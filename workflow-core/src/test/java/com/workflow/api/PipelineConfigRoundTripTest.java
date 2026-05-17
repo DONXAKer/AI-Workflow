@@ -55,7 +55,7 @@ class PipelineConfigRoundTripTest {
         BlockRegistry registry = new BlockRegistry();
         List<Block> stubs = new ArrayList<>();
         for (String name : List.of("task_md_input", "shell_exec", "agent_with_tools",
-                "orchestrator", "verify")) {
+                "orchestrator", "verify", "analysis", "clarification", "agent_verify")) {
             stubs.add(stubBlock(name));
         }
         ReflectionTestUtils.setField(registry, "allBlocks", stubs);

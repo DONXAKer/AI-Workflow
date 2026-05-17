@@ -102,7 +102,7 @@ public class TaskMdInputBlock implements Block {
             "server/", "server\\", "spring boot", "gradle", "maven",
             "rest endpoint", "websocket", "backend"),
         "needs_contract_change", List.of(
-            "openapi", "asyncapi", "json schema", "contract", "api contract")
+            "openapi", "asyncapi", "json schema", "contract", "api contract", "ustruct")
     );
 
     @Autowired(required = false) private StringInterpolator stringInterpolator;
@@ -279,7 +279,7 @@ public class TaskMdInputBlock implements Block {
 
     @SuppressWarnings("unchecked")
     private Map<String, List<String>> loadHeuristicKeywords() {
-        if (integrationConfigRepository == null) return Map.of();
+        if (integrationConfigRepository == null) return DEFAULT_HEURISTIC_KEYWORDS;
         try {
             Optional<IntegrationConfig> cfg = integrationConfigRepository
                 .findByTypeAndIsDefaultTrue(IntegrationType.UNREAL);

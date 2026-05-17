@@ -45,14 +45,10 @@ public final class PathScope {
 
         Path target = root.resolve(userPath).toAbsolutePath().normalize();
 
-        if (!target.startsWith(root)) {
-            throw new ToolInvocationException(
-                "path escapes working directory: '" + userPath + "' -> " + target
-                    + " (root=" + root + ")");
-        }
-
-        // Follow symlinks on the longest existing prefix. A symlink pointing outside the
-        // root would be caught here even if its textual path still starts with root.
+        // Canonicalize the longest existing ancestor first so that symlinks in the
+        // supplied path itself (e.g. /tmp → /private/tmp on macOS) are resolved before
+        // the containment check. Without this, an absolute path under a symlinked temp
+        // dir would fail the startsWith guard even though it is inside the root.
         Path probe = target;
         while (probe != null && !Files.exists(probe)) {
             probe = probe.getParent();
@@ -67,8 +63,17 @@ public final class PathScope {
             }
             if (!real.startsWith(root)) {
                 throw new ToolInvocationException(
-                    "path escapes working directory through symlink: '" + userPath
-                        + "' -> " + real + " (root=" + root + ")");
+                    "path escapes working directory" + (real.equals(probe) ? "" : " through symlink")
+                        + ": '" + userPath + "' -> " + real + " (root=" + root + ")");
+            }
+            // Rebuild target using the canonicalized base so the returned path is real.
+            target = real.resolve(probe.relativize(target));
+        } else {
+            // No existing ancestor — check textual containment only.
+            if (!target.startsWith(root)) {
+                throw new ToolInvocationException(
+                    "path escapes working directory: '" + userPath + "' -> " + target
+                        + " (root=" + root + ")");
             }
         }
 
