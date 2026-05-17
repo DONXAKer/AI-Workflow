@@ -24,10 +24,13 @@ export default function ProjectSwitcher() {
     api.listProjects()
       .then(ps => {
         setProjects(ps)
-        // If stored slug no longer exists, fall back to default.
+        // If stored slug no longer exists, fall back to default and persist it.
         if (!ps.some(p => p.slug === currentSlug)) {
           const fallback = ps.find(p => p.slug === 'default')?.slug ?? ps[0]?.slug
-          if (fallback) setCurrentSlug(fallback)
+          if (fallback) {
+            setCurrentSlug(fallback)
+            setCurrentProjectSlug(fallback)
+          }
         }
       })
       .catch(e => setError(e instanceof Error ? e.message : 'Failed to load projects'))
