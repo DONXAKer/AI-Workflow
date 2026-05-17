@@ -12,6 +12,7 @@ import com.workflow.project.Project;
 import com.workflow.project.ProjectClaudeMd;
 import com.workflow.project.ProjectContext;
 import com.workflow.project.ProjectRepository;
+import com.workflow.project.TechContextInjector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -151,6 +152,9 @@ public class AnalysisBlock implements Block {
     @Autowired(required = false)
     private StringInterpolator stringInterpolator;
 
+    @Autowired(required = false)
+    private TechContextInjector techContextInjector;
+
     @Override
     public String getName() {
         return "analysis";
@@ -228,6 +232,15 @@ public class AnalysisBlock implements Block {
         String claudeMd = ProjectClaudeMd.readForCurrentProject(projectRepository);
         if (!claudeMd.isEmpty()) {
             context = claudeMd + "\n---\n\n" + context;
+        }
+
+        // Prepend tech-specific guidelines based on project's tech stack
+        if (techContextInjector != null) {
+            String projectSlug = ProjectContext.get();
+            String techContext = techContextInjector.buildContext(projectSlug);
+            if (!techContext.isEmpty()) {
+                context = techContext + "\n---\n\n" + context;
+            }
         }
 
         // Determine model. Default tier is "smart" — analysis is an analytical role
