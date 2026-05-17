@@ -6,6 +6,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import com.workflow.api.dto.PipelineInfo;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -77,6 +78,89 @@ public class PipelineConfigLoader {
         }
         paths.sort(null);
         return paths;
+    }
+
+    /**
+     * Возвращает список PipelineInfo для конфигураций из платформенной и проектной директорий.
+     * Проектные конфигурации имеют приоритет и помечаются source='project'.
+     */
+    public List<PipelineInfo> listPipelinesWithSources(Path platformConfigDir, Path projectWorkingDir) {
+        List<PipelineInfo> result = new ArrayList<>();
+        
+        // Добавляем платформенные конфигурации
+        if (Files.isDirectory(platformConfigDir)) {
+            List<Path> platformConfigs = new ArrayList<>();
+            scanYaml(platformConfigDir, 1, platformConfigs);
+            
+            // Также проверяем .ai-workflow/pipelines в платформенной директории
+            Path platformAiWorkflow = platformConfigDir.resolve(".ai-workflow/pipelines");
+            if (Files.isDirectory(platformAiWorkflow)) {
+                scanYaml(platformAiWorkflow, 1, platformConfigs);
+            }
+            
+            for (Path configPath : platformConfigs) {
+                try {
+                    PipelineConfig config = load(configPath);
+                    result.add(new PipelineInfo(
+                        configPath.getFileName().toString(),
+                        configPath.toString(),
+                        "platform",
+                        config.getDescription(),
+                        config.getName()
+                    ));
+                } catch (Exception e) {
+                    log.warn("Failed to load platform config {}: {}", configPath, e.getMessage());
+                    result.add(new PipelineInfo(
+                        configPath.getFileName().toString(),
+                        configPath.toString(),
+                        "platform",
+                        "Failed to load: " + e.getMessage(),
+                        null
+                    ));
+                }
+            }
+        }
+        
+        // Добавляем проектные конфигурации из .ai-workflow/
+        if (projectWorkingDir != null && Files.isDirectory(projectWorkingDir)) {
+            Path projectAiWorkflow = projectWorkingDir.resolve(".ai-workflow");
+            if (Files.isDirectory(projectAiWorkflow)) {
+                List<Path> projectConfigs = new ArrayList<>();
+                scanYaml(projectAiWorkflow, 1, projectConfigs);
+                
+                for (Path configPath : projectConfigs) {
+                    try {
+                        PipelineConfig config = load(configPath);
+                        result.add(new PipelineInfo(
+                            configPath.getFileName().toString(),
+                            configPath.toString(),
+                            "project",
+                            config.getDescription(),
+                            config.getName()
+                        ));
+                    } catch (Exception e) {
+                        log.warn("Failed to load project config {}: {}", configPath, e.getMessage());
+                        result.add(new PipelineInfo(
+                            configPath.getFileName().toString(),
+                            configPath.toString(),
+                            "project",
+                            "Failed to load: " + e.getMessage(),
+                            null
+                        ));
+                    }
+                }
+            }
+        }
+        
+        // Сортируем: сначала проектные, потом платформенные
+        result.sort((a, b) -> {
+            if (!a.source().equals(b.source())) {
+                return a.source().equals("project") ? -1 : 1;
+            }
+            return a.name().compareTo(b.name());
+        });
+        
+        return result;
     }
 
     private void scanYaml(Path dir, int depth, List<Path> out) {

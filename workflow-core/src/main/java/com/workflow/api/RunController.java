@@ -150,7 +150,22 @@ public class RunController {
         }
 
         try {
-            PipelineConfig config = pipelineConfigLoader.load(Paths.get(configPath));
+            Path configPathResolved = Paths.get(configPath);
+            
+            // Если путь начинается с .ai-workflow/, разрешаем его относительно workingDir проекта
+            if (configPath.startsWith(".ai-workflow/")) {
+                String projectSlug = ProjectContext.get();
+                if (projectSlug != null && projectRepository != null) {
+                    var project = projectRepository.findBySlug(projectSlug);
+                    if (project.isPresent() && project.get().getWorkingDir() != null) {
+                        Path projectWorkingDir = Paths.get(project.get().getWorkingDir());
+                        configPathResolved = projectWorkingDir.resolve(configPath);
+                        log.info("Resolved project config path: {} -> {}", configPath, configPathResolved);
+                    }
+                }
+            }
+            
+            PipelineConfig config = pipelineConfigLoader.load(configPathResolved);
 
             // Pre-run validation gate: invalid configs are rejected before any DB write or
             // run-thread start. The full structured error list is returned so the UI can
@@ -808,39 +823,6 @@ public class RunController {
             default -> List.of(
                 Map.of("name", "requirement", "label", "Requirement", "type", "textarea", "required", true));
         };
-    }
-
-    @GetMapping("/pipelines")
-    public ResponseEntity<List<Map<String, Object>>> listPipelines() {
-        // Use current project's configDir if available, fall back to global default
-        String effectiveConfigDir = configDir;
-        String projectSlug = ProjectContext.get();
-        if (projectSlug != null && projectRepository != null) {
-            var project = projectRepository.findBySlug(projectSlug);
-            if (project.isPresent() && project.get().getConfigDir() != null) {
-                effectiveConfigDir = project.get().getConfigDir();
-            }
-        }
-        Path dir = Paths.get(effectiveConfigDir);
-        List<Path> configs = pipelineConfigLoader.listConfigs(dir);
-
-        List<Map<String, Object>> result = configs.stream()
-            .map(p -> {
-                Map<String, Object> info = new HashMap<>();
-                info.put("path", p.toString());
-                info.put("name", p.getFileName().toString());
-                try {
-                    PipelineConfig config = pipelineConfigLoader.load(p);
-                    info.put("pipelineName", config.getName());
-                    info.put("description", config.getDescription());
-                } catch (Exception e) {
-                    info.put("error", "Failed to load: " + e.getMessage());
-                }
-                return info;
-            })
-            .collect(Collectors.toList());
-
-        return ResponseEntity.ok(result);
     }
 
     /**
