@@ -59,6 +59,7 @@ export default function SettingsTab() {
   const [indexStats, setIndexStats] = useState<{ file_count: number; qdrant_enabled: boolean } | null>(null)
   const [reindexJob, setReindexJob] = useState<import('../../types').ReindexJobStatus | null>(null)
   const [defaultProvider, setDefaultProvider] = useState<LlmProvider>('OPENROUTER')
+  const [defaultTrackerProvider, setDefaultTrackerProvider] = useState<string>('youtrack')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
@@ -89,6 +90,7 @@ export default function SettingsTab() {
         setOrchModel(found.orchestratorModel ?? '')
         setOrchExtra(found.orchestratorSystemPromptExtra ?? '')
         setDefaultProvider(found.defaultProvider ?? 'OPENROUTER')
+        setDefaultTrackerProvider(found.defaultTrackerProvider ?? 'youtrack')
       }
       setIntegrations(integs)
     } catch (e) {
@@ -135,6 +137,7 @@ export default function SettingsTab() {
         orchestratorModel: orchModel.trim() || null,
         orchestratorSystemPromptExtra: orchExtra.trim() || null,
         defaultProvider,
+        defaultTrackerProvider,
       })
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
@@ -312,6 +315,42 @@ export default function SettingsTab() {
           </p>
           <p className="text-xs text-amber-600/80 mt-1.5">
             Применяется к новым запускам — текущий run использует провайдер, зафиксированный на момент старта.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">
+            Трекер задач по умолчанию
+          </label>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+            {([
+              ['youtrack', 'YouTrack',   'JetBrains YouTrack'],
+              ['jira',     'Jira',       'Atlassian Jira Cloud / Server'],
+              ['github',   'GitHub',     'GitHub Issues'],
+              ['gitlab',   'GitLab',     'GitLab Issues'],
+              ['linear',   'Linear',     'Linear.app'],
+            ] as const).map(([value, title, hint]) => {
+              const active = defaultTrackerProvider === value
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setDefaultTrackerProvider(value)}
+                  disabled={saving}
+                  className={`text-left rounded-lg border px-3 py-2.5 transition-colors ${
+                    active ? 'border-blue-600 bg-blue-950/40' : 'border-slate-700 hover:border-blue-800/60'
+                  }`}
+                >
+                  <span className="text-sm font-medium text-slate-100">{title}</span>
+                  <p className="text-xs text-slate-500 mt-0.5">{hint}</p>
+                </button>
+              )
+            })}
+          </div>
+          <p className="text-xs text-slate-600 mt-1">
+            Используется блоками <code className="font-mono bg-slate-800 px-1 rounded">youtrack_input</code>,{' '}
+            <code className="font-mono bg-slate-800 px-1 rounded">task_creation</code> и другими, когда{' '}
+            <code className="font-mono bg-slate-800 px-1 rounded">config.provider</code> не задан в YAML.
           </p>
         </div>
 

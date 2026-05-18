@@ -569,6 +569,8 @@ export interface ProjectInfo {
   orchestratorSystemPromptExtra?: string | null
   /** Default LLM provider for runs that don't pin one in inputs.provider. */
   defaultProvider?: LlmProvider | null
+  /** Default task tracker provider: youtrack | jira | github | gitlab | linear */
+  defaultTrackerProvider?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -636,6 +638,16 @@ export interface McpServer {
   enabled: boolean
   createdAt?: string
   updatedAt?: string
+}
+
+export interface TemplateDescriptor {
+  id: string
+  name: string
+  description: string
+  tags: string[]
+  icon: string
+  valid: boolean
+  errors: string[]
 }
 
 /** Live state of an async project-reindex job. UI polls /reindex/status to refresh this. */

@@ -15,58 +15,53 @@ import org.springframework.stereotype.Component;
 
 import java.util.*;
 
+/**
+ * Provider-agnostic replacement for {@code youtrack_tasks}. Uses LLM to decompose
+ * requirements into tasks, then creates them in any configured tracker via
+ * {@link TaskTrackerRegistry}.
+ *
+ * <p>YAML:
+ * <pre>
+ * - id: create_tasks
+ *   block: task_creation
+ *   config:
+ *     provider: youtrack    # or jira, github, gitlab
+ *     mode: decompose       # or supplement (default: decompose)
+ * </pre>
+ *
+ * <p>Output:
+ * <pre>
+ * {
+ *   "tasks": [{ "summary", "description", "type", "priority", "estimated_hours" }],
+ *   "issues": [{ "id", "url", "summary" }],
+ *   "youtrack_issues": [...]    // backward-compat alias
+ * }
+ * </pre>
+ */
 @Component
-public class YouTrackTaskCreationBlock implements Block {
+public class TaskCreationBlock implements Block {
 
-    private static final Logger log = LoggerFactory.getLogger(YouTrackTaskCreationBlock.class);
+    private static final Logger log = LoggerFactory.getLogger(TaskCreationBlock.class);
 
-    private static final String SUPPLEMENT_PROMPT_TEMPLATE =
+    private static final String SUPPLEMENT_PROMPT =
         "Ты — senior engineering lead. Задача уже существует в трекере, её нужно дополнить — " +
         "улучшить описание, добавить критерии приёмки, технические детали и план реализации.\n\n" +
-        "## Текущее требование / описание задачи\n{refined_requirement}\n\n" +
+        "## Текущее требование\n{refined_requirement}\n\n" +
         "## Технический анализ\n{analysis}\n\n" +
         "## Уточнения\n{clarifications}\n\n" +
-        "Ответь ТОЛЬКО JSON объектом с одной задачей — обновлённой версией существующей:\n" +
-        "{\n" +
-        "  \"tasks\": [\n" +
-        "    {\n" +
-        "      \"summary\": \"<уточнённый заголовок задачи>\",\n" +
-        "      \"description\": \"<полное обновлённое описание в markdown с критериями приёмки и планом реализации>\",\n" +
-        "      \"type\": \"Task|Bug|Feature\",\n" +
-        "      \"priority\": \"Normal|Major|Critical\",\n" +
-        "      \"estimated_hours\": <целое число>\n" +
-        "    }\n" +
-        "  ]\n" +
-        "}\n\n" +
-        "Правила:\n" +
-        "- Ровно одна задача — это дополнение существующей, не декомпозиция.\n" +
-        "- Описание должно быть исчерпывающим: что сделать, как проверить, edge cases.\n" +
-        "- Не включай никакого текста за пределами JSON объекта.";
+        "Ответь ТОЛЬКО JSON:\n" +
+        "{\"tasks\":[{\"summary\":\"...\",\"description\":\"...\",\"type\":\"Task|Bug|Feature\",\"priority\":\"Normal|Major|Critical\",\"estimated_hours\":N}]}\n" +
+        "Ровно одна задача. Описание исчерпывающее с критериями приёмки. Никакого текста за пределами JSON.";
 
-    private static final String DECOMPOSE_PROMPT_TEMPLATE =
-        "Ты — senior engineering lead. Декомпозируй следующее уточнённое требование в набор конкретных задач. " +
-        "Каждая задача должна быть самостоятельно реализуемой.\n\n" +
+    private static final String DECOMPOSE_PROMPT =
+        "Ты — senior engineering lead. Декомпозируй требование в набор конкретных задач.\n\n" +
         "## Уточнённое требование\n{refined_requirement}\n\n" +
         "## Согласованный технический подход\n{approved_approach}\n\n" +
         "## Анализ\n{analysis}\n\n" +
         "## Уточнения\n{clarifications}\n\n" +
-        "Ответь ТОЛЬКО JSON объектом:\n" +
-        "{\n" +
-        "  \"tasks\": [\n" +
-        "    {\n" +
-        "      \"summary\": \"<краткий заголовок задачи>\",\n" +
-        "      \"description\": \"<подробное описание в markdown что нужно сделать>\",\n" +
-        "      \"type\": \"Task|Bug|Feature\",\n" +
-        "      \"priority\": \"Normal|Major|Critical\",\n" +
-        "      \"estimated_hours\": <целое число>\n" +
-        "    }\n" +
-        "  ]\n" +
-        "}\n\n" +
-        "Правила:\n" +
-        "- Создай 3–10 задач подходящей гранулярности.\n" +
-        "- Описание каждой задачи должно включать критерии приёмки.\n" +
-        "- Оценка часов должна быть реалистичной (1–16 на задачу).\n" +
-        "- Не включай никакого текста за пределами JSON объекта.";
+        "Ответь ТОЛЬКО JSON:\n" +
+        "{\"tasks\":[{\"summary\":\"...\",\"description\":\"...\",\"type\":\"Task|Bug|Feature\",\"priority\":\"Normal|Major|Critical\",\"estimated_hours\":N}]}\n" +
+        "Правила: 3–10 задач, каждая с критериями приёмки, оценка 1–16 ч. Никакого текста за пределами JSON.";
 
     @Autowired
     private LlmClient llmClient;
@@ -78,7 +73,7 @@ public class YouTrackTaskCreationBlock implements Block {
     private TaskTrackerRegistry trackerRegistry;
 
     @Override
-    public String getName() { return "youtrack_tasks"; }
+    public String getName() { return "task_creation"; }
 
     @Override
     public String getDescription() {
@@ -91,28 +86,24 @@ public class YouTrackTaskCreationBlock implements Block {
         Map<String, Object> cfg = config.getConfig();
         String provider = resolveProvider(cfg);
 
-        // Resolve task_mode from youtrack_input or task_input output
-        String taskMode = "decompose";
+        // mode can come from config or from upstream input
+        String mode = "decompose";
+        Object cfgMode = cfg.get("mode");
+        if (cfgMode instanceof String s && !s.isBlank()) mode = s;
         Map<String, Object> ytInput = getNestedMap(input, "youtrack_input");
-        if (ytInput != null) {
-            taskMode = (String) ytInput.getOrDefault("task_mode", "decompose");
-        }
+        if (ytInput != null && "supplement".equals(ytInput.get("task_mode"))) mode = "supplement";
+        Map<String, Object> taskInput = getNestedMap(input, "task_input");
 
-        // Resolve refined_requirement
+        // Resolve requirement
         String refinedRequirement = "";
         Map<String, Object> clarificationOutput = getNestedMap(input, "clarification");
         if (clarificationOutput != null) {
             refinedRequirement = (String) clarificationOutput.getOrDefault("refined_requirement", "");
         }
-        if (refinedRequirement.isBlank()) {
-            refinedRequirement = (String) input.getOrDefault("requirement", "");
-        }
+        if (refinedRequirement.isBlank()) refinedRequirement = (String) input.getOrDefault("requirement", "");
 
-        String approvedApproach = "";
-        if (clarificationOutput != null) {
-            approvedApproach = (String) clarificationOutput.getOrDefault("approved_approach", "");
-        }
-
+        String approvedApproach = clarificationOutput != null
+            ? (String) clarificationOutput.getOrDefault("approved_approach", "") : "";
         String analysisText = "";
         Map<String, Object> analysisOutput = getNestedMap(input, "analysis");
         if (analysisOutput != null) {
@@ -125,92 +116,64 @@ public class YouTrackTaskCreationBlock implements Block {
             clarificationsText = buildClarificationsText((Map<String, String>) clarMap);
         }
 
+        // LLM call
         String model = "smart";
         int maxTokens = 8192;
         double temperature = 1.0;
         if (config.getAgent() != null) {
-            if (config.getAgent().getModel() != null && !config.getAgent().getModel().isBlank()) {
+            if (config.getAgent().getModel() != null && !config.getAgent().getModel().isBlank())
                 model = config.getAgent().getModel();
-            }
             maxTokens = config.getAgent().getMaxTokensOrDefault();
             temperature = config.getAgent().getTemperatureOrDefault();
         }
+        String sysPrompt = config.getAgent() != null ? config.getAgent().getSystemPrompt() : null;
 
-        String prompt;
-        if ("supplement".equals(taskMode)) {
-            prompt = SUPPLEMENT_PROMPT_TEMPLATE
+        String prompt = "supplement".equals(mode)
+            ? SUPPLEMENT_PROMPT
                 .replace("{refined_requirement}", refinedRequirement)
                 .replace("{analysis}", analysisText)
-                .replace("{clarifications}", clarificationsText);
-        } else {
-            prompt = DECOMPOSE_PROMPT_TEMPLATE
+                .replace("{clarifications}", clarificationsText)
+            : DECOMPOSE_PROMPT
                 .replace("{refined_requirement}", refinedRequirement)
                 .replace("{approved_approach}", approvedApproach)
                 .replace("{analysis}", analysisText)
                 .replace("{clarifications}", clarificationsText);
-        }
 
-        String profileSystemPrompt = null;
-        if (config.getAgent() != null && config.getAgent().getSystemPrompt() != null
-                && !config.getAgent().getSystemPrompt().isBlank()) {
-            profileSystemPrompt = config.getAgent().getSystemPrompt();
-        }
-
-        String llmResponse = llmClient.complete(model, profileSystemPrompt, prompt, maxTokens, temperature);
-
+        String llmResponse = llmClient.complete(model, sysPrompt, prompt, maxTokens, temperature);
         Map<String, Object> parsed;
         try {
             parsed = objectMapper.readValue(llmResponse, new TypeReference<Map<String, Object>>() {});
         } catch (Exception e) {
-            log.error("Failed to parse tasks JSON: {}", e.getMessage());
-            throw new RuntimeException("Failed to parse task creation LLM response: " + e.getMessage(), e);
+            throw new RuntimeException("Failed to parse task_creation LLM response: " + e.getMessage(), e);
         }
 
         List<Map<String, Object>> tasks = new ArrayList<>();
-        if (parsed.get("tasks") instanceof List<?> list) {
-            tasks = (List<Map<String, Object>>) list;
-        }
+        if (parsed.get("tasks") instanceof List<?> list) tasks = (List<Map<String, Object>>) list;
 
-        List<Map<String, Object>> issues = new ArrayList<>();
+        // Resolve tracker and source issue
         Map<String, Object> trackerConfig = resolveTrackerConfig(cfg, provider);
         TaskTracker tracker = trackerRegistry.get(provider);
-
-        // Resolve source issue id
-        String sourceIssueId = null;
-        if (ytInput != null && ytInput.get("youtrack_source_issue") instanceof Map<?, ?> sourceIssue) {
-            sourceIssueId = (String) ((Map<String, Object>) sourceIssue).get("id");
-        }
-        // Also check task_input output
-        if (sourceIssueId == null) {
-            Object taskInputObj = input.get("task_input");
-            if (taskInputObj instanceof Map<?, ?> taskInput) {
-                Object issueObj = ((Map<String, Object>) taskInput).get("issue");
-                if (issueObj instanceof Map<?, ?> issueMap) {
-                    Object readableId = ((Map<String, Object>) issueMap).get("readableId");
-                    if (readableId instanceof String s && !s.isBlank()) sourceIssueId = s;
-                }
-            }
-        }
-
+        String sourceIssueId = resolveSourceIssueId(ytInput, taskInput, input);
         String baseUrl = resolveBaseUrl(trackerConfig);
 
-        if ("supplement".equals(taskMode) && sourceIssueId != null && !sourceIssueId.isBlank() && !tasks.isEmpty()) {
+        List<Map<String, Object>> issues = new ArrayList<>();
+
+        if ("supplement".equals(mode) && sourceIssueId != null && !tasks.isEmpty()) {
             Map<String, Object> task = tasks.get(0);
             String summary = (String) task.getOrDefault("summary", "");
             String description = (String) task.getOrDefault("description", "");
             try {
                 tracker.updateIssue(sourceIssueId, summary, description, trackerConfig);
-                Map<String, Object> issueRef = new HashMap<>();
-                issueRef.put("id", sourceIssueId);
-                issueRef.put("url", buildIssueUrl(baseUrl, provider, sourceIssueId));
-                issueRef.put("summary", summary);
-                issueRef.put("updated", true);
-                issues.add(issueRef);
+                Map<String, Object> ref = new HashMap<>();
+                ref.put("id", sourceIssueId);
+                ref.put("url", buildIssueUrl(baseUrl, provider, sourceIssueId));
+                ref.put("summary", summary);
+                ref.put("updated", true);
+                issues.add(ref);
             } catch (Exception e) {
                 log.error("Failed to update issue '{}': {}", sourceIssueId, e.getMessage());
             }
         } else {
-            // Decompose mode: build SubtaskSpec list and create via tracker
             List<SubtaskSpec> specs = new ArrayList<>(tasks.size());
             for (Map<String, Object> task : tasks) {
                 specs.add(new SubtaskSpec(
@@ -219,40 +182,41 @@ public class YouTrackTaskCreationBlock implements Block {
                     task.get("estimated_hours") != null ? task.get("estimated_hours") + "h" : null
                 ));
             }
-
             try {
                 List<String> createdIds = tracker.createSubtasks(sourceIssueId, specs, trackerConfig);
                 for (int idx = 0; idx < createdIds.size(); idx++) {
-                    String createdId = createdIds.get(idx);
-                    Map<String, Object> issueRef = new HashMap<>();
-                    issueRef.put("id", createdId);
-                    issueRef.put("url", buildIssueUrl(baseUrl, provider, createdId));
-                    issueRef.put("summary", idx < tasks.size() ? tasks.get(idx).getOrDefault("summary", "") : "");
-                    issues.add(issueRef);
-                    log.info("Created {} issue: {}", provider, createdId);
+                    String cid = createdIds.get(idx);
+                    Map<String, Object> ref = new HashMap<>();
+                    ref.put("id", cid);
+                    ref.put("url", buildIssueUrl(baseUrl, provider, cid));
+                    ref.put("summary", idx < tasks.size() ? tasks.get(idx).getOrDefault("summary", "") : "");
+                    issues.add(ref);
+                    log.info("task_creation: created {} issue {}", provider, cid);
                 }
             } catch (Exception e) {
-                log.error("Failed to create subtasks in {}: {}", provider, e.getMessage());
-            }
-
-            // Add comment to source with links (fallback if tracker didn't handle it)
-            if (sourceIssueId != null && !sourceIssueId.isBlank() && !issues.isEmpty()) {
-                try {
-                    String links = issues.stream()
-                        .map(i -> i.get("url").toString())
-                        .reduce("", (a, b) -> a + "\n" + b).trim();
-                    tracker.addComment(sourceIssueId, "Декомпозиция создана AI-Workflow pipeline:\n" + links, trackerConfig);
-                } catch (Exception e) {
-                    log.warn("Failed to add decomposition comment: {}", e.getMessage());
-                }
+                log.error("task_creation: failed to create subtasks in {}: {}", provider, e.getMessage());
             }
         }
 
         Map<String, Object> result = new HashMap<>();
         result.put("tasks", tasks);
         result.put("issues", issues);
-        result.put("youtrack_issues", issues); // backward compat alias
+        result.put("youtrack_issues", issues); // backward-compat alias
         return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private String resolveSourceIssueId(Map<String, Object> ytInput, Map<String, Object> taskInput,
+                                         Map<String, Object> input) {
+        if (ytInput != null && ytInput.get("youtrack_source_issue") instanceof Map<?, ?> src) {
+            Object id = ((Map<String, Object>) src).get("id");
+            if (id instanceof String s && !s.isBlank()) return s;
+        }
+        if (taskInput != null && taskInput.get("issue") instanceof Map<?, ?> issueMap) {
+            Object readableId = ((Map<String, Object>) issueMap).get("readableId");
+            if (readableId instanceof String s && !s.isBlank()) return s;
+        }
+        return null;
     }
 
     private String resolveProvider(Map<String, Object> cfg) {
@@ -283,7 +247,7 @@ public class YouTrackTaskCreationBlock implements Block {
     private String buildIssueUrl(String baseUrl, String provider, String issueId) {
         if (baseUrl.isBlank()) return issueId;
         return switch (provider) {
-            case "github" -> baseUrl + "/" + issueId;
+            case "github" -> baseUrl + "/issues/" + issueId;
             case "gitlab" -> baseUrl + "/-/issues/" + issueId;
             case "jira" -> baseUrl + "/browse/" + issueId;
             default -> baseUrl + "/issue/" + issueId;

@@ -31,4 +31,8 @@ public interface TaskTracker {
 
     /** Append a comment to an issue. */
     void addComment(String issueId, String comment, Map<String, Object> config) throws Exception;
+
+    /** Update summary and description of an existing issue (used in supplement mode). */
+    void updateIssue(String issueId, String summary, String description,
+                     Map<String, Object> config) throws Exception;
 }

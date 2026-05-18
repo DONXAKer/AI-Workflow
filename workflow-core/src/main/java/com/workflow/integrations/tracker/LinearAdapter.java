@@ -37,4 +37,9 @@ public class LinearAdapter implements TaskTracker {
     public void addComment(String issueId, String comment, Map<String, Object> config) {
         throw new UnsupportedOperationException("Linear adapter not yet implemented");
     }
+
+    @Override
+    public void updateIssue(String issueId, String summary, String description, Map<String, Object> config) {
+        throw new UnsupportedOperationException("Linear adapter not yet implemented");
+    }
 }

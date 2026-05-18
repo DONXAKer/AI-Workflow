@@ -17,6 +17,7 @@ class TaskTrackerRegistryTest {
             @Override public List<String> createSubtasks(String p, List<SubtaskSpec> s, Map<String, Object> c) { return List.of(); }
             @Override public void updateStatus(String i, String s, Map<String, Object> c) {}
             @Override public void addComment(String i, String txt, Map<String, Object> c) {}
+            @Override public void updateIssue(String i, String s, String d, Map<String, Object> c) {}
         };
     }
 

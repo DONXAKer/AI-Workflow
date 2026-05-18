@@ -2,9 +2,11 @@ package com.workflow.blocks;
 
 import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
-import com.workflow.integrations.YouTrackClient;
+import com.workflow.integrations.tracker.TaskIssue;
+import com.workflow.integrations.tracker.TaskTrackerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -14,98 +16,98 @@ public class YouTrackTasksInputBlock implements Block {
 
     private static final Logger log = LoggerFactory.getLogger(YouTrackTasksInputBlock.class);
 
+    @Autowired
+    private TaskTrackerRegistry trackerRegistry;
+
     @Override
-    public String getName() {
-        return "youtrack_tasks_input";
-    }
+    public String getName() { return "youtrack_tasks_input"; }
 
     @Override
     public String getDescription() {
-        return "Читает существующие дочерние задачи из родительской задачи YouTrack и формирует такой же вывод как youtrack_tasks.";
+        return "Читает существующие дочерние задачи из родительской задачи трекера и формирует такой же вывод как task_creation.";
     }
 
     @Override
     @SuppressWarnings("unchecked")
     public Map<String, Object> run(Map<String, Object> input, BlockConfig config, PipelineRun run) throws Exception {
         Map<String, Object> cfg = config.getConfig();
+        String provider = resolveProvider(cfg);
 
-        // Resolve parent_issue_id from config or from youtrack_input output
+        // Resolve parent_issue_id
         String parentIssueId = null;
         Object cfgParentId = cfg.get("parent_issue_id");
-        if (cfgParentId instanceof String && !((String) cfgParentId).isBlank()) {
-            parentIssueId = (String) cfgParentId;
+        if (cfgParentId instanceof String s && !s.isBlank()) {
+            parentIssueId = s;
         }
 
         if (parentIssueId == null) {
-            // Try to get from youtrack_input output
+            // Try youtrack_input output (backward compat)
             Object ytInputObj = input.get("youtrack_input");
-            if (ytInputObj instanceof Map) {
-                Map<String, Object> ytInput = (Map<String, Object>) ytInputObj;
-                Object sourceIssueObj = ytInput.get("youtrack_source_issue");
-                if (sourceIssueObj instanceof Map) {
-                    Map<String, Object> sourceIssue = (Map<String, Object>) sourceIssueObj;
-                    parentIssueId = (String) sourceIssue.get("id");
+            if (ytInputObj instanceof Map<?, ?> ytInput) {
+                Object sourceIssueObj = ((Map<String, Object>) ytInput).get("youtrack_source_issue");
+                if (sourceIssueObj instanceof Map<?, ?> sourceIssue) {
+                    parentIssueId = (String) ((Map<String, Object>) sourceIssue).get("id");
+                }
+            }
+            // Also try task_input output
+            if (parentIssueId == null) {
+                Object taskInputObj = input.get("task_input");
+                if (taskInputObj instanceof Map<?, ?> taskInput) {
+                    Object issueObj = ((Map<String, Object>) taskInput).get("issue");
+                    if (issueObj instanceof Map<?, ?> issueMap) {
+                        Object readableId = ((Map<String, Object>) issueMap).get("readableId");
+                        if (readableId instanceof String s && !s.isBlank()) parentIssueId = s;
+                    }
                 }
             }
         }
 
         if (parentIssueId == null || parentIssueId.isBlank()) {
             log.warn("No parent_issue_id found for YouTrackTasksInputBlock, returning empty tasks");
-            Map<String, Object> result = new HashMap<>();
-            result.put("tasks", new ArrayList<>());
-            result.put("youtrack_issues", new ArrayList<>());
-            return result;
+            return Map.of("tasks", new ArrayList<>(), "youtrack_issues", new ArrayList<>());
         }
 
-        // Get YouTrack config
-        Object ytCfgObj = cfg.get("_youtrack_config");
-        if (!(ytCfgObj instanceof Map)) {
-            log.warn("No _youtrack_config found, returning empty tasks");
-            Map<String, Object> result = new HashMap<>();
-            result.put("tasks", new ArrayList<>());
-            result.put("youtrack_issues", new ArrayList<>());
-            return result;
-        }
-
-        Map<String, Object> ytCfg = (Map<String, Object>) ytCfgObj;
-        String baseUrl = (String) ytCfg.getOrDefault("base_url", "");
-        String token = (String) ytCfg.getOrDefault("token", "");
-        String project = (String) ytCfg.getOrDefault("project", "");
-
-        YouTrackClient client = new YouTrackClient(baseUrl, token, project);
-
-        List<Map<String, Object>> subtasks = client.getSubtasks(parentIssueId);
+        Map<String, Object> trackerConfig = resolveTrackerConfig(cfg, provider);
+        List<TaskIssue> subtasks = trackerRegistry.get(provider).listSubtasks(parentIssueId, trackerConfig);
 
         List<Map<String, Object>> tasks = new ArrayList<>();
         List<Map<String, Object>> youtrackIssues = new ArrayList<>();
 
-        for (Map<String, Object> subtask : subtasks) {
-            String issueId = (String) subtask.getOrDefault("idReadable", subtask.getOrDefault("id", ""));
-            String summary = (String) subtask.getOrDefault("summary", "");
-            String issueUrl = baseUrl + "/issue/" + issueId;
-
-            // Build task entry
+        for (TaskIssue subtask : subtasks) {
             Map<String, Object> task = new HashMap<>();
-            task.put("summary", summary);
-            task.put("description", "");
+            task.put("summary", subtask.summary());
+            task.put("description", subtask.description() != null ? subtask.description() : "");
             task.put("type", "Task");
             task.put("priority", "Normal");
             task.put("estimated_hours", 0);
             tasks.add(task);
 
-            // Build youtrack_issue entry
             Map<String, Object> issueRef = new HashMap<>();
-            issueRef.put("id", issueId);
-            issueRef.put("url", issueUrl);
-            issueRef.put("summary", summary);
+            issueRef.put("id", subtask.readableId());
+            issueRef.put("url", subtask.url());
+            issueRef.put("summary", subtask.summary());
             youtrackIssues.add(issueRef);
         }
 
-        log.info("Loaded {} subtasks from YouTrack issue {}", subtasks.size(), parentIssueId);
+        log.info("Loaded {} subtasks from {} issue {}", subtasks.size(), provider, parentIssueId);
 
-        Map<String, Object> result = new HashMap<>();
-        result.put("tasks", tasks);
-        result.put("youtrack_issues", youtrackIssues);
-        return result;
+        return Map.of("tasks", tasks, "youtrack_issues", youtrackIssues);
+    }
+
+    private String resolveProvider(Map<String, Object> cfg) {
+        Object explicit = cfg.get("provider");
+        if (explicit instanceof String s && !s.isBlank()) return s;
+        Object defaultProvider = cfg.get("_default_tracker_provider");
+        if (defaultProvider instanceof String s && !s.isBlank()) return s;
+        return "youtrack";
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> resolveTrackerConfig(Map<String, Object> cfg, String provider) {
+        Object snapshot = cfg.get("_" + provider + "_config");
+        if (snapshot instanceof Map<?, ?> m) return (Map<String, Object>) m;
+        Object issuesSnapshot = cfg.get("_" + provider + "_issues_config");
+        if (issuesSnapshot instanceof Map<?, ?> m) return (Map<String, Object>) m;
+        return cfg;
     }
 }

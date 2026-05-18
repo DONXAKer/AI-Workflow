@@ -5,11 +5,15 @@ import com.workflow.knowledge.ProjectIndexer;
 import com.workflow.preflight.PreflightCacheService;
 import com.workflow.project.Project;
 import com.workflow.project.ProjectRepository;
+import com.workflow.project.TemplateService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +30,12 @@ public class ProjectController {
 
     @Autowired(required = false)
     private PreflightCacheService preflightCacheService;
+
+    @Autowired
+    private TemplateService templateService;
+
+    @Value("${workflow.config-dir:./config}")
+    private String globalConfigDir;
 
     @GetMapping
     public List<Project> list() {
@@ -60,6 +70,7 @@ public class ProjectController {
             if (body.getOrchestratorSystemPromptExtra() != null) existing.setOrchestratorSystemPromptExtra(body.getOrchestratorSystemPromptExtra());
             if (body.getTechStackJson() != null) existing.setTechStackJson(body.getTechStackJson());
             if (body.getDefaultProvider() != null) existing.setDefaultProvider(body.getDefaultProvider());
+            if (body.getDefaultTrackerProvider() != null) existing.setDefaultTrackerProvider(body.getDefaultTrackerProvider());
             existing.setOrchestratorEnabled(body.isOrchestratorEnabled());
             return ResponseEntity.ok(repository.save(existing));
         }).orElse(ResponseEntity.notFound().build());
@@ -150,5 +161,42 @@ public class ProjectController {
         }
         int removed = preflightCacheService.invalidateForProject(slug);
         return ResponseEntity.ok(Map.of("removed", removed, "available", true));
+    }
+
+    @PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/{slug}/apply-template")
+    public ResponseEntity<Map<String, Object>> applyTemplate(
+            @PathVariable String slug,
+            @RequestBody Map<String, String> body) {
+        var projectOpt = repository.findBySlug(slug);
+        if (projectOpt.isEmpty()) return ResponseEntity.notFound().build();
+        Project project = projectOpt.get();
+
+        String templateId = body.get("templateId");
+        if (templateId == null || templateId.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "templateId is required"));
+        }
+
+        // Prefer workingDir/.ai-workflow/, fall back to global configDir
+        Path configDir;
+        if (project.getWorkingDir() != null && !project.getWorkingDir().isBlank()) {
+            configDir = Paths.get(project.getWorkingDir()).resolve(".ai-workflow");
+        } else {
+            configDir = Paths.get(globalConfigDir);
+        }
+
+        try {
+            Path written = templateService.applyTemplate(templateId, configDir);
+            return ResponseEntity.ok(Map.of(
+                "path", written.toString(),
+                "fileName", written.getFileName().toString()
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(409).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
     }
 }

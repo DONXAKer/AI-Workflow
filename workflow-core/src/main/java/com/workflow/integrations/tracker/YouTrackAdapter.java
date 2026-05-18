@@ -46,30 +46,35 @@ public class YouTrackAdapter implements TaskTracker {
         for (SubtaskSpec spec : subtasks) {
             Map<String, Object> created = client.createIssue(spec.summary(), spec.description(), null, null);
             String id = (String) created.getOrDefault("idReadable", created.get("id"));
-            if (id != null) createdIds.add(id);
-            // NOTE: linking the created issue as a subtask of parentIssueId requires the
-            // YouTrack /api/issueLinks endpoint which YouTrackClient doesn't expose yet.
-            // Wiring that up is a follow-up task — see YouTrackClient.
-            if (parentIssueId != null && !parentIssueId.isBlank()) {
-                log.debug("TODO: link issue {} as subtask of {} (requires issueLinks API)", id, parentIssueId);
+            if (id != null) {
+                createdIds.add(id);
+                if (parentIssueId != null && !parentIssueId.isBlank()) {
+                    try {
+                        client.linkSubtask(parentIssueId, id);
+                    } catch (Exception e) {
+                        log.warn("Failed to link issue {} as subtask of {}: {}", id, parentIssueId, e.getMessage());
+                    }
+                }
             }
         }
         return createdIds;
     }
 
     @Override
-    public void updateStatus(String issueId, String status, Map<String, Object> config) {
-        // YouTrack state updates go through custom fields; generic status transition not yet
-        // implemented in YouTrackClient. Leave as TODO — wiring requires a setCustomFields
-        // call with the correct field name, which varies per project configuration.
-        log.warn("updateStatus not implemented for YouTrack (issue={}, status={})", issueId, status);
-        throw new UnsupportedOperationException("YouTrack updateStatus not yet implemented");
+    public void updateStatus(String issueId, String status, Map<String, Object> config) throws Exception {
+        client(config).updateState(issueId, status);
     }
 
     @Override
     public void addComment(String issueId, String comment, Map<String, Object> config) throws Exception {
         YouTrackClient client = client(config);
         client.addComment(issueId, comment);
+    }
+
+    @Override
+    public void updateIssue(String issueId, String summary, String description,
+                             Map<String, Object> config) throws Exception {
+        client(config).updateIssue(issueId, summary, description);
     }
 
     private YouTrackClient client(Map<String, Object> config) {

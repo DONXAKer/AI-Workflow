@@ -457,9 +457,17 @@ public class PipelineRunner {
         return inputs;
     }
 
-    private Map<String, Object> resolveIntegrationConfigs(PipelineConfig pipelineConfig) {
+    private Map<String, Object> resolveIntegrationConfigs(PipelineConfig pipelineConfig, PipelineRun run) {
         Map<String, Object> integrationData = new HashMap<>();
         IntegrationsConfig integrations = pipelineConfig.getIntegrations();
+
+        // Inject default tracker provider from project settings
+        if (projectRepository != null && run != null && run.getProjectSlug() != null) {
+            projectRepository.findBySlug(run.getProjectSlug()).ifPresent(project -> {
+                String tracker = project.getEffectiveDefaultTrackerProvider();
+                integrationData.put("_default_tracker_provider", tracker);
+            });
+        }
 
         Optional<IntegrationConfig> ytConfig = resolveIntegration(
             integrations != null ? integrations.getYoutrack() : null, IntegrationType.YOUTRACK);
@@ -490,6 +498,18 @@ public class PipelineRunner {
             ghData.put("repo", cfg.getRepo());
             ghData.put("url", cfg.getBaseUrl() != null ? cfg.getBaseUrl() : "https://api.github.com");
             integrationData.put("_github_config", ghData);
+            // GitHub issues adapter uses same credentials — expose under tracker key too
+            ghData.put("baseUrl", ghData.get("url"));
+            integrationData.put("_github_issues_config", new HashMap<>(ghData));
+        });
+
+        // GitLab issues uses project_id (numeric); alias it for the tracker adapter
+        glConfig.ifPresent(cfg -> {
+            Map<String, Object> glIssuesData = new HashMap<>();
+            glIssuesData.put("baseUrl", cfg.getBaseUrl());
+            glIssuesData.put("token", cfg.getToken());
+            glIssuesData.put("projectId", cfg.getProject());
+            integrationData.put("_gitlab_issues_config", glIssuesData);
         });
 
         return integrationData;
@@ -903,7 +923,7 @@ public class PipelineRunner {
     private void executeBlocks(PipelineConfig config, PipelineRun run,
                                 String currentRequirement, boolean skipCompleted) {
         List<BlockConfig> sortedBlocks = topologicalSort(config.getPipeline());
-        Map<String, Object> integrationConfigs = resolveIntegrationConfigs(config);
+        Map<String, Object> integrationConfigs = resolveIntegrationConfigs(config, run);
 
         int i = 0;
         while (i < sortedBlocks.size()) {

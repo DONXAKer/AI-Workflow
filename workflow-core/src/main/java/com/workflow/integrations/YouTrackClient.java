@@ -133,6 +133,52 @@ public class YouTrackClient {
         return result;
     }
 
+    public void updateState(String issueId, String stateName) throws IOException, InterruptedException {
+        List<Map<String, Object>> fields = new ArrayList<>();
+        Map<String, Object> stateField = new HashMap<>();
+        stateField.put("$type", "StateIssueCustomField");
+        stateField.put("name", "State");
+        Map<String, Object> stateValue = new HashMap<>();
+        stateValue.put("name", stateName);
+        stateField.put("value", stateValue);
+        fields.add(stateField);
+
+        ObjectNode body = objectMapper.createObjectNode();
+        ArrayNode customFields = body.putArray("customFields");
+        for (Map<String, Object> field : fields) {
+            customFields.addPOJO(field);
+        }
+
+        HttpRequest request = buildRequest("POST",
+            "/api/issues/" + issueId + "?fields=id",
+            body.toString());
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IOException("Failed to update state on issue " + issueId + ": HTTP " + response.statusCode() + " - " + response.body());
+        }
+    }
+
+    public void linkSubtask(String parentId, String childId) throws IOException, InterruptedException {
+        ObjectNode body = objectMapper.createObjectNode();
+        body.put("$type", "IssueLink");
+        body.put("direction", "INWARD");
+        ObjectNode linkType = body.putObject("linkType");
+        linkType.put("name", "Subtask");
+        ArrayNode issues = body.putArray("issues");
+        ObjectNode parentRef = issues.addObject();
+        parentRef.put("idReadable", parentId);
+
+        HttpRequest request = buildRequest("POST",
+            "/api/issues/" + childId + "/issueLinks?fields=id",
+            body.toString());
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            log.warn("Failed to link issue {} as subtask of {}: HTTP {}", childId, parentId, response.statusCode());
+        }
+    }
+
     public Map<String, Object> addComment(String issueId, String text) throws IOException, InterruptedException {
         ObjectNode body = objectMapper.createObjectNode();
         body.put("text", text);

@@ -74,6 +74,14 @@ public class Project {
     private LlmProvider defaultProvider;
 
     /**
+     * Default task tracker provider for this project. Used by tracker blocks when
+     * {@code config.provider} is not set explicitly in the pipeline YAML.
+     * Supported values: {@code youtrack}, {@code jira}, {@code github}, {@code gitlab}, {@code linear}.
+     */
+    @Column(name = "default_tracker_provider")
+    private String defaultTrackerProvider;
+
+    /**
      * Per-project override for the global escalation ladder. JSON array of polymorphic
      * {@link com.workflow.config.EscalationStep} objects discriminated by {@code tier}.
      * When null, blocks fall back to {@code workflow.escalation.defaults} in application.yaml.
@@ -118,6 +126,12 @@ public class Project {
     /** Returns the configured provider or {@link LlmProvider#OPENROUTER} when unset. */
     public LlmProvider getEffectiveDefaultProvider() {
         return defaultProvider == null ? LlmProvider.OPENROUTER : defaultProvider;
+    }
+    public String getDefaultTrackerProvider() { return defaultTrackerProvider; }
+    public void setDefaultTrackerProvider(String defaultTrackerProvider) { this.defaultTrackerProvider = defaultTrackerProvider; }
+    /** Returns the configured tracker provider or {@code "youtrack"} when unset. */
+    public String getEffectiveDefaultTrackerProvider() {
+        return defaultTrackerProvider != null && !defaultTrackerProvider.isBlank() ? defaultTrackerProvider : "youtrack";
     }
     public String getEscalationDefaultsJson() { return escalationDefaultsJson; }
     public void setEscalationDefaultsJson(String escalationDefaultsJson) { this.escalationDefaultsJson = escalationDefaultsJson; }
