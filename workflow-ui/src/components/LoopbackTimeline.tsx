@@ -1,4 +1,4 @@
-import { RotateCcw, AlertCircle, UserCircle, ShieldAlert, History } from 'lucide-react'
+import { RotateCcw, AlertCircle, UserCircle, ShieldAlert, History, Repeat } from 'lucide-react'
 import { LoopbackEntry } from '../types'
 import clsx from 'clsx'
 
@@ -35,10 +35,21 @@ const SOURCE_META = {
     color: 'text-blue-400',
     bg: 'bg-blue-950/30 border-blue-800/60',
   },
+  no_progress: {
+    icon: Repeat,
+    label: 'Зацикливание (no-progress)',
+    color: 'text-fuchsia-400',
+    bg: 'bg-fuchsia-950/30 border-fuchsia-800/60',
+  },
 } as const
 
 function metaFor(source: string | undefined) {
-  if (source === 'operator_return' || source === 'ci_failure' || source === 'verify') {
+  if (
+    source === 'operator_return' ||
+    source === 'ci_failure' ||
+    source === 'verify' ||
+    source === 'no_progress'
+  ) {
     return SOURCE_META[source]
   }
   // Default (verify loopback without explicit source, legacy entries)

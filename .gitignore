@@ -35,6 +35,8 @@ docker-compose.override.yml
 *.tmp
 *.bak
 /workflow-ui/test-results/*
+/workflow-ui/playwright-report/
+/workflow-ui/playwright-report-e2e/
 
 # Personal pipeline configs (top-level only — must NOT match the Java
 # package src/main/java/com/workflow/config/ that holds POJO config classes)

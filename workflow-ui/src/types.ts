@@ -103,12 +103,14 @@ export interface BlockSnapshot {
 
 export interface LoopbackEntry {
   timestamp: string
-  source?: 'operator_return' | 'verify' | 'ci_failure' | string
+  source?: 'operator_return' | 'verify' | 'ci_failure' | 'no_progress' | string
   from_block?: string
   to_block: string
   iteration: number
   comment?: string
   issues?: string[]
+  detected_no_progress?: boolean
+  threshold?: number
 }
 
 export interface PipelineRunSummary {

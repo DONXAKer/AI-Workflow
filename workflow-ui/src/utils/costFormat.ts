@@ -1,26 +1,32 @@
 import type { LlmProvider } from '../types'
 
 /**
- * Provider-aware cost formatter. Stack stores all amounts in the `cost_usd` column
- * agnostic of source currency — but AllTokens.ru returns `cost` in rubles, не в USD
- * (их dashboard и биллинг в ₽; per-call `cost` field в их OpenAI-совместимом ответе
- * — это сумма в ₽, которую мы стораджим как-есть). Чтобы оператор не путал
- * единицы, отображаем символ валюты per-call по фактическому провайдеру.
+ * Provider-aware cost formatter.
  *
- * Для агрегатов без provider'а (totalCostUsd на run-level) символ неоднозначен —
- * показываем "₽/$" если в раннe были смешанные провайдеры.
+ * Starting 2026-05-18 (S1 manager-audit fix) the backend converts AllTokens.ru's
+ * ruble cost to USD-equivalent at the `cost_usd` storage site (rate ₽100/$1),
+ * so DB column and `budget_usd_cap` comparisons are single-currency USD across
+ * providers. UI does the reverse-conversion at render time for AllTokens calls
+ * so the operator sees rubles they actually paid (matches AllTokens dashboard).
+ * Other providers (OpenRouter, AITunnel, etc.) render as USD verbatim.
  */
 export const RUBLE_PROVIDERS: ReadonlySet<LlmProvider> = new Set<LlmProvider>(['ALLTOKENS'])
+const USD_TO_RUB = 100  // mirrors backend RUB_PER_USD in OpenAICompatibleProviderClient
 
 export function providerCurrency(provider?: LlmProvider | string | null): '₽' | '$' {
   if (provider && RUBLE_PROVIDERS.has(provider as LlmProvider)) return '₽'
   return '$'
 }
 
+function displayAmount(storedUsd: number, provider?: LlmProvider | string | null): number {
+  if (provider && RUBLE_PROVIDERS.has(provider as LlmProvider)) return storedUsd * USD_TO_RUB
+  return storedUsd
+}
+
 /** Format a single LLM call cost using the call's own provider. */
-export function formatCallCost(amount: number, provider?: LlmProvider | string | null, fractionDigits = 4): string {
+export function formatCallCost(storedUsd: number, provider?: LlmProvider | string | null, fractionDigits = 4): string {
   const sym = providerCurrency(provider)
-  return `${sym}${amount.toFixed(fractionDigits)}`
+  return `${sym}${displayAmount(storedUsd, provider).toFixed(fractionDigits)}`
 }
 
 /**
@@ -28,15 +34,14 @@ export function formatCallCost(amount: number, provider?: LlmProvider | string |
  * use its symbol; otherwise default to `$` but mark ambiguity with a small "~".
  * Pass `providersSeen` from LLM-call sampling to pick the right symbol.
  */
-export function formatTotalCost(amount: number, providersSeen?: ReadonlySet<string>, fractionDigits = 2): string {
-  if (!providersSeen || providersSeen.size === 0) return `$${amount.toFixed(fractionDigits)}`
+export function formatTotalCost(storedUsd: number, providersSeen?: ReadonlySet<string>, fractionDigits = 2): string {
+  if (!providersSeen || providersSeen.size === 0) return `$${storedUsd.toFixed(fractionDigits)}`
   if (providersSeen.size === 1) {
     const only = providersSeen.values().next().value
-    return `${providerCurrency(only)}${amount.toFixed(fractionDigits)}`
+    return `${providerCurrency(only)}${displayAmount(storedUsd, only).toFixed(fractionDigits)}`
   }
-  // Mixed providers — currencies aren't comparable, surface that visually.
   const hasRub = Array.from(providersSeen).some(p => RUBLE_PROVIDERS.has(p as LlmProvider))
   const hasUsd = Array.from(providersSeen).some(p => !RUBLE_PROVIDERS.has(p as LlmProvider))
-  if (hasRub && hasUsd) return `~${amount.toFixed(fractionDigits)} (₽+$)`
-  return `${providerCurrency(Array.from(providersSeen)[0])}${amount.toFixed(fractionDigits)}`
+  if (hasRub && hasUsd) return `~$${storedUsd.toFixed(fractionDigits)} (mixed)`
+  return `${providerCurrency(Array.from(providersSeen)[0])}${displayAmount(storedUsd, Array.from(providersSeen)[0]).toFixed(fractionDigits)}`
 }

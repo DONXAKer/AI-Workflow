@@ -2,7 +2,7 @@ import { Loader2, CheckCircle, XCircle, SkipForward, Clock, AlertCircle, Copy, C
 import { BlockStatus, BlockSnapshot, ApprovalMode, ToolCallEntry, LlmCallEntry, LlmProvider } from '../types'
 import { effectiveApprovalMode } from '../utils/configSnapshot'
 import { blockIdLabel } from '../utils/blockLabels'
-import { formatCallCost } from '../utils/costFormat'
+import { formatCallCost, formatTotalCost } from '../utils/costFormat'
 import { getBlockView, BlockViewSpec, FieldSpec } from '../blockViews/index'
 import clsx from 'clsx'
 import { useState, useCallback, useEffect, Fragment } from 'react'
@@ -1037,11 +1037,10 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                           modelMap.set(key, agg)
                         }
                         const models = Array.from(modelMap.entries())
-                        // Block-level providers seen, for currency symbol
+                        // Block-level providers seen, drives currency symbol + RUB display conversion
                         const providersSeen = new Set(blockLlmCalls.map(c => c.provider).filter(Boolean) as string[])
-                        const blockCurrencySymbol = providersSeen.size === 1 && providersSeen.has('ALLTOKENS') ? '₽' : '$'
                         const tooltip = models
-                          .map(([m, a]) => `${m}: ${a.calls} calls, ${a.tokIn}↑/${a.tokOut}↓${a.cost > 0 ? ` ${blockCurrencySymbol}${a.cost.toFixed(4)}` : ''}`)
+                          .map(([m, a]) => `${m}: ${a.calls} calls, ${a.tokIn}↑/${a.tokOut}↓${a.cost > 0 ? ` ${formatTotalCost(a.cost, providersSeen, 4)}` : ''}`)
                           .join('\n')
                         return (
                           <div className="flex flex-col gap-0.5 text-[11px] font-mono" title={tooltip}>
@@ -1050,7 +1049,7 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                               <span>{tokIn.toLocaleString()}↑/{tokOut.toLocaleString()}↓</span>
                             </div>
                             {cost > 0 ? (
-                              <div className="text-emerald-400">{blockCurrencySymbol}{cost.toFixed(4)}</div>
+                              <div className="text-emerald-400">{formatTotalCost(cost, providersSeen, 4)}</div>
                             ) : allLocal ? (
                               <div className="text-slate-600">local</div>
                             ) : (
