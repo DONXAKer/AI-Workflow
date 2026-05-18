@@ -66,7 +66,12 @@ public final class Models {
     public static final String CLI_FALLBACK = CLI_SONNET;
 
     // ── OpenRouter tier defaults (operator-validated for WarCard pipeline) ─
-    public static final String OR_SMART     = "z-ai/glm-4.6";
+    // smart было z-ai/glm-4.6, но glm-4.6 в РФ хостят только DeepInfra+Novita,
+    // и при пиковой нагрузке оба упираются в 120с timeout на больших промптах
+    // (analysis-size, 5-15K токенов). Переехали на deepseek-v3.2 через Baidu-
+    // upstream (стабильный TTFT 3с) до восстановления DeepInfra. Откатить на
+    // "z-ai/glm-4.6" одной строкой когда апстрим оживёт. См. project_warcard_provider_routing.
+    public static final String OR_SMART     = "deepseek/deepseek-v3.2";
     public static final String OR_FLASH     = "z-ai/glm-4.7-flash";
     public static final String OR_FAST      = "google/gemini-2.5-flash-lite";
     public static final String OR_REASONING = "google/gemini-2.5-pro";

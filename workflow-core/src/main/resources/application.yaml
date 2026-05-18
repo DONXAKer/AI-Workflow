@@ -27,7 +27,11 @@ workflow:
   # Picked 2026-05-14 from aitunnel.ru/models (price/quality balance).
   model-presets:
     # Analytical roles (analysis, plan, review, agent_verify) — needs Tools+Reasoning.
-    # glm-4.6: ₽33.6/288 cached, 200k ctx, validated for WarCard.
+    # Реальный smart-tier модель задан в Models.OR_SMART (deepseek-v3.2 на 2026-05-18
+    # после миграции с z-ai/glm-4.6 из-за DeepInfra-апстрим деградации). Эта запись
+    # сохранена как комментарий для документации — Spring @Value-биндинг на Map<>
+    # silently не подхватывает её в текущем контексте; реальный источник истины —
+    # Models.java. См. CLAUDE.md → LLM routing & model presets.
     smart: glm-4.6
     # Executor / agent_with_tools (impl_*) — cheapest tool-capable flash with reasoning.
     # glm-4.7-flash: ₽9.61/76.8, 200k ctx.

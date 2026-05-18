@@ -341,7 +341,27 @@
       "Read(//c/projects/WarCard/tasks/**)",
       "Read(//d//**)",
       "Bash(find /d -maxdepth 2 -name \"WarCard\" -type d)",
-      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('returned', len\\(d.get\\('content', []\\)\\), 'runs'\\)\")"
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('returned', len\\(d.get\\('content', []\\)\\), 'runs'\\)\")",
+      "Bash(cmd.exe /c \"dir /B D:\\\\Проекты\")",
+      "Bash(cmd.exe *)",
+      "Bash(MSYS_NO_PATHCONV=1 curl *)",
+      "WebFetch(domain:proxyapi.ru)",
+      "WebFetch(domain:gptunnel.ru)",
+      "WebFetch(domain:vsegpt.ru)",
+      "WebFetch(domain:docs.aimlapi.com)",
+      "WebFetch(domain:docs.z.ai)",
+      "WebFetch(domain:alltokens.ru)",
+      "WebFetch(domain:vsellm.ru)",
+      "WebFetch(domain:polza.ai)",
+      "WebFetch(domain:openrouter.ai)",
+      "WebFetch(domain:deepinfra.com)",
+      "WebFetch(domain:aitunnel.ru)",
+      "WebFetch(domain:dtf.ru)",
+      "WebFetch(domain:artificialanalysis.ai)",
+      "Bash(mkdir -p \"C:/tmp/wf-ui-tc\")",
+      "Bash(cp -r \"D:/Проекты/AI-Workflow/workflow-ui/.\" \"C:/tmp/wf-ui-tc/\")",
+      "Bash(docker port *)",
+      "WebFetch(domain:docs.alltokens.ru)"
     ]
   }
 }
