@@ -1,0 +1,189 @@
+name: write-tests
+description: |
+  Add tests to existing code (stack-agnostic).
+
+  Flow: task.md → context_scan (find test framework + conventions) →
+  test_planning (BVA + equivalence classes) → test_generation
+  (scaffold) → agent_with_tools (fill bodies, run, fix until green) →
+  tests → verify_tests → verify_quality → commit.
+
+  Production code is OFF LIMITS in impl_tests — the bash_allowlist
+  intentionally restricts shell to the test runner and read-only
+  inspection.
+
+  Operator must adjust before first run:
+    - working_dir
+    - tests.command (e.g. ./gradlew test, npm test, pytest)
+    - impl_tests.bash_allowlist (allow ONLY your test runner)
+
+  task.md should describe what code/feature to cover; details about
+  target files/modules go in the `to_be` section.
+
+entry_points:
+  - id: from_task_md
+    name: "Write tests per task.md"
+    from_block: task_md
+    requires_input: task_file
+
+pipeline:
+  - id: task_md
+    block: task_md_input
+    approval: false
+    depends_on: []
+    config:
+      file_path: "${input.task_file}"
+
+  # Detect test framework, conventions, fixture locations.
+  - id: context_scan
+    block: context_scan
+    phase: analyze
+    approval: false
+    depends_on: [task_md]
+    agent:
+      tier: flash
+      temperature: 0.3
+    config:
+      working_dir: ${input.working_dir}
+
+  # Smart-tier planner: enumerate test cases with BVA / equivalence classes.
+  - id: test_planning
+    block: test_planning
+    phase: analyze
+    approval: true
+    depends_on: [context_scan, task_md]
+    agent:
+      tier: smart
+      maxTokens: 8192
+      temperature: 0.4
+      systemPrompt: |
+        You plan tests for existing code. From the task description and
+        the project's existing test conventions, enumerate test cases
+        using boundary-value analysis and equivalence partitioning. Mark
+        each case priority (critical / important / nice_to_have).
+        Output `cases` as a list with: name, target, inputs, expected,
+        priority.
+
+  - id: test_gen
+    block: test_generation
+    approval: false
+    depends_on: [test_planning]
+    agent:
+      tier: smart
+      maxTokens: 12288
+      temperature: 0.3
+
+  - id: impl_tests
+    block: agent_with_tools
+    approval: false
+    depends_on: [test_gen]
+    agent:
+      tier: flash
+      maxTokens: 16384
+      temperature: 0.2
+      systemPrompt: |
+        You write tests for existing code. Fill in the generated test
+        scaffolds, run them, and fix until they pass. CRITICAL: do NOT
+        modify production code. If a test exposes a bug, stop and report
+        it in your final message — do not patch the production code
+        yourself. Use Edit/Write on TEST files only.
+    config:
+      working_dir: ${input.working_dir}
+      preload_from: test_gen
+      user_message: |
+        Goal: ${task_md.title}
+
+        ## What to cover
+        ${task_md.to_be}
+
+        ## Planned cases (from test_planning)
+        ${test_planning.cases}
+
+        ## Scaffold (from test_generation)
+        ${test_gen.scaffold_files}
+
+        ## Test framework / conventions
+        ${context_scan.test_framework}
+        ${context_scan.conventions}
+
+        Implement the test bodies, run them, fix failures (in tests only,
+        not production code), and report when the suite is green.
+      allowed_tools: [Read, Write, Edit, Glob, Grep, Bash]
+      bash_allowlist:
+        - Bash(git status)
+        - Bash(git diff*)
+        - Bash(cat *)
+        - Bash(ls*)
+        # TODO: add ONLY your test runner — no build, no formatter, no
+        # other commands that could touch production code:
+        #   - Bash(./gradlew test*)
+        #   - Bash(npm test*)
+        #   - Bash(pytest*)
+      max_iterations: 40
+      budget_usd_cap: 4.0
+      focus_on_failure: true
+
+  - id: tests
+    block: shell_exec
+    phase: verify
+    approval: false
+    depends_on: [impl_tests]
+    config:
+      working_dir: ${input.working_dir}
+      command: "echo TEST_SKIPPED"   # TODO: replace with your test command
+      timeout_sec: 900
+      allow_nonzero_exit: true
+
+  - id: verify_tests
+    block: verify
+    approval: false
+    depends_on: [tests]
+    verify:
+      subject: tests
+      checks:
+        - { field: success, rule: equals, value: true }
+      on_fail:
+        action: loopback
+        target: impl_tests
+        max_iterations: 3
+        inject_context:
+          test_failures: "$.tests.stdout"
+          test_stderr: "$.tests.stderr"
+
+  # Tests passing isn't enough — check they are MEANINGFUL.
+  - id: verify_quality
+    block: verify
+    approval: false
+    depends_on: [verify_tests, test_planning]
+    verify:
+      subject: tests
+      checks:
+        - { field: success, rule: equals, value: true }
+      llm_check:
+        enabled: true
+        prompt: |
+          Rate test quality 0-10. The plan said cases:
+            ${test_planning.cases}
+          Are the implemented tests meaningful (not `assertTrue(true)`,
+          not just smoke)? Do they exercise the edge cases from the plan?
+          Are assertions specific (not just "didn't throw")?
+        min_score: 7
+      on_fail:
+        action: loopback
+        target: impl_tests
+        max_iterations: 2
+        inject_context:
+          feedback: "$.verify_quality.issues"
+
+  - id: commit
+    block: shell_exec
+    phase: release
+    approval: false
+    depends_on: [verify_quality]
+    config:
+      working_dir: ${input.working_dir}
+      command: |
+        git add -A && \
+        git commit -m "test: ${task_md.feat_id} add tests for ${task_md.title}
+
+        ${task_md.to_be}"
+      allow_nonzero_exit: false

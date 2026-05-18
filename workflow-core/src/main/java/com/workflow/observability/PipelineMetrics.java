@@ -1,14 +1,17 @@
 package com.workflow.observability;
 
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Prometheus metrics for pipeline runs, block execution, LLM calls, and integrations.
@@ -27,8 +30,42 @@ public class PipelineMetrics {
     private final ConcurrentMap<String, Counter> llmTokensCounters = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Timer> stageTimers = new ConcurrentHashMap<>();
 
+    /**
+     * Per-resolution timer of approval wait time. Tag {@code status} ∈
+     * {APPROVED, REJECTED, EDIT, SKIP, JUMP, TIMEOUT_FAIL, TIMEOUT_NOTIFY, TIMEOUT_APPROVE,
+     * TIMEOUT_ESCALATE}. Used to alert on stuck approvals (e.g. p95 &gt; 30 min).
+     */
+    private final ConcurrentMap<String, Timer> approvalWaitTimers = new ConcurrentHashMap<>();
+
+    /** Live gauge of approvals currently in PAUSED_FOR_APPROVAL. */
+    private final AtomicLong approvalsPending = new AtomicLong(0);
+
+    @PostConstruct
+    void registerGauges() {
+        Gauge.builder("workflow_approvals_pending", approvalsPending, AtomicLong::doubleValue)
+            .description("Approvals currently awaiting operator decision")
+            .register(registry);
+    }
+
     public void recordRunStarted() {
         runCounter("started").increment();
+    }
+
+    /** Increment when a run pauses for approval (and at startup recovery). */
+    public void approvalPaused() {
+        approvalsPending.incrementAndGet();
+    }
+
+    /** Records the wait time for an approval that finished, and decrements the pending gauge. */
+    public void approvalResolved(String status, Duration waited) {
+        approvalsPending.updateAndGet(v -> Math.max(0, v - 1));
+        approvalWaitTimers.computeIfAbsent(status,
+            k -> Timer.builder("workflow_approval_wait_seconds")
+                .description("Time from pause-for-approval to operator/timeout resolution")
+                .tag("status", k)
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry)
+        ).record(waited);
     }
 
     public void recordRunComplete(String status) {

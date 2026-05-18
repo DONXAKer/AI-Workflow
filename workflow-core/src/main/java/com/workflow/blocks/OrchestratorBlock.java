@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.workflow.api.RunWebSocketHandler;
 import com.workflow.config.AgentConfig;
 import com.workflow.config.BlockConfig;
+import com.workflow.core.BlockOutput;
 import com.workflow.core.PipelineRun;
 import com.workflow.core.expr.StringInterpolator;
 import com.workflow.llm.LlmClient;
@@ -133,8 +134,10 @@ public class OrchestratorBlock implements Block {
             Phase.ANY,
             List.of(
                 // ── Essentials ────────────────────────────────────────────────────
-                FieldSchema.enumField("mode", "Режим", List.of("plan", "review"),
-                    "plan", "plan — построить план; review — проверить результат относительно definition_of_done.")
+                FieldSchema.enumField("mode", "Режим", List.of("plan", "review", "run_review"),
+                    "plan",
+                    "plan — построить план; review — проверить результат относительно definition_of_done; "
+                        + "run_review — tech-lead-gate: проверка ВСЕГО run-а (все block outputs) против analysis.acceptance_checklist перед PR.")
                     .withLevel("essential"),
                 FieldSchema.stringArray("context_blocks", "Контекстные блоки",
                     "ID блоков, чьи выводы передаются в plan-режиме (обычно task_md).")
@@ -232,7 +235,7 @@ public class OrchestratorBlock implements Block {
         Map<String, Object> cfg = blockConfig.getConfig() != null ? blockConfig.getConfig() : Map.of();
         String mode = asString(cfg, "mode", "plan");
 
-        Path workingDir = resolveWorkingDir(cfg);
+        Path workingDir = resolveWorkingDir(cfg, input, run);
 
         String projectExtra = resolveProjectExtra();
         String blockExtra   = asString(cfg, "system_prompt_extra", "");
@@ -249,7 +252,179 @@ public class OrchestratorBlock implements Block {
         if ("review".equals(mode)) {
             return runReview(cfg, input, blockConfig, run, workingDir, combinedExtra, agentSystemPrompt);
         }
+        if ("run_review".equals(mode)) {
+            return runRunReview(cfg, input, blockConfig, run, workingDir, combinedExtra, agentSystemPrompt);
+        }
         return runPlan(cfg, input, blockConfig, run, workingDir, combinedExtra, agentSystemPrompt);
+    }
+
+    // ── Run-review mode (tech_lead_gate) ───────────────────────────────────────
+
+    /**
+     * Tech-lead gate: reviews the ENTIRE run against {@code analysis.acceptance_checklist}
+     * just before PR creation. Differs from {@code review}:
+     * <ul>
+     *   <li>Sees every block output, not one impl invocation</li>
+     *   <li>No tool-use exploration — all relevant signal is already in {@code run.outputs}</li>
+     *   <li>Per-item verdict reuses {@link #computeReviewVerdict} so action/issues/retry_instruction
+     *       semantics match per-block review (PipelineRunner consumes them the same way)</li>
+     * </ul>
+     *
+     * <p>Outputs match {@code review}-mode schema ({@code passed}, {@code checklist_status},
+     * {@code regressions}, {@code action}, {@code issues}, {@code retry_instruction}) so the
+     * gating block can be wired with the same {@code on_fail.loopback} / escalation patterns.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> runRunReview(Map<String, Object> cfg, Map<String, Object> input,
+            BlockConfig blockConfig, PipelineRun run, Path workingDir, String extra, String agentSystemPrompt) throws Exception {
+
+        // 1. Resolve the acceptance checklist via the same cascade used by review-mode
+        //    (analysis → plan_block → DoD synthesis). Without a checklist there's no
+        //    deterministic "done" criterion; fall through to free-form review on the
+        //    aggregated outputs.
+        Map<String, Object> planOut = loadPlanBlockOutput(cfg, input, run);
+        List<Map<String, Object>> checklist = loadAcceptanceChecklist(input, run, planOut);
+        boolean haveChecklist = !checklist.isEmpty();
+
+        StringBuilder userMsg = new StringBuilder();
+
+        if (haveChecklist) {
+            userMsg.append("## Acceptance checklist (единственный источник истины — оцениваешь только эти пункты)\n");
+            userMsg.append("| id | priority | text | source |\n");
+            userMsg.append("|---|---|---|---|\n");
+            for (Map<String, Object> item : checklist) {
+                userMsg.append("| ").append(item.getOrDefault("id", "?"))
+                    .append(" | ").append(item.getOrDefault("priority", "important"))
+                    .append(" | ").append(String.valueOf(item.getOrDefault("text", ""))
+                        .replace("|", "\\|").replace("\n", " "))
+                    .append(" | ").append(item.getOrDefault("source", "derived"))
+                    .append(" |\n");
+            }
+            userMsg.append('\n');
+        }
+
+        // 2. Aggregate all block outputs in chronological order. Each block's output
+        //    summary is bounded so the user message stays under a sensible token budget
+        //    even on 30-block runs.
+        userMsg.append("## Outputs of all completed blocks (chronological)\n\n");
+        appendRunOutputs(userMsg, run);
+
+        // 3. CI / verify / test signals — explicit pull-out so they can't be missed
+        //    in the long aggregated section above.
+        userMsg.append(buildRunSignalSummary(run));
+
+        // 4. Loopback feedback if this is a retry iteration of run_review itself.
+        if (input.get("_loopback") instanceof Map<?, ?> lb && !lb.isEmpty()) {
+            Object prevIssues = ((Map<?, ?>) lb).get("issues");
+            if (prevIssues != null && !prevIssues.toString().isBlank()) {
+                userMsg.append("## Issues from previous run_review attempt\n")
+                    .append(prevIssues).append("\n\n");
+            }
+        }
+
+        // 5. Tools: minimal — Read/Glob only so the gate can spot-check files but
+        //    never modify state. No Bash, no MCP — gate is read-only.
+        // 6. Lower iteration cap (default 4): tech-lead-gate is judgment, not exploration.
+        List<String> tools = cfg.containsKey("tools") ? asStringList(cfg, "tools") : List.of("Read", "Glob");
+        List<String> bash  = List.of();
+        int maxIter        = asInt(cfg, "max_iterations", 4);
+        double budget      = asDouble(cfg, "budget_usd_cap", 1.5);
+
+        Map<String, Object> result = runLoop(blockConfig, run, workingDir, userMsg.toString(),
+            buildRunReviewSystemPrompt(extra, agentSystemPrompt, haveChecklist),
+            tools, bash, maxIter, budget, "run_review");
+
+        // Same code-side decisioning as per-block review — guarantees PipelineRunner
+        // sees consistent passed/action/issues regardless of which reviewer mode produced
+        // the output.
+        if (haveChecklist && result.get("checklist_status") instanceof List<?> cs) {
+            Map<String, String> priorityById = checklist.stream()
+                .collect(Collectors.toMap(
+                    i -> String.valueOf(i.get("id")),
+                    i -> String.valueOf(i.getOrDefault("priority", "important")),
+                    (a, b) -> a));
+            List<Map<String, Object>> regressions = result.get("regressions") instanceof List<?> r
+                ? (List<Map<String, Object>>) (List<?>) r : List.of();
+            String reviewerAction = String.valueOf(result.getOrDefault("action", "retry"));
+            ReviewVerdict v = computeReviewVerdict(
+                (List<Map<String, Object>>) (List<?>) cs, regressions, priorityById, reviewerAction);
+            result.put("passed", v.passed());
+            result.put("action", v.action());
+            result.put("issues", v.issues());
+            result.put("retry_instruction", v.retryInstruction());
+        }
+
+        return result;
+    }
+
+    /** Iterates {@link PipelineRun#getOutputs()} in chronological order with a per-block size cap. */
+    private void appendRunOutputs(StringBuilder sb, PipelineRun run) {
+        int budgetPerBlock = 2_500;
+        for (BlockOutput out : run.getOutputs()) {
+            String blockId = out.getBlockId();
+            if (blockId == null || blockId.startsWith("_")) continue; // skip internal _loopback_* etc.
+            String json = out.getOutputJson();
+            if (json == null) json = "";
+            if (json.length() > budgetPerBlock) {
+                json = json.substring(0, budgetPerBlock) + "\n... [truncated " + (json.length() - budgetPerBlock) + " chars]";
+            }
+            sb.append("### Block: ").append(blockId).append('\n');
+            sb.append("```json\n").append(json).append("\n```\n\n");
+        }
+    }
+
+    /**
+     * Pulls the key "did this run actually work" signals into a single section so the
+     * tech-lead-gate doesn't have to scan every block to find them.
+     */
+    @SuppressWarnings("unchecked")
+    private String buildRunSignalSummary(PipelineRun run) {
+        StringBuilder sb = new StringBuilder("## Quick-look run signals\n\n");
+        for (BlockOutput o : run.getOutputs()) {
+            String id = o.getBlockId();
+            if (id == null || id.startsWith("_")) continue;
+            try {
+                Map<String, Object> body = objectMapper.readValue(o.getOutputJson(),
+                    new TypeReference<Map<String, Object>>() {});
+                Object status = body.getOrDefault("status",
+                    body.getOrDefault("overall_status",
+                    body.getOrDefault("passed", body.get("success"))));
+                Object score = body.get("score");
+                Object iters = body.get("iterations_used");
+                if (status == null && score == null && iters == null) continue;
+                sb.append("- `").append(id).append("`");
+                if (status != null) sb.append(" status=").append(status);
+                if (score  != null) sb.append(" score=").append(score);
+                if (iters  != null) sb.append(" iters=").append(iters);
+                sb.append('\n');
+            } catch (Exception ignored) {
+                // Block output isn't valid JSON (legacy block, raw stdout) — skip the summary line.
+            }
+        }
+        sb.append('\n');
+        return sb.toString();
+    }
+
+    private String buildRunReviewSystemPrompt(String extra, String agentSystemPrompt, boolean haveChecklist) {
+        StringBuilder sp = new StringBuilder();
+        sp.append("Ты — senior tech lead. Твоя задача: gate-проверка ВСЕГО run-а перед открытием PR.\n")
+          .append("У тебя НЕТ возможности менять код — только вердикт по run-у.\n\n");
+        if (haveChecklist) {
+            sp.append("Acceptance checklist — единственный источник истины. Не выдумывай новых id.\n")
+              .append("Для каждого пункта checklist: passed=true|false, evidence (что подтверждает), fix (если passed=false).\n\n");
+        }
+        sp.append("Дополнительно: regressions[] — функциональные поломки (build/test/CI broken), которых не было до этого run-а.\n\n");
+        sp.append("Output (JSON, через finalize_review tool):\n")
+          .append("  checklist_status: [{id, passed, evidence, fix}]   // только если был checklist\n")
+          .append("  regressions: [{type, description, evidence}]\n")
+          .append("  action: continue | retry | escalate                // твоя рекомендация\n")
+          .append("  retry_instruction: string                          // что переделать (если retry)\n")
+          .append("  carry_forward: string                              // короткое summary что было сделано\n\n");
+        sp.append("Стратегия: смотри сначала на быстрые сигналы (status/score/iters per блок), затем на details.\n")
+          .append("Доступные tools: Read, Glob — для spot-check'а файла если что-то выглядит подозрительно.\n");
+        if (!extra.isBlank())            sp.append("\n## Project context\n").append(extra).append('\n');
+        if (!agentSystemPrompt.isBlank()) sp.append("\n## Block override\n").append(agentSystemPrompt).append('\n');
+        return sp.toString();
     }
 
     // ── Plan mode ──────────────────────────────────────────────────────────────
@@ -319,10 +494,44 @@ public class OrchestratorBlock implements Block {
                 .append("and stop — do not invent a task.\n");
         }
 
-        return runLoop(blockConfig, run, workingDir, userMsg.toString(),
+        Map<String, Object> result = runLoop(blockConfig, run, workingDir, userMsg.toString(),
             buildPlanSystemPrompt(extra, agentSystemPrompt), PLAN_TOOLS, PLAN_BASH,
             asInt(cfg, "max_iterations", DEFAULT_MAX_ITER_PLAN),
             asDouble(cfg, "budget_usd_cap", DEFAULT_BUDGET_USD), "plan");
+        synthesizeAcceptanceChecklistFromDod(result);
+        return result;
+    }
+
+    /**
+     * S5 (2026-05-18 manager audit): plan-mode JSON schema не делает {@code acceptance_checklist}
+     * обязательным полем, поэтому модели (видели на DeepSeek-V3.2) иногда не выдают его,
+     * даже если system_prompt просит. Без checklist'а downstream review-mode попадает на
+     * S2 escalate-path. Если у нас есть непустой {@code definition_of_done} — синтезируем
+     * checklist из его строк (id=dod-N, priority=important), тот же алгоритм, что
+     * {@link #loadAcceptanceChecklist} использует для review-mode cascade step 3.
+     */
+    @SuppressWarnings("unchecked")
+    static void synthesizeAcceptanceChecklistFromDod(Map<String, Object> result) {
+        if (result == null) return;
+        Object existing = result.get("acceptance_checklist");
+        boolean isEmpty = !(existing instanceof List<?> l) || l.isEmpty();
+        if (!isEmpty) return;
+        Object dod = result.get("definition_of_done");
+        if (!(dod instanceof String s) || s.isBlank()) return;
+        List<Map<String, Object>> synth = new ArrayList<>();
+        int n = 0;
+        for (String line : s.split("\\r?\\n")) {
+            String t = line.strip().replaceFirst("^[-*\\d.\\s]+", "").strip();
+            if (t.isBlank()) continue;
+            n++;
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", "dod-" + n);
+            item.put("text", t);
+            item.put("priority", "important");
+            item.put("source", "derived");
+            synth.add(item);
+        }
+        if (!synth.isEmpty()) result.put("acceptance_checklist", synth);
     }
 
     // ── Review mode ────────────────────────────────────────────────────────────
@@ -670,6 +879,18 @@ public class OrchestratorBlock implements Block {
             Map<String, String> priorityById,
             String reviewerAction) {
 
+        // S2 (2026-05-18 manager audit): пустой checklist_status — false-positive auto-pass.
+        // Iteration ниже не выполняется при empty list, и hasBlockingFail остаётся false →
+        // passed=true. Это покрывает случай, когда упoр-checklist в анализе/плане был, но
+        // reviewer (LLM) забыл/проигнорировал заполнение per-item статуса. Загейтить — иначе
+        // commit с пустым diff'ом считается успешным (FEAT-DOCS-001 silent-success bug).
+        if (checklistStatus == null || checklistStatus.isEmpty()) {
+            String msg = "Review returned empty checklist_status — refusing to auto-pass. "
+                + "Reviewer must fill {id, passed, evidence, fix} for every acceptance_checklist id.";
+            return new ReviewVerdict(false, "escalate", msg,
+                "Re-run plan/review with stricter prompt: enforce non-empty checklist_status output");
+        }
+
         List<String> blockingMessages = new ArrayList<>();
         List<String> retryFixes = new ArrayList<>();
         boolean hasBlockingFail = false;
@@ -725,6 +946,19 @@ public class OrchestratorBlock implements Block {
      * {@code depends_on}. Returns {@code null} when the block hasn't run yet or its
      * output isn't a JSON object.
      */
+    /**
+     * Resolves the named plan block's most-recent output map (or {@code Map.of()} when
+     * {@code cfg.plan_block} is unset / the block hasn't produced output yet). Used by
+     * {@link #runRunReview} so its checklist cascade matches {@link #runReview}.
+     */
+    private Map<String, Object> loadPlanBlockOutput(Map<String, Object> cfg,
+            Map<String, Object> input, PipelineRun run) {
+        String planBlockId = asString(cfg, "plan_block", "");
+        if (planBlockId.isBlank()) return Map.of();
+        Map<String, Object> resolved = resolveContextBlock(input, run, planBlockId);
+        return resolved != null ? resolved : Map.of();
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> resolveContextBlock(Map<String, Object> input, PipelineRun run, String blockId) {
         Object fromInput = input != null ? input.get(blockId) : null;
@@ -885,8 +1119,11 @@ public class OrchestratorBlock implements Block {
         // register a backing Tool. With forceFinalizeAfter set below, tool_choice gets pinned
         // to this tool past mid-loop — guarantees structured output even when a model
         // (e.g. glm-4.6 with tool_choice=auto) keeps preferring exploratory tools forever.
-        String finalizeName = "review".equals(mode) ? "finalize_review" : "finalize_plan";
-        defs.add("review".equals(mode) ? finalizeReviewToolDef() : finalizePlanToolDef());
+        // run_review uses the same finalize_review tool — output schema is identical (checklist_status,
+        // regressions, action, retry_instruction). Only the system prompt + user-message composition differ.
+        boolean usesReviewSchema = "review".equals(mode) || "run_review".equals(mode);
+        String finalizeName = usesReviewSchema ? "finalize_review" : "finalize_plan";
+        defs.add(usesReviewSchema ? finalizeReviewToolDef() : finalizePlanToolDef());
 
         ToolContext toolCtx = new ToolContext(workingDir, resolvedBashAllowlist);
 
@@ -1012,7 +1249,7 @@ public class OrchestratorBlock implements Block {
             // which would carry actual {issues, retry_instruction} or {goal, approach} text.
             // Without this guard, defaults below would fill action=escalate / passed=false
             // and the pipeline would crash with a misleading "Orchestrator escalated:".
-            boolean hasRealOutput = "review".equals(mode)
+            boolean hasRealOutput = usesReviewSchema
                 ? !asString(out, "issues", "").isBlank()
                     || !asString(out, "carry_forward", "").isBlank()
                     || (out.get("checklist_status") instanceof List<?> cs && !cs.isEmpty())
@@ -1034,7 +1271,7 @@ public class OrchestratorBlock implements Block {
         }
 
         // Ensure optional fields exist so pipeline interpolation never throws
-        if ("review".equals(mode)) {
+        if (usesReviewSchema) {
             out.putIfAbsent("passed", Boolean.FALSE);
             out.putIfAbsent("issues", "");
             out.putIfAbsent("action", "retry");
@@ -1325,10 +1562,20 @@ Rules:
             sections.put(title.toLowerCase(java.util.Locale.ROOT), body);
         }
 
-        if ("review".equals(mode)) {
+        if (isReviewSchema(mode)) {
             return buildReviewFromMarkdown(sections, t);
         }
         return buildPlanFromMarkdown(sections, t);
+    }
+
+    /**
+     * True for modes that emit the review output schema (checklist_status, regressions,
+     * action, retry_instruction). {@code review} reviews one impl invocation;
+     * {@code run_review} reviews the whole run as a tech-lead gate — both share the same
+     * downstream contract with {@link com.workflow.core.PipelineRunner}.
+     */
+    private static boolean isReviewSchema(String mode) {
+        return "review".equals(mode) || "run_review".equals(mode);
     }
 
     /**
@@ -1530,7 +1777,7 @@ Rules:
     @SuppressWarnings("unchecked")
     private static boolean isSuspiciouslyTruncated(Map<String, Object> parsed, String mode) {
         if (parsed == null || parsed.isEmpty()) return false;
-        if ("review".equals(mode)) {
+        if (isReviewSchema(mode)) {
             String issues = asString(parsed, "issues", "");
             String carry = asString(parsed, "carry_forward", "");
             Object cs = parsed.get("checklist_status");
@@ -1551,7 +1798,7 @@ Rules:
     // ── Rescue completion ─────────────────────────────────────────────────────
 
     private Map<String, Object> rescueJson(String rawText, String mode, String model) {
-        String schema = "review".equals(mode)
+        String schema = isReviewSchema(mode)
             ? "{\"passed\": <boolean>, \"issues\": \"<string>\", \"action\": \"<continue|retry|escalate>\","
                 + " \"retry_instruction\": \"<string>\", \"carry_forward\": \"<string>\"}"
             : "{\"goal\": \"<string>\","
@@ -1739,10 +1986,15 @@ Rules:
 
     // ── Helpers ────────────────────────────────────────────────────────────────
 
-    private Path resolveWorkingDir(Map<String, Object> cfg) {
+    private Path resolveWorkingDir(Map<String, Object> cfg,
+            Map<String, Object> input, PipelineRun run) {
         Object inline = cfg.get("working_dir");
         if (inline != null && !inline.toString().isBlank()) {
-            Path p = Paths.get(inline.toString()).toAbsolutePath();
+            String raw = inline.toString();
+            String resolved = stringInterpolator != null
+                ? stringInterpolator.interpolate(raw, run, input)
+                : raw;
+            Path p = Paths.get(resolved).toAbsolutePath();
             if (!p.toFile().isDirectory())
                 throw new IllegalArgumentException("orchestrator: working_dir is not a directory: " + p);
             return p;
@@ -1939,7 +2191,7 @@ Rules:
             }
         }
 
-        if ("review".equals(mode)) {
+        if (isReviewSchema(mode)) {
             out.put("passed", Boolean.TRUE);            // optimistic — downstream will catch real issues
             out.put("issues", "");
             out.put("action", "continue");

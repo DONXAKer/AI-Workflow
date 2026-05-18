@@ -1,0 +1,233 @@
+name: feature-generic
+description: |
+  Full feature pipeline (stack-agnostic, generic).
+
+  Flow: task.md → analysis (smart, acceptance_checklist) →
+  orchestrator plan → agent_with_tools impl → test_generation → tests →
+  orchestrator review → verify_review → agent_verify acceptance → commit.
+
+  Two distinct loopback paths into impl: review (quality) and
+  agent_verify (functional). The existing feature.yaml is WarCard-tuned;
+  this file is the stack-neutral version with TODO placeholders.
+
+  Operator must adjust before first run:
+    - working_dir
+    - tests.command (e.g. ./gradlew test, npm test, pytest)
+    - impl.bash_allowlist (allow your test runner + git read-only)
+
+  Entry points:
+    - from_task_md: provide an absolute path to a task.md file.
+    - from_requirement: pass a raw requirement string; analysis runs
+      directly and produces the checklist.
+
+entry_points:
+  - id: from_task_md
+    name: "Implement a feature from task.md"
+    from_block: task_md
+    requires_input: task_file
+
+  - id: from_requirement
+    name: "Implement a feature from a raw requirement"
+    from_block: analysis
+    requires_input: requirement
+    inject:
+      - { block_id: task_md, source: empty }
+
+pipeline:
+  - id: task_md
+    block: task_md_input
+    approval: false
+    depends_on: []
+    config:
+      file_path: "${input.task_file}"
+
+  - id: analysis
+    block: analysis
+    approval: true
+    depends_on: [task_md]
+    agent:
+      tier: smart
+      maxTokens: 8192
+      temperature: 0.3
+
+  # Plan-mode orchestrator: enumerates files to touch + definition of done.
+  # Read-only; no file edits here.
+  - id: plan_impl
+    block: orchestrator
+    phase: analyze
+    approval: false
+    depends_on: [analysis]
+    agent:
+      tier: smart
+      maxTokens: 8192
+      temperature: 0.1
+    config:
+      mode: plan
+      working_dir: ${input.working_dir}
+      context_blocks: [task_md, analysis]
+      max_iterations: 20
+      budget_usd_cap: 0.8
+      prose_fallback: true
+
+  - id: impl
+    block: agent_with_tools
+    approval: false
+    depends_on: [plan_impl]
+    agent:
+      tier: flash
+      maxTokens: 16384
+      temperature: 0.2
+      systemPrompt: |
+        You implement feature tickets precisely. Use the provided tools
+        to read the codebase, edit existing files, and write new ones.
+        Stay inside the working directory. The acceptance_checklist and
+        the plan below are your contracts — every CRITICAL and IMPORTANT
+        item must be done. End with one short confirmation sentence.
+    config:
+      working_dir: ${input.working_dir}
+      preload_from: plan_impl
+      user_message: |
+        Feature: ${task_md.title}
+
+        ## Description
+        ${task_md.to_be}
+
+        ## Plan (from orchestrator)
+        Goal: ${plan_impl.goal}
+        Files to touch: ${plan_impl.files_to_touch}
+        Definition of done: ${plan_impl.definition_of_done}
+
+        ## Acceptance checklist (single source of truth)
+        ${analysis.acceptance_checklist}
+
+        Implement every CRITICAL and IMPORTANT item. Keep changes scoped —
+        no unrelated refactors. Prefer Edit over Write for existing files.
+      allowed_tools: [Read, Write, Edit, Glob, Grep, Bash]
+      bash_allowlist:
+        - Bash(git status)
+        - Bash(git diff*)
+        - Bash(git add*)
+        - Bash(cat *)
+        - Bash(ls*)
+        # TODO: add your test runner, e.g.
+        #   - Bash(./gradlew test*)
+        #   - Bash(npm test*)
+        #   - Bash(pytest*)
+      max_iterations: 40
+      budget_usd_cap: 5.0
+      focus_on_failure: true
+
+  - id: test_gen
+    block: test_generation
+    approval: false
+    depends_on: [impl]
+    agent:
+      tier: smart
+      temperature: 0.3
+
+  - id: tests
+    block: shell_exec
+    phase: verify
+    approval: false
+    depends_on: [test_gen]
+    config:
+      working_dir: ${input.working_dir}
+      command: "echo TEST_SKIPPED"   # TODO: replace with your test command
+      timeout_sec: 900
+      allow_nonzero_exit: true
+
+  - id: verify_tests
+    block: verify
+    approval: false
+    depends_on: [tests]
+    verify:
+      subject: tests
+      checks:
+        - { field: success, rule: equals, value: true }
+      on_fail:
+        action: loopback
+        target: impl
+        max_iterations: 3
+        inject_context:
+          test_failures: "$.tests.stdout"
+          test_stderr: "$.tests.stderr"
+
+  # Review-mode orchestrator: read-only quality gate against the plan.
+  - id: review_impl
+    block: orchestrator
+    phase: verify
+    approval: false
+    depends_on: [verify_tests]
+    agent:
+      tier: smart
+      maxTokens: 8192
+      temperature: 0.1
+    config:
+      mode: review
+      working_dir: ${input.working_dir}
+      plan_block: plan_impl
+      max_iterations: 12
+      budget_usd_cap: 1.5
+      prose_fallback: true
+
+  - id: verify_review
+    block: verify
+    approval: false
+    depends_on: [review_impl]
+    verify:
+      subject: review_impl
+      checks:
+        - { field: passed, rule: equals, value: true }
+      on_fail:
+        action: loopback
+        target: impl
+        max_iterations: 2
+        inject_context:
+          retry_instruction: "$.review_impl.retry_instruction"
+          issues: "$.review_impl.issues"
+
+  # Smart-tier acceptance verification: item-by-item against analysis.
+  - id: verify_acceptance
+    block: agent_verify
+    approval: false
+    depends_on: [analysis, verify_review]
+    agent:
+      tier: smart
+      maxTokens: 8192
+    config:
+      subject: analysis
+      working_dir: ${input.working_dir}
+      allowed_tools: [Read, Grep, Glob, Bash]
+      bash_allowlist:
+        - Bash(cat *)
+        - Bash(ls*)
+        # TODO: add your test runner for evidence gathering, e.g.
+        #   - Bash(./gradlew test*)
+        #   - Bash(npm test*)
+      pass_threshold: critical_and_important
+      max_iterations: 12
+      budget_usd_cap: 1.5
+    on_failure:
+      action: loopback
+      target: impl
+      max_iterations: 2
+      inject_context:
+        failed_items: "$.verify_acceptance.failed_items"
+        passed_items: "$.verify_acceptance.passed_items"
+        _previous_verification_results: "$.verify_acceptance.verification_results"
+
+  - id: commit
+    block: shell_exec
+    phase: release
+    approval: false
+    depends_on: [verify_acceptance]
+    config:
+      working_dir: ${input.working_dir}
+      command: |
+        git add -A && \
+        git commit -m "feat: ${task_md.feat_id} ${task_md.title}
+
+        ${task_md.to_be}
+
+        Implements acceptance criteria from ${task_md.slug}.md"
+      allow_nonzero_exit: false

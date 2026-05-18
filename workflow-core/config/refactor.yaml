@@ -1,0 +1,233 @@
+name: refactor
+description: |
+  Refactor pipeline with regression safety (stack-agnostic).
+
+  Flow: task.md → (optional) git_branch → context_scan → analysis →
+  orchestrator plan (approval gate) → agent_with_tools impl → tests →
+  verify_tests (HARD regression gate) → agent_verify (behaviour
+  unchanged + conventions preserved) → commit.
+
+  Refactor MUST NOT change observable behaviour. The existing test
+  suite is the contract — any failure loops back to impl with the
+  failure output. The plan_refactor approval gate gives the operator a
+  kill-switch before any code edits happen.
+
+  Operator must adjust before first run:
+    - working_dir
+    - tests.command (full regression suite — not just changed-module)
+    - impl.bash_allowlist (allow your test runner + git read-only)
+
+  Entry points:
+    - from_task_md: provide a task.md with refactor goal + scope.
+    - from_branch: refactor work already started on a feature branch.
+
+entry_points:
+  - id: from_task_md
+    name: "Refactor per task.md"
+    from_block: task_md
+    requires_input: task_file
+
+  - id: from_branch
+    name: "Refactor an existing branch"
+    from_block: analysis
+    requires_input: branch_name
+    inject:
+      - { block_id: task_md, source: empty }
+      - { block_id: git_branch, source: empty }
+
+pipeline:
+  - id: task_md
+    block: task_md_input
+    approval: false
+    depends_on: []
+    config:
+      file_path: "${input.task_file}"
+
+  - id: git_branch
+    block: git_branch_input
+    approval: false
+    depends_on: [task_md]
+    config:
+      working_dir: ${input.working_dir}
+
+  - id: context_scan
+    block: context_scan
+    phase: analyze
+    approval: false
+    depends_on: [task_md]
+    agent:
+      tier: flash
+      temperature: 0.3
+    config:
+      working_dir: ${input.working_dir}
+
+  # Smart-tier refactor analyst: motivation + risks + blast radius.
+  # Acceptance items MUST be "behaviour preserved" + "conventions
+  # preserved" — NEVER scope-creep into new features.
+  - id: analysis
+    block: analysis
+    approval: true
+    depends_on: [task_md, context_scan, git_branch]
+    agent:
+      tier: smart
+      maxTokens: 8192
+      temperature: 0.3
+      systemPrompt: |
+        You are a refactor analyst. Map output onto the analysis schema:
+          - summary: motivation (why refactor — pain point, debt, complexity)
+          - technical_approach: how to refactor (steps, transformations)
+          - risks: what could break (API surface, behaviour, perf)
+          - affected_components: blast radius — files/modules touched
+          - acceptance_checklist: items that verify ZERO behaviour change
+            AND that existing conventions remain intact
+        NEVER add "while we're here, also add feature X" items. If the
+        change would alter observable behaviour, this is the wrong
+        pipeline — say so explicitly in summary and let the operator
+        switch to feature-generic instead.
+
+  # Plan-mode orchestrator with operator approval gate before any code
+  # edits — refactors deserve a "are you sure?" checkpoint.
+  - id: plan_refactor
+    block: orchestrator
+    phase: analyze
+    approval: true
+    depends_on: [analysis]
+    agent:
+      tier: smart
+      maxTokens: 8192
+      temperature: 0.1
+    config:
+      mode: plan
+      working_dir: ${input.working_dir}
+      context_blocks: [task_md, analysis, context_scan]
+      max_iterations: 20
+      budget_usd_cap: 0.8
+      prose_fallback: true
+
+  - id: impl
+    block: agent_with_tools
+    approval: false
+    depends_on: [plan_refactor]
+    agent:
+      tier: flash
+      maxTokens: 16384
+      temperature: 0.15
+      systemPrompt: |
+        You execute a refactor. Preserve ALL observable behaviour. No
+        new features, no removed features, no behaviour changes — even
+        if you spot something you'd improve, IGNORE it (out of scope).
+        Follow the existing conventions (naming, package layout, idiom).
+        After each touched file, mentally walk through whether its
+        public API is still compatible.
+    config:
+      working_dir: ${input.working_dir}
+      preload_from: plan_refactor
+      user_message: |
+        Refactor: ${task_md.title}
+
+        ## Motivation
+        ${analysis.summary}
+
+        ## Files in scope (from plan)
+        ${plan_refactor.files_to_touch}
+
+        ## Definition of done (from plan)
+        ${plan_refactor.definition_of_done}
+
+        ## Acceptance checklist (behaviour preservation contract)
+        ${analysis.acceptance_checklist}
+
+        ## Existing conventions to follow
+        ${context_scan.conventions}
+
+        Refactor without changing observable behaviour. Run tests after
+        each meaningful change to catch regressions early.
+      allowed_tools: [Read, Write, Edit, Glob, Grep, Bash]
+      bash_allowlist:
+        - Bash(git status)
+        - Bash(git diff*)
+        - Bash(git add*)
+        - Bash(cat *)
+        - Bash(ls*)
+        # TODO: add your test runner — full regression suite:
+        #   - Bash(./gradlew test*)
+        #   - Bash(npm test*)
+        #   - Bash(pytest*)
+      max_iterations: 50
+      budget_usd_cap: 6.0
+      focus_on_failure: true
+
+  - id: tests
+    block: shell_exec
+    phase: verify
+    approval: false
+    depends_on: [impl]
+    config:
+      working_dir: ${input.working_dir}
+      command: "echo TEST_SKIPPED"   # TODO: replace with FULL regression suite
+      timeout_sec: 1200
+      allow_nonzero_exit: true
+
+  # CRITICAL gate: any test failure means the refactor changed behaviour.
+  - id: verify_tests
+    block: verify
+    approval: false
+    depends_on: [tests]
+    verify:
+      subject: tests
+      checks:
+        - { field: success, rule: equals, value: true }
+      on_fail:
+        action: loopback
+        target: impl
+        max_iterations: 3
+        inject_context:
+          test_failures: "$.tests.stdout"
+          test_stderr: "$.tests.stderr"
+          regression_warning: "Refactor must not change behaviour. Failing tests indicate behaviour drift — revert the change that broke them, not the test."
+
+  - id: verify_acceptance
+    block: agent_verify
+    approval: false
+    depends_on: [analysis, verify_tests]
+    agent:
+      tier: smart
+      maxTokens: 8192
+    config:
+      subject: analysis
+      working_dir: ${input.working_dir}
+      allowed_tools: [Read, Grep, Glob, Bash]
+      bash_allowlist:
+        - Bash(cat *)
+        - Bash(ls*)
+        - Bash(git diff*)
+        # TODO: add your test runner for evidence:
+        #   - Bash(./gradlew test*)
+        #   - Bash(npm test*)
+      pass_threshold: critical_and_important
+      max_iterations: 12
+      budget_usd_cap: 1.5
+    on_failure:
+      action: loopback
+      target: impl
+      max_iterations: 2
+      inject_context:
+        failed_items: "$.verify_acceptance.failed_items"
+        passed_items: "$.verify_acceptance.passed_items"
+        _previous_verification_results: "$.verify_acceptance.verification_results"
+
+  - id: commit
+    block: shell_exec
+    phase: release
+    approval: false
+    depends_on: [verify_acceptance]
+    config:
+      working_dir: ${input.working_dir}
+      command: |
+        git add -A && \
+        git commit -m "refactor: ${task_md.feat_id} ${task_md.title}
+
+        ${task_md.to_be}
+
+        Motivation: ${analysis.summary}"
+      allow_nonzero_exit: false

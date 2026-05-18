@@ -352,4 +352,43 @@ public class GitHubClient {
     private String toJson(Object obj) throws IOException {
         return objectMapper.writeValueAsString(obj);
     }
+
+    /**
+     * Merges a pull request via {@code PUT /repos/{owner}/{repo}/pulls/{number}/merge}.
+     * GitHub returns 405 with {@code "Pull Request is not mergeable"} on conflict and
+     * 409 when the head SHA has changed.  Both surface here as an error envelope
+     * (no exception) so the caller can map them to a conflict result.
+     *
+     * @param mergeMethod one of {@code merge | squash | rebase}
+     */
+    public Map<String, Object> mergePr(int number, String mergeMethod,
+                                        String commitTitle, String commitMessage)
+            throws IOException, InterruptedException {
+        Map<String, Object> body = new HashMap<>();
+        body.put("merge_method", mergeMethod);
+        if (commitTitle   != null && !commitTitle.isBlank())   body.put("commit_title", commitTitle);
+        if (commitMessage != null && !commitMessage.isBlank()) body.put("commit_message", commitMessage);
+
+        HttpRequest request = buildRequest("PUT",
+            repoPath("/pulls/" + number + "/merge"), toJson(body));
+        HttpResponse<String> response = sendRaw(request);
+        if (response.statusCode() >= 400) {
+            Map<String, Object> err = new HashMap<>();
+            err.put("error", true);
+            err.put("http_status", response.statusCode());
+            err.put("body", response.body());
+            return err;
+        }
+        return parseMap(response);
+    }
+
+    /** Deletes a branch ref via {@code DELETE /git/refs/heads/{branch}}. No-op on 404. */
+    public void deleteBranch(String branch) throws IOException, InterruptedException {
+        HttpRequest request = buildRequest("DELETE", repoPath("/git/refs/heads/" + branch), null);
+        HttpResponse<String> response = sendRaw(request);
+        // 422 means already deleted on some forks; treat as success. 404 explicitly safe.
+        if (response.statusCode() != 204 && response.statusCode() != 404 && response.statusCode() != 422) {
+            log.warn("GitHub deleteBranch returned HTTP {} for {}", response.statusCode(), branch);
+        }
+    }
 }

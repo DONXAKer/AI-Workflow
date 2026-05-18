@@ -1,0 +1,189 @@
+name: bugfix
+description: |
+  Bug-fix pipeline (stack-agnostic).
+
+  Flow: task.md (bug repro) → analysis (root cause + minimal fix scope) →
+  agent_with_tools (targeted fix) → tests → verify_tests (regression) →
+  verify_fix (LLM quality vs root_cause) → squash commit.
+
+  No orchestrator planning, no test_generation — bugs are usually localised
+  and existing tests are the regression oracle. Loopback budget: tests→impl
+  (×3), verify_fix→impl (×2).
+
+  Operator must adjust before first run:
+    - working_dir (Docker mount path of the target repo)
+    - tests.command (e.g. ./gradlew test, npm test, pytest)
+    - impl.bash_allowlist (allow your test runner + read-only inspection)
+
+  Entry points:
+    - from_task_md: provide an absolute path to a task.md file with bug
+      description, repro steps, and expected behaviour.
+    - from_tracker: provide a YouTrack issue key; analysis runs straight
+      against the tracker payload.
+
+entry_points:
+  - id: from_task_md
+    name: "Fix a bug from task.md"
+    from_block: task_md
+    requires_input: task_file
+
+  - id: from_tracker
+    name: "Fix a bug from YouTrack issue"
+    from_block: analysis
+    requires_input: youtrack_issue
+    inject:
+      - { block_id: task_md, source: empty }
+
+pipeline:
+  - id: task_md
+    block: task_md_input
+    approval: false
+    depends_on: []
+    config:
+      file_path: "${input.task_file}"
+
+  # Smart-tier analyst: identifies root cause, minimal-fix scope.
+  # NEVER expands scope — the acceptance_checklist must encode
+  # "bug demonstrably gone" + "no regression in adjacent areas".
+  - id: analysis
+    block: analysis
+    approval: true
+    depends_on: [task_md]
+    agent:
+      tier: smart
+      maxTokens: 6144
+      temperature: 0.3
+      systemPrompt: |
+        You are a bug-fix analyst. Identify the root cause and the
+        SMALLEST code change that eliminates it. Map output onto the
+        analysis schema like this:
+          - summary: root cause in 1-2 paragraphs
+          - technical_approach: minimal fix scope (which functions/lines
+            to touch and how)
+          - affected_components: files/modules involved
+          - acceptance_checklist: items that prove the bug is gone AND
+            that nothing adjacent has regressed
+        No scope creep. No refactor opportunities. No "while we're here".
+        If the bug requires a structural change, say so in summary and
+        set estimated_complexity=high — the operator will switch to the
+        refactor flow instead of forcing it through bugfix.
+
+  # Flash-tier executor: applies the targeted fix.
+  - id: impl
+    block: agent_with_tools
+    approval: false
+    depends_on: [analysis]
+    agent:
+      tier: flash
+      maxTokens: 8192
+      temperature: 0.15
+      systemPrompt: |
+        You fix exactly the bug described by the analysis below. No
+        unrelated edits. Prefer Edit over Write. Stay inside the
+        working directory. End your turn with one short confirmation
+        sentence when the fix is in.
+    config:
+      working_dir: ${input.working_dir}
+      user_message: |
+        Bug: ${task_md.title}
+
+        ## Repro / symptoms
+        ${task_md.to_be}
+
+        ## Root cause (analysis.summary)
+        ${analysis.summary}
+
+        ## Minimal fix scope (analysis.technical_approach)
+        ${analysis.technical_approach}
+
+        ## Files in scope
+        ${analysis.affected_components}
+
+        ## Acceptance checklist (do not exceed this scope)
+        ${analysis.acceptance_checklist}
+      allowed_tools: [Read, Write, Edit, Glob, Grep, Bash]
+      bash_allowlist:
+        - Bash(git status)
+        - Bash(git diff*)
+        - Bash(git add*)
+        - Bash(cat *)
+        - Bash(ls*)
+        # TODO: add your test runner, e.g.
+        #   - Bash(./gradlew test*)
+        #   - Bash(npm test*)
+        #   - Bash(pytest*)
+      max_iterations: 25
+      budget_usd_cap: 2.0
+      focus_on_failure: true
+
+  - id: tests
+    block: shell_exec
+    phase: verify
+    approval: false
+    depends_on: [impl]
+    config:
+      working_dir: ${input.working_dir}
+      command: "echo TEST_SKIPPED"   # TODO: replace with your test command
+      timeout_sec: 600
+      allow_nonzero_exit: true
+
+  # Regression gate: any failing test loops back to impl with the failure
+  # output injected.
+  - id: verify_tests
+    block: verify
+    approval: false
+    depends_on: [tests]
+    verify:
+      subject: tests
+      checks:
+        - { field: success, rule: equals, value: true }
+      on_fail:
+        action: loopback
+        target: impl
+        max_iterations: 3
+        inject_context:
+          test_failures: "$.tests.stdout"
+          test_stderr: "$.tests.stderr"
+
+  # Quality gate: tests passing isn't enough — LLM checks the fix
+  # actually addresses the root cause described in analysis.
+  - id: verify_fix
+    block: verify
+    approval: false
+    depends_on: [verify_tests, analysis]
+    verify:
+      subject: tests
+      checks:
+        - { field: success, rule: equals, value: true }
+      llm_check:
+        enabled: true
+        prompt: |
+          Rate the fix quality 0-10. The analysis said:
+            root cause (summary): ${analysis.summary}
+            acceptance_checklist: ${analysis.acceptance_checklist}
+          Does the implementation actually fix the root cause without
+          regressions or unrelated edits? Tests passed (that's a given);
+          the question is whether the FIX matches the diagnosis.
+        min_score: 7
+      on_fail:
+        action: loopback
+        target: impl
+        max_iterations: 2
+        inject_context:
+          feedback: "$.verify_fix.issues"
+
+  - id: commit
+    block: shell_exec
+    phase: release
+    approval: false
+    depends_on: [verify_fix]
+    config:
+      working_dir: ${input.working_dir}
+      command: |
+        git add -A && \
+        git commit -m "fix: ${task_md.feat_id} ${task_md.title}
+
+        ${task_md.to_be}
+
+        Root cause: ${analysis.summary}"
+      allow_nonzero_exit: false

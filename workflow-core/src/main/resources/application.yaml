@@ -82,6 +82,18 @@ workflow:
     # escalation is skipped and the ladder jumps to the next human step (or fails if
     # there is no human step). Read by cost-tracking integration in Phase B2.
     max-budget-usd: 10.00
+    # Jaccard-similarity threshold for the NoProgressDetector. When a loopback iteration's
+    # issues repeat the previous iteration's by ≥ this fraction, the loop short-circuits
+    # to the escalation ladder instead of burning the remaining max_iterations on identical
+    # retries. Set > 1.0 to disable the detector entirely. 0.8 = "same set of problems".
+    no-progress-threshold: 0.8
+  parallel-execution:
+    # When true, PipelineRunner uses DagLevelExecutor to detect independent block layers
+    # and run them concurrently via virtual threads. Default off — parallel execution
+    # interacts non-trivially with approval gates / loopback / WebSocket event ordering
+    # and is opt-in until cross-cutting concerns are validated per-block. Operator can
+    # still call DagLevelExecutor.computeLevels() for DAG visualization while the flag is off.
+    enabled: false
   encryption:
     # 32 bytes (AES-256), Base64-encoded. Override via WORKFLOW_ENCRYPTION_KEY in prod.
     # When absent, a development key is used with a loud warning at startup.

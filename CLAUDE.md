@@ -265,6 +265,46 @@ All earlier phases are merged into `main`:
 - **Pipeline editor UI** (Phase 2, `0cd2ff3` + `e2e26db`) — visual editor in `workflow-ui`.
 - **Smart-tier checklist + agent_verify** (`f2e9882`) — `acceptance_checklist` from `analysis` is the single source of truth for "done"; `agent_verify` block enforces it.
 
+### Manager audit (2026-05-18) — guardrails & CI/CD blocks
+
+After a manager-facing audit of the SDLC pipeline, the following gaps from the verdict were closed (or filled in for what existed already):
+
+- **NoProgressDetector** — `core/NoProgressDetector.java` + threshold `workflow.escalation.no-progress-threshold` (default 0.8). Pre-check in `PipelineRunner.handleLoopback`: if this iteration's issues match the previous one by Jaccard ≥ threshold (normalized: lowercase, alphanumeric, length-capped), short-circuits to the escalation ladder instead of burning the remaining `max_iterations`. Marker written to `loop_history_json` as `source: no_progress` with `detected_no_progress=true` and `threshold` for UI diagnosis. `LoopbackTimeline.tsx` renders fuchsia "Зацикливание" icon for these entries.
+- **Approval SLA metrics** — `workflow_approval_wait_seconds` Timer (p50/p95/p99 tagged `status` ∈ {APPROVED, REJECTED, EDIT, SKIP, JUMP, GATE_TIMEOUT, INTERRUPTED, ERROR}) + `workflow_approvals_pending` Gauge in `PipelineMetrics`. Instrumented in `WebSocketApprovalGate` via per-blockId start tracker; exposed at `/actuator/prometheus`.
+- **Orchestrator `run_review` mode** — new tech-lead-gate mode in `OrchestratorBlock`. Aggregates ALL block outputs + quick-look run signals (status/score/iters per block), evaluates against `analysis.acceptance_checklist`, no tool-exploration (Read/Glob only), default max_iter=4, $1.5 budget. Reuses `finalize_review` tool + `computeReviewVerdict` so the gate plugs into existing `on_fail.loopback` patterns. Helper `isReviewSchema()` covers JSON-rescue / markdown extraction / truncation detection / prose synthesis. Output schema is identical to per-block `review`.
+- **vcs_merge real implementation** — `GitLabClient.mergeMr()` (`PUT /merge_requests/:iid/merge`, error envelope for 405/conflict via `merge_status=cannot_be_merged`), `GitHubClient.mergePr()` + `deleteBranch()` (`PUT /pulls/:n/merge`, 405/409 → conflict). `GitLabProvider.merge()` / `GitHubProvider.merge()` implement `VcsProvider.merge()` end-to-end. `VcsMergeBlock` resolves a provider via `VcsProviderRegistry` and returns `status: conflict` + `issues` on merge conflicts — triggers `on_failure.loopback` on codegen for regeneration over the new base.
+- **Build/Deploy/Rollback/VerifyProd real impl** — all four blocks now do real work via `ShellCommandRunner` (build/deploy/rollback) or Java `HttpClient` (verify_prod). Operator opts in via block YAML:
+  - `BuildBlock`: optional `command:` runs in `working_dir`; parses `artifact_id=...` line from stdout. Falls back to synthetic version when no command.
+  - `DeployBlock`: optional `command:` with `{artifact_id}`/`{artifact_version}`/`{env}` placeholders. Standard `${...}` interpolation also applied. On `status=success` writes a row to `deployment_history` (project_slug, env, artifact_id, run_id, deployed_at) for rollback lookup.
+  - `RollbackBlock`: optional `command:` with `{previous_artifact_id}`/`{env}` placeholders. `strategy: forward_fix` still short-circuits. **Previous-artifact resolution cascade:** `config.previous_artifact_id` (operator override) → `deployment_history` (latest success for the same `(projectSlug, environment)` excluding the currently-broken artifact_id from `input.deploy`/`input.build`) → any block output in input carrying an `artifact_id` (legacy fallback). Each return value carries a `source` field so audit logs distinguish history-driven from override-driven rollbacks.
+  - `VerifyProdBlock`: real HTTP health-checks. Each check `{name, type: http, url, expected_status, expected_body_contains}`. Returns `passed=false` + `issues` on any failure — triggers `on_failure.loopback` to rollback. Supports `observation_window_seconds` settle delay before checks.
+  - All shell commands gated by `DenyList.assertBashAllowed` (no force-push / rm -rf / chmod -R / pipe-to-sh).
+- **Deployment history** — `model/DeploymentHistory.java` JPA entity + `DeploymentHistoryRepository`. Append-only log indexed by `(project_slug, environment, deployed_at DESC)`. `findLatestSuccess(env, projectSlug)` and `findPreviousSuccess(env, projectSlug, excludeArtifactId)` power RollbackBlock's lookup. Schema auto-migrates from the entity via `ddl-auto: update`.
+- **DagLevelExecutor — parallel DAG execution wired in `PipelineRunner`** — `core/DagLevelExecutor.java` computes Kahn-style levels and `canParallelizeLevel()` guards (rejects approval / verify-loopback / on_failure-loopback / required_gates / non-opt-in blocks). Wiring in `PipelineRunner.executeBlocks` runs as a `preExecuteParallelLevels()` pre-pass before the canonical sequential loop — for each level where every block opts in via `parallel: true` AND `canParallelizeLevel()` returns true, blocks are fired concurrently via `Thread.startVirtualThread`. Each virtual thread sets its own `ProjectContext` + `LlmCallContext`, calls `runWithRetry(block, inputs, effectiveConfig, run)`, and stashes the result in a `ConcurrentHashMap`. The main loop reads + removes from this map in lieu of calling `runWithRetry` — all the per-block ceremony (cache write, approval gate, verify-loopback, audit, WS events) stays serial and re-uses the canonical code path. Gated by `workflow.parallel-execution.enabled` (default false); per-block opt-in via `parallel: true` on `BlockConfig`. Errors during pre-execution log a warning and let the sequential path retry — main loop's `markFailed` / error-handler stays authoritative.
+
+  YAML example:
+  ```yaml
+  pipeline:
+    - id: task_md
+      block: task_md_input
+      parallel: true     # opt-in
+    - id: preflight
+      block: preflight
+      parallel: true     # opt-in
+    - id: context_scan
+      block: context_scan
+      depends_on: [analysis]
+      parallel: true
+    - id: test_planning
+      block: test_planning
+      depends_on: [analysis]
+      parallel: true
+  ```
+
+Tests added: `NoProgressDetectorTest` (11 cases), `DagLevelExecutorTest` (14 cases — covers parallel opt-in gate + required_gates rejection).
+
+Audit report and verdict: `C:\Users\Root\.claude\plans\compressed-noodling-quill.md`.
+
 Operator runbook for `config/feature.yaml`: `docs/running-feature-pipeline.md`. Other ops docs in `docs/`: `gui-quickstart.md`, `provider-switching.md`, `release-checklist.md`, `task-template.md`, `workflow.md`. Per-task plans live under `docs/plans/`.
 
 Acceptance tests (real-repo run producing a git commit) are user-driven — the pipeline is ready but the operator picks the target repo and task. Tasks live in `tasks/active/` + `tasks/done/` at repo root, `<FEAT-ID>_<slug>.md` convention.

@@ -52,9 +52,52 @@ public class GitHubProvider implements VcsProvider {
 
     @Override
     public MergeResult merge(long mrId, MergeStrategy strategy, boolean deleteBranchAfter,
-                              Map<String, Object> config) {
-        log.warn("GitHub merge not yet wired (pr={}, strategy={})", mrId, strategy);
-        return MergeResult.merged("0000000");
+                              Map<String, Object> config) throws Exception {
+        String method = switch (strategy) {
+            case SQUASH -> "squash";
+            case REBASE -> "rebase";
+            case MERGE  -> "merge";
+        };
+        GitHubClient client = client(config);
+        Map<String, Object> response = client.mergePr((int) mrId, method, null, null);
+
+        if (Boolean.TRUE.equals(response.get("error"))) {
+            int httpStatus = response.get("http_status") instanceof Number n ? n.intValue() : 0;
+            String body = String.valueOf(response.getOrDefault("body", ""));
+            // 405 = "Pull Request is not mergeable" (true conflict / failed required checks).
+            // 409 = base branch moved (rerun with a fresh codegen on top of new base).
+            if (httpStatus == 405 || httpStatus == 409) {
+                log.warn("GitHub merge conflict for pr={} (HTTP {}): {}", mrId, httpStatus, body);
+                return MergeResult.conflict(List.of(
+                    "GitHub PR " + mrId + " HTTP " + httpStatus + ": " + truncate(body, 500)));
+            }
+            throw new RuntimeException("GitHub merge failed for pr=" + mrId
+                + " (HTTP " + httpStatus + "): " + truncate(body, 500));
+        }
+
+        String mergeSha = String.valueOf(response.getOrDefault("sha", ""));
+        Object merged = response.get("merged");
+        if (Boolean.TRUE.equals(merged) || !mergeSha.isBlank()) {
+            // Optional source-branch cleanup. GitHub returns 422 if the branch is already
+            // gone — deleteBranch swallows that and logs at WARN level.
+            if (deleteBranchAfter) {
+                String sourceBranch = String.valueOf(response.getOrDefault("base", ""));
+                // The merge response doesn't include source branch; caller should pass it via
+                // PR metadata. For now skip cleanup when branch isn't known.
+                if (!sourceBranch.isBlank() && !"main".equals(sourceBranch) && !"master".equals(sourceBranch)) {
+                    try { client.deleteBranch(sourceBranch); } catch (Exception e) {
+                        log.warn("Could not delete source branch {}: {}", sourceBranch, e.getMessage());
+                    }
+                }
+            }
+            return MergeResult.merged(mergeSha.isBlank() ? "0000000" : mergeSha);
+        }
+        log.warn("GitHub merge returned ambiguous response for pr={}: {}", mrId, response);
+        return MergeResult.merged(mergeSha.isBlank() ? "0000000" : mergeSha);
+    }
+
+    private static String truncate(String s, int max) {
+        return s.length() <= max ? s : s.substring(0, max) + "...";
     }
 
     private GitHubClient client(Map<String, Object> config) {

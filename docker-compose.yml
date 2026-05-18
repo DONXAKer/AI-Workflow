@@ -11,6 +11,8 @@ services:
       - ${HOME}/.local/share/claude:/home/claude/.local/share/claude:ro
       - ${HOME}/.claude:/home/claude/.claude:rw
       - ${HOME}/.claude.json:/home/claude/.claude.json:rw
+      # Hot-mount pipeline configs so YAML edits land without an image rebuild.
+      - ./workflow-core/config:/app/config:ro
     environment:
       WORKFLOW_MODE: gui
       BROWSE_ROOT_PATH: /projects

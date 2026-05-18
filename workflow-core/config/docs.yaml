@@ -1,0 +1,144 @@
+name: docs
+description: |
+  Documentation pipeline (stack-agnostic).
+
+  Flow: task.md → analysis (doc type + audience + sections) →
+  agent_with_tools (Markdown only, NO Bash) → verify_docs (structural
+  + LLM quality) → commit.
+
+  No build, no tests — documentation doesn't compile. The
+  agent_with_tools block intentionally has NO Bash in allowed_tools,
+  so the writer cannot run anything that could touch production code.
+
+  Operator must adjust before first run:
+    - working_dir
+    - commit.command if your docs live somewhere other than docs/ or
+      top-level *.md
+
+  task.md should describe the documentation goal: API reference, README
+  update, migration guide, runbook, etc.
+
+entry_points:
+  - id: from_task_md
+    name: "Write/update documentation per task.md"
+    from_block: task_md
+    requires_input: task_file
+
+pipeline:
+  - id: task_md
+    block: task_md_input
+    approval: false
+    depends_on: []
+    config:
+      file_path: "${input.task_file}"
+
+  - id: analysis
+    block: analysis
+    approval: true
+    depends_on: [task_md]
+    agent:
+      tier: smart
+      maxTokens: 6144
+      temperature: 0.3
+      systemPrompt: |
+        You are a documentation analyst. Map output onto the analysis
+        schema like this:
+          - summary: doc type (api_reference / readme / migration_guide /
+            runbook / how_to / architecture_overview) + intended audience
+            (end users / API consumers / operators / new contributors /
+            future maintainers)
+          - technical_approach: outline of required sections per file
+          - affected_components: list of *.md paths to create or update
+          - acceptance_checklist: items verifiable by READING the
+            resulting markdown (no shell, no tests — this is docs)
+        Constraint: only Markdown files. If the task asks for
+        non-Markdown output (Confluence page, Notion doc, image
+        diagram), report it as out-of-scope in summary.
+
+  - id: impl_docs
+    block: agent_with_tools
+    approval: false
+    depends_on: [analysis]
+    agent:
+      tier: flash
+      maxTokens: 16384
+      temperature: 0.3
+      systemPrompt: |
+        You write technical documentation in Markdown. Use Read / Glob /
+        Grep to understand the code you're documenting. Write or Edit
+        ONLY *.md files (and image references in docs/). NEVER touch
+        source code — even if you find a bug, document it and stop.
+        Produce clean, well-structured Markdown: headings, code fences
+        with language hints, tables where appropriate. Match the
+        audience identified in analysis. Keep examples runnable.
+    config:
+      working_dir: ${input.working_dir}
+      user_message: |
+        Documentation: ${task_md.title}
+
+        ## Goal
+        ${task_md.to_be}
+
+        ## Doc type & audience (analysis.summary)
+        ${analysis.summary}
+
+        ## Files to write/update (analysis.affected_components)
+        ${analysis.affected_components}
+
+        ## Required sections per file (analysis.technical_approach)
+        ${analysis.technical_approach}
+
+        ## Acceptance checklist
+        ${analysis.acceptance_checklist}
+
+        Write the documentation. Markdown only. No code changes.
+      allowed_tools: [Read, Write, Edit, Glob, Grep]
+      bash_allowlist: []          # No Bash — docs don't need a shell
+      max_iterations: 30
+      budget_usd_cap: 3.0
+      focus_on_failure: true
+
+  - id: verify_docs
+    block: verify
+    approval: false
+    depends_on: [impl_docs]
+    verify:
+      subject: impl_docs
+      checks:
+        - { field: changes, rule: min_items, value: 1 }
+      llm_check:
+        enabled: true
+        prompt: |
+          Rate the documentation 0-10. The analysis said:
+            doc type & audience (summary): ${analysis.summary}
+            acceptance_checklist: ${analysis.acceptance_checklist}
+          Is the resulting documentation:
+            - clear and well-structured for the stated audience?
+            - complete per the acceptance checklist?
+            - free of placeholder TODO sections?
+          Also verify the agent stayed within *.md files (no source-code
+          edits leaked in).
+        min_score: 7
+      on_fail:
+        action: loopback
+        target: impl_docs
+        max_iterations: 2
+        inject_context:
+          feedback: "$.verify_docs.issues"
+
+  - id: commit
+    block: shell_exec
+    phase: release
+    approval: false
+    depends_on: [verify_docs]
+    config:
+      working_dir: ${input.working_dir}
+      # TODO: adjust paths if your docs live somewhere other than
+      # docs/, README.md, and top-level *.md
+      command: |
+        git add '*.md' docs/ README.md 2>/dev/null || true; \
+        git add -A && \
+        git commit -m "docs: ${task_md.feat_id} ${task_md.title}
+
+        ${task_md.to_be}"
+      allow_nonzero_exit: false

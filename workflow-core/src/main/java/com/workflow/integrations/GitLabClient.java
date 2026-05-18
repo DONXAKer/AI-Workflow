@@ -150,6 +150,35 @@ public class GitLabClient {
         return parseMap(response);
     }
 
+    /**
+     * Merges an MR using GitLab's {@code PUT /merge} endpoint. Returns the raw GitLab response.
+     * Caller is responsible for distinguishing success ({@code state == "merged"}) from conflict
+     * (HTTP 405 / 406 / {@code merge_status == "cannot_be_merged"}).
+     *
+     * @param squash      when true, GitLab squashes the source branch commits before merging
+     * @param shouldRemoveSourceBranch deletes source branch on success
+     */
+    public Map<String, Object> mergeMr(int mrIid, boolean squash, boolean shouldRemoveSourceBranch,
+                                        String squashCommitMessage) throws IOException, InterruptedException {
+        Map<String, Object> body = new HashMap<>();
+        body.put("squash", squash);
+        body.put("should_remove_source_branch", shouldRemoveSourceBranch);
+        if (squashCommitMessage != null && !squashCommitMessage.isBlank()) {
+            body.put("squash_commit_message", squashCommitMessage);
+        }
+        HttpRequest request = buildRequest("PUT", projectPath("/merge_requests/" + mrIid + "/merge"), toJson(body));
+        HttpResponse<String> response = send(request);
+        if (response.statusCode() >= 400) {
+            // 405 = merge conflict / not mergeable, 406 = already merged. Surface body for diagnosis.
+            Map<String, Object> err = new HashMap<>();
+            err.put("error", true);
+            err.put("http_status", response.statusCode());
+            err.put("body", response.body());
+            return err;
+        }
+        return parseMap(response);
+    }
+
     public Map<String, Object> getMergeRequestByBranch(String sourceBranch) throws IOException, InterruptedException {
         String encoded = URLEncoder.encode(sourceBranch, StandardCharsets.UTF_8);
         HttpRequest request = buildRequest("GET",

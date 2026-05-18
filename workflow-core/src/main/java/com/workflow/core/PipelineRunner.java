@@ -88,6 +88,15 @@ public class PipelineRunner {
     @Autowired
     private EscalationService escalationService;
 
+    @Autowired
+    private NoProgressDetector noProgressDetector;
+
+    @Autowired(required = false)
+    private DagLevelExecutor dagLevelExecutor;
+
+    @Autowired
+    private EscalationProperties escalationProperties;
+
     private Map<String, Block> blockRegistry;
 
     @Autowired(required = false)
@@ -770,6 +779,23 @@ public class PipelineRunner {
             return -1;
         }
 
+        // No-progress detector: when this iteration's issues repeat the previous one's
+        // (Jaccard ≥ threshold), force-stop the local-tier loop so the caller can fall
+        // through to the escalation ladder (cloud → human) without burning the remaining
+        // budget on identical retries.
+        if (iterations >= 1 && noProgressDetector != null) {
+            double threshold = escalationProperties != null
+                    ? escalationProperties.getNoProgressThreshold() : 0.8;
+            List<List<String>> prior = noProgressDetector.extractPriorIssues(
+                    run.getLoopHistoryJson(), fromBlockId, targetId, objectMapper);
+            if (noProgressDetector.isStuck(prior, issues, threshold)) {
+                log.warn("Loopback '{}' detected no-progress (jaccard ≥ {}, iteration {}), short-circuiting to escalation",
+                        loopKey, threshold, iterations + 1);
+                appendNoProgressHistoryEntry(run, fromBlockId, targetId, iterations + 1, issues, threshold);
+                return -1;
+            }
+        }
+
         run.getLoopIterations().put(loopKey, iterations + 1);
 
         // Find target index
@@ -814,6 +840,33 @@ public class PipelineRunner {
 
         log.info("Loopback triggered: {} → {} (iteration {}/{})", fromBlockId, targetId, iterations + 1, maxIterations);
         return targetIndex;
+    }
+
+    /**
+     * Records a stuck-loop marker in {@code loop_history_json} so the UI can surface
+     * why the chain short-circuited and to keep an audit trail for cost-postmortems.
+     */
+    private void appendNoProgressHistoryEntry(PipelineRun run, String fromBlockId, String targetId,
+                                                int iteration, List<String> issues, double threshold) {
+        try {
+            String histJson = run.getLoopHistoryJson() != null ? run.getLoopHistoryJson() : "[]";
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> history = objectMapper.readValue(histJson,
+                    new TypeReference<List<Map<String, Object>>>() {});
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("timestamp", Instant.now().toString());
+            entry.put("from_block", fromBlockId);
+            entry.put("to_block", targetId);
+            entry.put("iteration", iteration);
+            entry.put("issues", issues);
+            entry.put("source", "no_progress");
+            entry.put("detected_no_progress", true);
+            entry.put("threshold", threshold);
+            history.add(entry);
+            run.setLoopHistoryJson(objectMapper.writeValueAsString(history));
+        } catch (Exception e) {
+            log.warn("Failed to append no-progress history entry: {}", e.getMessage());
+        }
     }
 
     /**
@@ -920,10 +973,118 @@ public class PipelineRunner {
         return -1;
     }
 
+    /**
+     * Opt-in pre-execution of {@code parallel: true} DAG levels via virtual threads.
+     * Returns a map {@code blockId → output} consumed by the main loop in place of
+     * {@code runWithRetry}. Per-block ceremony (cache writes, approval, verify-loopback,
+     * audit, WS events) stays on the canonical sequential path — this method only
+     * captures the {@code block.run()} result concurrently.
+     *
+     * <p>Sync-safety:
+     * <ul>
+     *   <li>Each virtual thread sets its own {@link com.workflow.project.ProjectContext}
+     *       and {@link com.workflow.llm.LlmCallContext} — no cross-thread leakage</li>
+     *   <li>{@link PipelineRun} mutable state ({@code completedBlocks}, {@code outputs})
+     *       is read-only in this pass; writes happen later in the main loop</li>
+     *   <li>{@code canParallelizeLevel} rejects levels with approval / loopback peers,
+     *       so we never block in parallel on operator input</li>
+     * </ul>
+     */
+    private Map<String, Map<String, Object>> preExecuteParallelLevels(
+            PipelineConfig config, PipelineRun run, List<BlockConfig> sortedBlocks,
+            String currentRequirement, Map<String, Object> integrationConfigs) {
+
+        Map<String, Map<String, Object>> results = new ConcurrentHashMap<>();
+        if (noProgressDetector == null || dagLevelExecutor == null) return results;
+        if (!dagLevelExecutor.isEnabled()) return results;
+        // Cheap pre-check: skip the whole pass when no block opts in.
+        boolean anyParallel = sortedBlocks.stream().anyMatch(BlockConfig::isParallel);
+        if (!anyParallel) return results;
+
+        List<List<BlockConfig>> levels = dagLevelExecutor.computeLevels(sortedBlocks, run.getCompletedBlocks());
+        String projectSlug = run.getProjectSlug();
+
+        for (List<BlockConfig> level : levels) {
+            if (!dagLevelExecutor.canParallelizeLevel(level)) continue;
+
+            // Filter out anything that the sequential loop will skip anyway. Doing this
+            // before forking keeps virtual-thread fan-out tight.
+            List<BlockConfig> firable = new ArrayList<>(level.size());
+            for (BlockConfig bc : level) {
+                String bid = bc.getId();
+                if (run.getCompletedBlocks().contains(bid)) continue;
+                if (!bc.isEnabled()) continue;
+                if (bc.getCondition() != null && !bc.getCondition().isBlank()
+                        && !evaluateCondition(bc.getCondition(), run)) {
+                    continue;
+                }
+                firable.add(bc);
+            }
+            if (firable.size() < 2) continue;
+
+            log.info("Parallel pre-execution: level of {} blocks ({})", firable.size(),
+                firable.stream().map(BlockConfig::getId).toList());
+
+            List<CompletableFuture<Void>> futures = new ArrayList<>(firable.size());
+            for (BlockConfig bc : firable) {
+                CompletableFuture<Void> future = new CompletableFuture<>();
+                Thread.startVirtualThread(() -> {
+                    com.workflow.project.ProjectContext.set(projectSlug);
+                    try {
+                        BlockConfig effective = bc.withMergedConfig(integrationConfigs);
+                        effective.setAgent(agentProfileResolver.resolveAgent(effective, config.getDefaults()));
+                        effective.setSkills(agentProfileResolver.resolveSkills(effective));
+                        effective = escalationService.applyRuntimeOverride(effective, run);
+
+                        Block block = blockRegistry.get(bc.getBlock());
+                        if (block == null) {
+                            log.warn("Parallel pre-exec: unknown block type '{}' for {} — main loop will fail",
+                                bc.getBlock(), bc.getId());
+                            future.complete(null);
+                            return;
+                        }
+
+                        Map<String, Object> inputs = gatherInputs(bc, run, currentRequirement);
+                        if (run.isDryRun()) inputs.put("_dry_run", true);
+
+                        com.workflow.llm.LlmCallContext.set(run.getId(), bc.getId(),
+                            escalationService.effectiveProvider(run, bc.getId(), resolveRunProvider(run)));
+                        try {
+                            Map<String, Object> output = runWithRetry(block, inputs, effective, run);
+                            results.put(bc.getId(), output);
+                        } finally {
+                            com.workflow.llm.LlmCallContext.clear();
+                        }
+                    } catch (Exception e) {
+                        // Don't propagate — the main loop will see no pre-computed output for
+                        // this block and re-run it sequentially, which gives us the standard
+                        // error handling path (markFailed + audit) instead of an opaque
+                        // CompletableFuture failure.
+                        log.warn("Parallel pre-exec of block {} failed; main loop will retry sequentially: {}",
+                            bc.getId(), e.getMessage());
+                    } finally {
+                        com.workflow.project.ProjectContext.clear();
+                        future.complete(null);
+                    }
+                });
+                futures.add(future);
+            }
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+        }
+        log.info("Parallel pre-execution complete: {} block(s) pre-computed", results.size());
+        return results;
+    }
+
     private void executeBlocks(PipelineConfig config, PipelineRun run,
                                 String currentRequirement, boolean skipCompleted) {
         List<BlockConfig> sortedBlocks = topologicalSort(config.getPipeline());
         Map<String, Object> integrationConfigs = resolveIntegrationConfigs(config, run);
+
+        // Pre-execute opt-in parallel levels. Result map is read+removed by the main loop
+        // when a block has been pre-computed concurrently, so the per-block ceremony
+        // (cache, approval, verify, audit) still happens serially in the canonical loop.
+        Map<String, Map<String, Object>> preComputedOutputs =
+            preExecuteParallelLevels(config, run, sortedBlocks, currentRequirement, integrationConfigs);
 
         int i = 0;
         while (i < sortedBlocks.size()) {
@@ -1049,7 +1210,19 @@ public class PipelineRunner {
                     }
                 }
             }
-            if (!cacheHit) try {
+            // Fast path: parallel pre-execution already produced this block's output.
+            Map<String, Object> preComputed = preComputedOutputs.remove(blockId);
+            if (preComputed != null && !cacheHit) {
+                log.info("Block {} ({}) using pre-computed parallel output", blockId, blockConfig.getBlock());
+                output = preComputed;
+                try {
+                    OutputValidator.validate(output, effectiveBlockConfig.getValidateOutput(), blockId);
+                } catch (OutputValidationException ve) {
+                    log.error("Block {} pre-computed output failed validation: {}", blockId, ve.getMessage());
+                    markFailed(run, "Block " + blockId + " failed: " + ve.getMessage(), ve);
+                    throw new RuntimeException("Block validation failed: " + blockId, ve);
+                }
+            } else if (!cacheHit) try {
                 log.info("Running block: {} ({})", blockId, blockConfig.getBlock());
                 if (prodDeploy) prodDeployMutex.acquire(run.getId());
                 com.workflow.llm.LlmCallContext.set(run.getId(), blockId,

@@ -35,6 +35,14 @@ public class EscalationProperties {
      */
     private double maxBudgetUsd = 10.00;
 
+    /**
+     * Jaccard-similarity threshold above which a loopback chain is considered "stuck"
+     * (issues from this iteration repeat those from the prior one) and escalation
+     * fires preemptively, without burning the remaining {@code max_iterations}.
+     * Set to a value &gt; 1.0 to disable the detector entirely.
+     */
+    private double noProgressThreshold = 0.8;
+
     public List<StepDefinition> getDefaults() { return defaults; }
     public void setDefaults(List<StepDefinition> defaults) {
         this.defaults = defaults != null ? defaults : new ArrayList<>();
@@ -42,6 +50,11 @@ public class EscalationProperties {
 
     public double getMaxBudgetUsd() { return maxBudgetUsd; }
     public void setMaxBudgetUsd(double maxBudgetUsd) { this.maxBudgetUsd = maxBudgetUsd; }
+
+    public double getNoProgressThreshold() { return noProgressThreshold; }
+    public void setNoProgressThreshold(double noProgressThreshold) {
+        this.noProgressThreshold = noProgressThreshold;
+    }
 
     /**
      * Converts the flat property bindings into typed {@link EscalationStep} list.

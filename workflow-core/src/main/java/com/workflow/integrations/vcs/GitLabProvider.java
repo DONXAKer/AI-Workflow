@@ -58,12 +58,48 @@ public class GitLabProvider implements VcsProvider {
 
     @Override
     public MergeResult merge(long mrId, MergeStrategy strategy, boolean deleteBranchAfter,
-                              Map<String, Object> config) {
-        // GitLab merge via PUT /api/v4/projects/:id/merge_requests/:iid/merge not yet wired
-        // in GitLabClient. Returns a placeholder — real conflict detection lands with the
-        // VcsMergeBlock real integration.
-        log.warn("GitLab merge not yet wired (mr={}, strategy={})", mrId, strategy);
-        return MergeResult.merged("0000000");
+                              Map<String, Object> config) throws Exception {
+        // GitLab's API exposes squash vs. plain merge as a boolean. REBASE has no
+        // first-class API equivalent — the recommended pattern is rebase-then-merge via the
+        // separate /rebase endpoint, which is out of scope here. We log + fall back to merge.
+        boolean squash = strategy == MergeStrategy.SQUASH;
+        if (strategy == MergeStrategy.REBASE) {
+            log.warn("GitLab REBASE strategy not directly supported by /merge endpoint; falling back to MERGE for mr={}", mrId);
+        }
+        Map<String, Object> response = client(config).mergeMr((int) mrId, squash, deleteBranchAfter, null);
+
+        // Error envelope from GitLabClient.mergeMr() — surface as conflict when 405 (the
+        // typical "cannot be merged" status), otherwise propagate as an unrecoverable failure.
+        if (Boolean.TRUE.equals(response.get("error"))) {
+            int httpStatus = response.get("http_status") instanceof Number n ? n.intValue() : 0;
+            String body = String.valueOf(response.getOrDefault("body", ""));
+            if (httpStatus == 405 || body.toLowerCase().contains("cannot_be_merged")) {
+                log.warn("GitLab merge conflict for mr={}: {}", mrId, body);
+                return MergeResult.conflict(List.of(
+                    "GitLab MR " + mrId + " cannot be merged: " + truncate(body, 500)));
+            }
+            throw new RuntimeException("GitLab merge failed for mr=" + mrId
+                + " (HTTP " + httpStatus + "): " + truncate(body, 500));
+        }
+
+        String mergeSha = String.valueOf(response.getOrDefault("merge_commit_sha",
+            response.getOrDefault("sha", "")));
+        String state = String.valueOf(response.getOrDefault("state", ""));
+        if ("merged".equalsIgnoreCase(state) || !mergeSha.isBlank()) {
+            return MergeResult.merged(mergeSha.isBlank() ? "0000000" : mergeSha);
+        }
+        // GitLab sometimes responds 200 with merge_status=cannot_be_merged.
+        String mergeStatus = String.valueOf(response.getOrDefault("merge_status", ""));
+        if ("cannot_be_merged".equalsIgnoreCase(mergeStatus)) {
+            return MergeResult.conflict(List.of("merge_status=cannot_be_merged for mr=" + mrId));
+        }
+        // Unknown response — treat as success with the data we have rather than guess at conflicts.
+        log.warn("GitLab merge returned ambiguous response for mr={}: {}", mrId, response);
+        return MergeResult.merged(mergeSha.isBlank() ? "0000000" : mergeSha);
+    }
+
+    private static String truncate(String s, int max) {
+        return s.length() <= max ? s : s.substring(0, max) + "...";
     }
 
     private GitLabClient client(Map<String, Object> config) {

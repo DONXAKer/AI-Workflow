@@ -1,5 +1,6 @@
 package com.workflow.core;
 
+import com.workflow.observability.PipelineMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -7,6 +8,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -23,8 +26,14 @@ public class WebSocketApprovalGate implements ApprovalGate {
     @Autowired
     private SimpMessagingTemplate messagingTemplate;
 
+    @Autowired(required = false)
+    private PipelineMetrics metrics;
+
     private final ConcurrentHashMap<String, CompletableFuture<ApprovalResult>> pendingApprovals =
         new ConcurrentHashMap<>();
+
+    /** Tracks when each approval started so SLA / wait-time metrics are accurate. */
+    private final ConcurrentHashMap<String, Instant> approvalStarts = new ConcurrentHashMap<>();
 
     /**
      * Pre-stored results for cases where the pipeline thread died (e.g. server restart)
@@ -47,6 +56,8 @@ public class WebSocketApprovalGate implements ApprovalGate {
 
         CompletableFuture<ApprovalResult> future = new CompletableFuture<>();
         pendingApprovals.put(blockId, future);
+        approvalStarts.put(blockId, Instant.now());
+        if (metrics != null) metrics.approvalPaused();
 
         try {
             // Wait up to 1 hour for approval
@@ -55,13 +66,16 @@ public class WebSocketApprovalGate implements ApprovalGate {
 
         } catch (TimeoutException e) {
             pendingApprovals.remove(blockId);
+            recordResolved(blockId, "GATE_TIMEOUT");
             throw new PipelineRejectedException("Approval timeout for block: " + blockId);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             pendingApprovals.remove(blockId);
+            recordResolved(blockId, "INTERRUPTED");
             throw new PipelineRejectedException("Approval interrupted for block: " + blockId);
         } catch (Exception e) {
             pendingApprovals.remove(blockId);
+            recordResolved(blockId, "ERROR");
             throw new RuntimeException("Approval gate error for block: " + blockId, e);
         }
     }
@@ -74,11 +88,22 @@ public class WebSocketApprovalGate implements ApprovalGate {
         CompletableFuture<ApprovalResult> future = pendingApprovals.remove(blockId);
         if (future != null) {
             future.complete(result);
+            recordResolved(blockId, result.getStatus() != null ? result.getStatus() : "UNKNOWN");
             log.info("Resolved approval for block: {} with status: {}", blockId, result.getStatus());
             return true;
         } else {
             log.warn("No pending approval found for block: {} (server restart?)", blockId);
             return false;
+        }
+    }
+
+    private void recordResolved(String blockId, String status) {
+        Instant started = approvalStarts.remove(blockId);
+        if (metrics != null && started != null) {
+            metrics.approvalResolved(status, Duration.between(started, Instant.now()));
+        } else if (metrics != null) {
+            // Resolve without a recorded start (e.g. preApproved path): still decrement gauge.
+            metrics.approvalResolved(status, Duration.ZERO);
         }
     }
 

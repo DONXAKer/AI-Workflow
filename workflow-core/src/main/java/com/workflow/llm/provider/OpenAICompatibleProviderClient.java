@@ -43,6 +43,18 @@ import java.util.Map;
  */
 abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
 
+    /**
+     * S1 (manager audit 2026-05-18): AllTokens.ru returns the `cost` field in rubles,
+     * not USD — but the downstream {@code budget_usd_cap} comparison and
+     * {@code cost_usd} DB column are USD-named. Without conversion impl_docs/impl_bp
+     * hit BUDGET_EXCEEDED almost immediately because a ₽-denominated cost of 0.4
+     * looks "huge" relative to a $2 cap. Convert ₽→$ at the extraction point so
+     * the rest of the stack stays single-currency. Rate is approximate (₽~100/$
+     * mid-2026); precise per-call FX is out of scope — operator can adjust if
+     * AllTokens-billing semantics ever change.
+     */
+    private static final double RUB_PER_USD = 100.0;
+
     protected final ObjectMapper objectMapper;
     protected final ModelPresetResolver presetResolver;
     private final LlmCallRepository llmCallRepository;
@@ -57,6 +69,19 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
 
     /** Subclass-specific logger so log lines carry the provider name. */
     protected abstract Logger logger();
+
+    /**
+     * Convert the provider's reported `cost` field into USD-equivalent so downstream
+     * {@code budget_usd_cap} and DB {@code cost_usd} columns are consistent across
+     * providers. AllTokens.ru reports rubles; everyone else (OpenRouter, AITunnel,
+     * vLLM) — USD or 0. See {@link #RUB_PER_USD} javadoc.
+     */
+    protected double costInUsd(double rawCost) {
+        if (providerType() == com.workflow.llm.LlmProvider.ALLTOKENS) {
+            return rawCost / RUB_PER_USD;
+        }
+        return rawCost;
+    }
 
     /** Builds a fresh {@link WebClient} for the provider — baseUrl, auth headers,
      *  and {@code responseTimeout}. Called per-request (cheap, all state is on the
@@ -372,7 +397,8 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
             JsonNode usage = responseJson.path("usage");
             int tokensIn = usage.path("prompt_tokens").asInt(0);
             int tokensOut = usage.path("completion_tokens").asInt(0);
-            double cost = usage.path("cost").asDouble(0.0);
+            // S1: convert RUB→USD for ALLTOKENS so budgetUsdCap comparison is single-currency
+            double cost = costInUsd(usage.path("cost").asDouble(0.0));
             totalTokensIn += tokensIn;
             totalTokensOut += tokensOut;
             totalCostUsd += cost;
@@ -529,7 +555,8 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
             JsonNode usage = responseJson.path("usage");
             int tokensIn = usage.path("prompt_tokens").asInt(0);
             int tokensOut = usage.path("completion_tokens").asInt(0);
-            double cost = usage.path("cost").asDouble(0.0);
+            // S1: convert RUB→USD for ALLTOKENS so DB cost_usd column is single-currency
+            double cost = costInUsd(usage.path("cost").asDouble(0.0));
             String finishReason = responseJson.path("choices").path(0).path("finish_reason").asText("");
 
             LlmCall call = new LlmCall();

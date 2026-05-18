@@ -384,15 +384,74 @@ class OrchestratorBlockTest {
     }
 
     @Test
-    void verdict_emptyChecklistAndNoRegressions_passed() {
+    void verdict_emptyChecklist_escalatesNotAutoPass() {
+        // S2 (2026-05-18): empty checklist_status is a reviewer-side bug — refuse
+        // to auto-pass, otherwise impl-did-nothing slips through to commit (the
+        // FEAT-DOCS-001 silent-success scenario).
         var v = OrchestratorBlock.computeReviewVerdict(
             List.of(), List.of(), Map.of(), "retry");
-        assertTrue(v.passed());
-        assertEquals("continue", v.action());
+        assertFalse(v.passed(), "empty checklist_status must NOT auto-pass");
+        assertEquals("escalate", v.action());
+        assertTrue(v.issues().contains("empty checklist_status"),
+            "issues must explain the reason");
+    }
+
+    @Test
+    void verdict_nullChecklist_alsoEscalates() {
+        // Defensive: null array path same as empty.
+        var v = OrchestratorBlock.computeReviewVerdict(
+            null, List.of(), Map.of(), "retry");
+        assertFalse(v.passed());
+        assertEquals("escalate", v.action());
     }
 
     private static Map<String, Object> item(String id, boolean passed, String evidence, String fix) {
         return Map.of("id", id, "passed", passed, "evidence", evidence, "fix", fix);
+    }
+
+    // ── synthesizeAcceptanceChecklistFromDod (S5) ─────────────────────────────
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void synth_emptyChecklist_andDodPresent_derivesItems() {
+        Map<String, Object> result = new HashMap<>();
+        result.put("acceptance_checklist", List.of());
+        result.put("definition_of_done", "- Все .md из client/Documentation/ классифицированы\n- STATUS.md обновлён\n- В tasks/active/*.md добавлены ссылки\n");
+        OrchestratorBlock.synthesizeAcceptanceChecklistFromDod(result);
+        var list = (List<Map<String,Object>>) result.get("acceptance_checklist");
+        assertEquals(3, list.size());
+        assertEquals("dod-1", list.get(0).get("id"));
+        assertEquals("important", list.get(0).get("priority"));
+        assertEquals("derived", list.get(0).get("source"));
+        assertTrue(((String)list.get(0).get("text")).contains("client/Documentation"));
+    }
+
+    @Test
+    void synth_existingNonEmptyChecklist_preserved() {
+        Map<String, Object> result = new HashMap<>();
+        result.put("acceptance_checklist", List.of(item("real-1", true, "ok", "")));
+        result.put("definition_of_done", "- some dod line\n");
+        OrchestratorBlock.synthesizeAcceptanceChecklistFromDod(result);
+        @SuppressWarnings("unchecked")
+        var list = (List<Map<String,Object>>) result.get("acceptance_checklist");
+        assertEquals(1, list.size());
+        assertEquals("real-1", list.get(0).get("id"), "non-empty checklist must be preserved untouched");
+    }
+
+    @Test
+    void synth_noDod_noChange() {
+        Map<String, Object> result = new HashMap<>();
+        result.put("acceptance_checklist", List.of());
+        // no definition_of_done at all
+        OrchestratorBlock.synthesizeAcceptanceChecklistFromDod(result);
+        assertTrue(((List<?>)result.get("acceptance_checklist")).isEmpty(),
+            "no DoD source → checklist stays empty (review-mode will hit S2 escalate)");
+    }
+
+    @Test
+    void synth_nullInput_noThrow() {
+        OrchestratorBlock.synthesizeAcceptanceChecklistFromDod(null);
+        // just verify no NPE
     }
 
     // ── fixCommonJsonErrors ───────────────────────────────────────────────────

@@ -211,7 +211,7 @@ public class AgentWithToolsBlock implements Block {
     public Map<String, Object> run(Map<String, Object> input, BlockConfig blockConfig, PipelineRun run) throws Exception {
         Map<String, Object> cfg = blockConfig.getConfig() != null ? blockConfig.getConfig() : Map.of();
 
-        String workingDirStr = resolveWorkingDir(cfg);
+        String workingDirStr = resolveWorkingDir(cfg, input, run);
         Path workingDir = Paths.get(workingDirStr).toAbsolutePath();
         if (!workingDir.toFile().isDirectory()) {
             throw new IllegalArgumentException(
@@ -445,10 +445,14 @@ public class AgentWithToolsBlock implements Block {
      * Resolves working_dir in priority order: block config → current project's
      * {@link Project#getWorkingDir()}. Fails if neither is set.
      */
-    private String resolveWorkingDir(Map<String, Object> cfg) {
+    private String resolveWorkingDir(Map<String, Object> cfg,
+            Map<String, Object> input, PipelineRun run) {
         Object inline = cfg.get("working_dir");
         if (inline != null && !inline.toString().isBlank()) {
-            return inline.toString();
+            String raw = inline.toString();
+            return stringInterpolator != null
+                ? stringInterpolator.interpolate(raw, run, input)
+                : raw;
         }
         if (projectRepository != null) {
             String slug = ProjectContext.get();

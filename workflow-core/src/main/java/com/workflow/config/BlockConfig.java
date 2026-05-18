@@ -25,6 +25,17 @@ public class BlockConfig {
 
     private boolean enabled = true;
 
+    /**
+     * Opt-in flag for {@link com.workflow.core.DagLevelExecutor}-driven concurrent execution.
+     * When {@code true} AND every other block at the same DAG level is also marked parallel
+     * AND the level passes {@link com.workflow.core.DagLevelExecutor#canParallelizeLevel(List)}
+     * AND {@code workflow.parallel-execution.enabled=true}, the runner fires the level's blocks
+     * concurrently via virtual threads instead of one-at-a-time. Default {@code false} keeps
+     * existing pipelines on the well-tested sequential path.
+     */
+    @JsonProperty("parallel")
+    private boolean parallel = false;
+
     @JsonProperty("depends_on")
     private List<String> dependsOn = new ArrayList<>();
 
@@ -116,6 +127,14 @@ public class BlockConfig {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public boolean isParallel() {
+        return parallel;
+    }
+
+    public void setParallel(boolean parallel) {
+        this.parallel = parallel;
     }
 
     /**
