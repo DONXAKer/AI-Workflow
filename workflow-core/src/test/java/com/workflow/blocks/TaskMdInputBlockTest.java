@@ -116,6 +116,74 @@ class TaskMdInputBlockTest {
     }
 
     @Test
+    void docsTaskSuppressesImplFlags(@TempDir Path wd) throws Exception {
+        Path task = wd.resolve("FEAT-DOCS-001-migrate-active-design-docs.md");
+        Files.writeString(task, """
+            # Миграция документации
+
+            ## Как сейчас
+            В client/Documentation/ остались файлы:
+            - DiceRoll_Blueprint_Design.md
+            - WBP_UnitTooltip_Blueprint_Design.md
+            - GameSettings_Blueprint_Design.md
+
+            ## Как надо
+            Каждый файл классифицировать и либо привязать к task, либо удалить.
+            """);
+
+        Map<String, Object> out = block.run(Map.of(), cfgWith(task.toString()), new PipelineRun());
+
+        assertEquals("FEAT-DOCS-001", out.get("feat_id"));
+        assertTrue((Boolean) out.get("is_docs"),
+            "FEAT-DOCS- prefix должен ставить is_docs=true");
+        assertFalse((Boolean) out.get("needs_bp"),
+            "is_docs=true должен подавлять needs_bp несмотря на '*_Blueprint_Design.md' в теле");
+        assertFalse((Boolean) out.get("needs_client"),
+            "is_docs=true должен подавлять needs_client несмотря на упоминания client/");
+        assertFalse((Boolean) out.get("needs_server"));
+        assertFalse((Boolean) out.get("needs_contract_change"));
+    }
+
+    @Test
+    void wordBoundaryAvoidsSubstringFalsePositive(@TempDir Path wd) throws Exception {
+        // Не-DOCS feat_id, но в теле перечислены *_Blueprint_Design.md файлы как ссылки —
+        // word-boundary regex не должен матчить "blueprint" внутри _Blueprint_Design.
+        Path task = wd.resolve("FEAT-REFA-001-rename-files.md");
+        Files.writeString(task, """
+            # Переименовать файлы
+
+            ## Как сейчас
+            Существуют файлы:
+            - GameSettings_Blueprint_Design.md
+            - DiceRoll_Blueprint_Design.md
+
+            ## Как надо
+            Переименовать в snake_case.
+            """);
+
+        Map<String, Object> out = block.run(Map.of(), cfgWith(task.toString()), new PipelineRun());
+        assertFalse((Boolean) out.get("needs_bp"),
+            "'blueprint' внутри *_Blueprint_Design.md не должен триггерить needs_bp");
+        assertFalse((Boolean) out.get("is_docs"),
+            "feat_id=FEAT-REFA — не DOCS-префикс, is_docs=false");
+    }
+
+    @Test
+    void wordBoundaryStillMatchesStandaloneKeyword(@TempDir Path wd) throws Exception {
+        Path task = wd.resolve("FEAT-HUD-002-tooltip-widget.md");
+        Files.writeString(task, """
+            # Tooltip widget
+
+            ## Как надо
+            Реализовать tooltip как Blueprint widget в UMG editor.
+            """);
+
+        Map<String, Object> out = block.run(Map.of(), cfgWith(task.toString()), new PipelineRun());
+        assertTrue((Boolean) out.get("needs_bp"),
+            "standalone 'Blueprint' / 'widget' / 'umg' слова должны триггерить needs_bp");
+    }
+
+    @Test
     void missingFileFails(@TempDir Path wd) {
         assertThrows(IllegalArgumentException.class,
             () -> block.run(Map.of(), cfgWith(wd.resolve("nope.md").toString()), new PipelineRun()));
