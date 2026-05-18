@@ -17,6 +17,16 @@ const PROJECT_SPECIFIC_PIPELINES = new Set([
   'skill_marketplace.yaml',
 ])
 
+/**
+ * Pipelines whose YAML still hardcodes per-block config that the test can't
+ * synthesize from a fresh mini-target-repo. Tracked as a follow-up — these
+ * need a config-field default (e.g. {@code branch: main} in git_branch_input)
+ * before they can run portably.
+ */
+const PIPELINES_WITH_HARDCODED_BLOCK_DEPS = new Set([
+  'refactor.yaml', // git_branch_input requires `branch` config, no default
+])
+
 export function pipelineSkipReason(p: EnumeratedPipeline): string | undefined {
   const env = loadEnv()
   if (p.entryPoints.length === 0) {
@@ -24,6 +34,9 @@ export function pipelineSkipReason(p: EnumeratedPipeline): string | undefined {
   }
   if (PROJECT_SPECIFIC_PIPELINES.has(p.filename)) {
     return `${p.filename} is project-specific (hardcoded paths) — not portable to mini-target-repo`
+  }
+  if (PIPELINES_WITH_HARDCODED_BLOCK_DEPS.has(p.filename)) {
+    return `${p.filename} needs block-config defaults the test does not synthesize yet`
   }
   if (p.filename === 'pipeline.example.yaml' && !env.pipelineExampleEnabled) {
     return 'pipeline.example.yaml is env-gated (set E2E_PIPELINE_EXAMPLE=1)'
@@ -36,20 +49,28 @@ export function pipelineSkipReason(p: EnumeratedPipeline): string | undefined {
  * provision (existing YouTrack issue / GitLab branch / GitHub PR). Skip those
  * for now — they remain reachable manually via the UI.
  */
+/**
+ * Entry-points that require pre-existing state we don't provision in the fixture:
+ * a real YouTrack issue ID, an existing git branch on a remote, an open MR.
+ * The mini-target-repo is brand-new per spec, so these EPs always fail unless an
+ * operator wires real state — keep them out of the default matrix.
+ */
+const EXTERNAL_STATE_INPUTS = new Set([
+  'youtrack_issue',
+  'youtrack_issue_and_branch',
+  'youtrack_issue_and_mr',
+  'branch_name',
+  'mr_url',
+])
+
 export function entryPointSkipReason(
   p: EnumeratedPipeline,
   ep: PipelineEntryPoint,
 ): string | undefined {
-  const env = loadEnv()
-  const ri = ep.requiresInput
-  if (ri === 'youtrack_issue_and_branch' || ri === 'youtrack_issue_and_mr') {
-    return `${ep.id}: requires pre-existing branch/MR — not auto-provisioned`
-  }
-  if (
-    (ri === 'youtrack_issue' || ri?.startsWith('youtrack_')) &&
-    !env.youtrackToken
-  ) {
-    return `${ep.id}: requires YouTrack token (set YOUTRACK_TOKEN)`
+  loadEnv()
+  const ri = ep.requiresInput ?? ''
+  if (EXTERNAL_STATE_INPUTS.has(ri)) {
+    return `${ep.id}: requires pre-existing external state (${ri}) — not auto-provisioned`
   }
   return undefined
 }

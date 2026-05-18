@@ -63,8 +63,18 @@ public class AllTokensProviderClient extends OpenAICompatibleProviderClient {
     protected WebClient buildWebClient() {
         String baseUrl = "https://api.alltokens.ru/api/v1";
         String apiKey = null;
-        Optional<IntegrationConfig> cfg = integrationConfigRepository
-            .findByTypeAndIsDefaultTrue(IntegrationType.ALLTOKENS);
+        // Prefer the current project's default — multiple projects can each have their
+        // own ALLTOKENS integration row with is_default=true, and the unscoped variant
+        // throws NonUniqueResultException in that case. Fall back to the global default
+        // when no project context is set (CLI runs, scheduled jobs).
+        String slug = com.workflow.project.ProjectContext.get();
+        Optional<IntegrationConfig> cfg = (slug != null && !slug.isBlank())
+            ? integrationConfigRepository.findByTypeAndIsDefaultTrueAndProjectSlug(
+                IntegrationType.ALLTOKENS, slug)
+            : Optional.empty();
+        if (cfg.isEmpty()) {
+            cfg = integrationConfigRepository.findByTypeAndIsDefaultTrue(IntegrationType.ALLTOKENS);
+        }
         if (cfg.isPresent()) {
             IntegrationConfig c = cfg.get();
             if (c.getBaseUrl() != null && !c.getBaseUrl().isBlank()) baseUrl = c.getBaseUrl();
