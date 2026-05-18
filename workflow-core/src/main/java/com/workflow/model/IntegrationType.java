@@ -9,5 +9,6 @@ public enum IntegrationType {
     CLAUDE_CODE_CLI,
     OLLAMA,
     AITUNNEL,
+    ALLTOKENS,
     VLLM
 }

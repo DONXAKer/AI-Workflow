@@ -19,6 +19,12 @@ public enum LlmProvider {
      * different baseUrl + token. Useful when OpenRouter is geoblocked or operator prefers
      * a domestic provider. */
     AITUNNEL,
+    /** AllTokens.ru — second Russian OpenAI-compatible aggregator with intelligent
+     * upstream routing + automatic provider fallback (per their docs). Adopted as
+     * AITunnel fallback after AITunnel/DeepInfra glm-4.6 queue degraded >120s on
+     * analysis-size prompts (2026-05-18). Same call shape as OpenRouter/AITunnel,
+     * different baseUrl + token. */
+    ALLTOKENS,
     /** Local vLLM server — OpenAI-compatible. Hosts AWQ/FP8/NVFP4 quants natively on
      * NVIDIA GPUs; significantly faster than Ollama on the same hardware due to FP8
      * Tensor Cores (Ada+) and Blackwell NVFP4 paths. Coexists with OLLAMA — embeddings

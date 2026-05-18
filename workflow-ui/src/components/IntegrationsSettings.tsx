@@ -10,7 +10,7 @@ import clsx from 'clsx'
 import IntegrationSlideOver from './integrations/IntegrationSlideOver'
 import PageHeader from './layout/PageHeader'
 
-const INTEGRATION_TYPES: IntegrationType[] = ['YOUTRACK', 'GITLAB', 'GITHUB', 'OPENROUTER', 'AITUNNEL', 'UNREAL', 'CLAUDE_CODE_CLI', 'OLLAMA', 'VLLM']
+const INTEGRATION_TYPES: IntegrationType[] = ['YOUTRACK', 'GITLAB', 'GITHUB', 'OPENROUTER', 'AITUNNEL', 'ALLTOKENS', 'UNREAL', 'CLAUDE_CODE_CLI', 'OLLAMA', 'VLLM']
 
 const TYPE_LABELS: Record<IntegrationType, string> = {
   YOUTRACK:        'YouTrack',
@@ -18,6 +18,7 @@ const TYPE_LABELS: Record<IntegrationType, string> = {
   GITHUB:          'GitHub',
   OPENROUTER:      'OpenRouter',
   AITUNNEL:        'AITunnel',
+  ALLTOKENS:       'AllTokens',
   UNREAL:          'Unreal Engine',
   CLAUDE_CODE_CLI: 'Claude Agent',
   OLLAMA:          'Ollama',
@@ -30,6 +31,7 @@ const TYPE_BADGE: Record<IntegrationType, string> = {
   GITHUB:          'bg-slate-700/60 text-slate-300 border-slate-600/50',
   OPENROUTER:      'bg-blue-900/50 text-blue-300 border-blue-800/50',
   AITUNNEL:        'bg-cyan-900/50 text-cyan-300 border-cyan-800/50',
+  ALLTOKENS:       'bg-teal-900/50 text-teal-300 border-teal-800/50',
   UNREAL:          'bg-emerald-900/50 text-emerald-300 border-emerald-800/50',
   CLAUDE_CODE_CLI: 'bg-amber-900/50 text-amber-300 border-amber-800/50',
   OLLAMA:          'bg-purple-900/50 text-purple-300 border-purple-800/50',
@@ -42,6 +44,7 @@ const TYPE_META: Record<IntegrationType, { description: string; icon: LucideIcon
   GITHUB:          { description: 'Репозитории и PR',               icon: Github,      accent: 'text-slate-300'  },
   OPENROUTER:      { description: 'Маршрутизация AI-моделей',       icon: Cpu,         accent: 'text-blue-400'   },
   AITUNNEL:        { description: 'AITunnel.ru — российский AI-шлюз', icon: Cpu,       accent: 'text-cyan-400'   },
+  ALLTOKENS:       { description: 'AllTokens.ru — российский AI-шлюз с auto-fallback', icon: Cpu, accent: 'text-teal-400' },
   UNREAL:          { description: 'Unreal MCP + Blueprint роутинг', icon: Layers,      accent: 'text-emerald-400' },
   CLAUDE_CODE_CLI: { description: 'Claude CLI — подписка Max/API',  icon: Terminal,    accent: 'text-amber-400'  },
   OLLAMA:          { description: 'Локальный Ollama — без API-ключа', icon: Cpu,       accent: 'text-purple-400' },
@@ -311,7 +314,7 @@ function IntegrationForm({ initial, lockedType = false, onSave, onCancel }: Form
           </>
         )}
         {typeHasField(form.type, 'baseUrl') && (
-          <div className={clsx((form.type === 'OPENROUTER' || form.type === 'AITUNNEL' || form.type === 'CLAUDE_CODE_CLI' || form.type === 'OLLAMA' || form.type === 'VLLM') ? 'sm:col-span-2' : '')}>
+          <div className={clsx((form.type === 'OPENROUTER' || form.type === 'AITUNNEL' || form.type === 'ALLTOKENS' || form.type === 'CLAUDE_CODE_CLI' || form.type === 'OLLAMA' || form.type === 'VLLM') ? 'sm:col-span-2' : '')}>
             <label className={labelCls}>
               {form.type === 'CLAUDE_CODE_CLI' ? 'Путь к claude' : 'Base URL'}
               {' '}<span className="text-slate-500">(необязательно)</span>
@@ -325,6 +328,7 @@ function IntegrationForm({ initial, lockedType = false, onSave, onCancel }: Form
                 form.type === 'GITLAB' ? 'https://gitlab.com' :
                 form.type === 'OPENROUTER' ? 'https://openrouter.ai/api/v1' :
                 form.type === 'AITUNNEL' ? 'https://api.aitunnel.ru/v1' :
+                form.type === 'ALLTOKENS' ? 'https://api.alltokens.ru/api/v1' :
                 form.type === 'CLAUDE_CODE_CLI' ? '/usr/local/bin/claude (по умолчанию: claude из PATH)' :
                 form.type === 'OLLAMA' ? 'http://host.docker.internal:11434' :
                 form.type === 'VLLM' ? 'http://host.docker.internal:8003/v1' :

@@ -114,6 +114,7 @@ public class IntegrationController {
             case VLLM:
             case OPENROUTER:
             case AITUNNEL:
+            case ALLTOKENS:
             case OLLAMA:
                 String stripped = normalized.replaceAll("/+$", "");
                 if (!stripped.endsWith("/models")) {

@@ -9,8 +9,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Strategy interface for a single LLM transport (OpenRouter, AITunnel, Ollama, vLLM,
- * Claude Code CLI). Each implementation owns the full request lifecycle for its
+ * Strategy interface for a single LLM transport (OpenRouter, AITunnel, AllTokens, Ollama,
+ * vLLM, Claude Code CLI). Each implementation owns the full request lifecycle for its
  * provider: HTTP client construction, message shape, retry/error handling, tool-use
  * loop (if any), and usage recording.
  *
