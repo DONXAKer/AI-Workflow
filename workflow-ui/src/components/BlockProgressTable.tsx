@@ -2,6 +2,7 @@ import { Loader2, CheckCircle, XCircle, SkipForward, Clock, AlertCircle, Copy, C
 import { BlockStatus, BlockSnapshot, ApprovalMode, ToolCallEntry, LlmCallEntry, LlmProvider } from '../types'
 import { effectiveApprovalMode } from '../utils/configSnapshot'
 import { blockIdLabel } from '../utils/blockLabels'
+import { formatCallCost } from '../utils/costFormat'
 import { getBlockView, BlockViewSpec, FieldSpec } from '../blockViews/index'
 import clsx from 'clsx'
 import { useState, useCallback, useEffect, Fragment } from 'react'
@@ -241,7 +242,7 @@ function IterationTableRow({ iteration, calls, llmCall }: { iteration: number; c
         </td>
         <td className="px-2 py-1.5 text-right text-[10px] text-slate-500 font-mono whitespace-nowrap">
           {llmCall && llmCall.costUsd > 0
-            ? `$${llmCall.costUsd.toFixed(4)}`
+            ? formatCallCost(llmCall.costUsd, llmCall.provider)
             : <span className="text-slate-700">—</span>}
         </td>
         <td className="px-2 py-1.5">
@@ -925,7 +926,9 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
               const hasActionsCol = !!(onReviewApproval || onRelaunchFromBlock)
               const colSpan = hasActionsCol ? 7 : 6
               const spec = getBlockView(block.blockId)
-              const hasDetails = iterCalls.length > 0 || !!block.output || !!block.input
+              // Skipped blocks have output={_skipped:true} but no meaningful details
+              // to show — exclude them from click-to-expand so they don't look broken.
+              const hasDetails = block.status !== 'skipped' && (iterCalls.length > 0 || !!block.output || !!block.input)
 
               return (
                 <Fragment key={rowKey}>
@@ -1034,8 +1037,11 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                           modelMap.set(key, agg)
                         }
                         const models = Array.from(modelMap.entries())
+                        // Block-level providers seen, for currency symbol
+                        const providersSeen = new Set(blockLlmCalls.map(c => c.provider).filter(Boolean) as string[])
+                        const blockCurrencySymbol = providersSeen.size === 1 && providersSeen.has('ALLTOKENS') ? '₽' : '$'
                         const tooltip = models
-                          .map(([m, a]) => `${m}: ${a.calls} calls, ${a.tokIn}↑/${a.tokOut}↓${a.cost > 0 ? ` $${a.cost.toFixed(4)}` : ''}`)
+                          .map(([m, a]) => `${m}: ${a.calls} calls, ${a.tokIn}↑/${a.tokOut}↓${a.cost > 0 ? ` ${blockCurrencySymbol}${a.cost.toFixed(4)}` : ''}`)
                           .join('\n')
                         return (
                           <div className="flex flex-col gap-0.5 text-[11px] font-mono" title={tooltip}>
@@ -1044,7 +1050,7 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                               <span>{tokIn.toLocaleString()}↑/{tokOut.toLocaleString()}↓</span>
                             </div>
                             {cost > 0 ? (
-                              <div className="text-emerald-400">${cost.toFixed(4)}</div>
+                              <div className="text-emerald-400">{blockCurrencySymbol}{cost.toFixed(4)}</div>
                             ) : allLocal ? (
                               <div className="text-slate-600">local</div>
                             ) : (
