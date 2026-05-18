@@ -16,6 +16,8 @@ services:
       BROWSE_ROOT_PATH: /projects
       WORKFLOW_BOOTSTRAP_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      ALLTOKENS_API_KEY: ${ALLTOKENS_API_KEY:-}
+      AITUNNEL_API_KEY: ${AITUNNEL_API_KEY:-}
       # ANTHROPIC_API_KEY intentionally NOT set: the OAuth token from
       # ~/.claude/.credentials.json is used by the Claude CLI for the Max
       # subscription. A non-empty ANTHROPIC_API_KEY would force "external API

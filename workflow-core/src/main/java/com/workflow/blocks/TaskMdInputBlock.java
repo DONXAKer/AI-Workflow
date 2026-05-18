@@ -80,6 +80,11 @@ public class TaskMdInputBlock implements Block {
 
     /** Standard heuristic flag names always present in output (default false). */
     private static final List<String> HEURISTIC_FLAGS = List.of(
+        "needs_bp", "needs_server", "needs_client", "needs_contract_change", "is_docs"
+    );
+
+    /** Subset of {@link #HEURISTIC_FLAGS} suppressed when {@code is_docs} is true. */
+    private static final List<String> IMPL_FLAGS = List.of(
         "needs_bp", "needs_server", "needs_client", "needs_contract_change"
     );
 
@@ -158,6 +163,10 @@ public class TaskMdInputBlock implements Block {
                     "Эвристический флаг: задача затрагивает клиентскую часть."),
                 FieldSchema.output("needs_contract_change", "Needs contract change", "boolean",
                     "Эвристический флаг: задача меняет контракт API."),
+                FieldSchema.output("is_docs", "Is docs", "boolean",
+                    "Эвристический флаг: задача — миграция/правка документации (feat_id с префиксом DOCS-/DOC-). " +
+                    "Когда true, остальные needs_* флаги принудительно false, чтобы pipeline не уходил в impl-ветки " +
+                    "из-за упоминаний файлов вроде *_Blueprint_Design.md в списках."),
                 FieldSchema.output("is_greenfield", "Is greenfield", "boolean",
                     "Эвристический флаг: задача не привязана к существующим файлам.")
             ),
@@ -268,13 +277,60 @@ public class TaskMdInputBlock implements Block {
         HEURISTIC_FLAGS.forEach(flag -> out.put(flag, false));
         Map<String, List<String>> keywords = loadHeuristicKeywords();
         for (Map.Entry<String, List<String>> e : keywords.entrySet()) {
-            boolean match = e.getValue().stream().anyMatch(lower::contains);
+            boolean match = e.getValue().stream().anyMatch(kw -> keywordMatches(lower, kw));
             out.put(e.getKey(), match);
         }
-        boolean anyNeed = HEURISTIC_FLAGS.stream().anyMatch(k -> Boolean.TRUE.equals(out.get(k)));
+
+        // DOCS tasks (FEAT-DOCS-NNN / FEAT-DOC-NNN, or the legacy DOCS-NNN / DOC-NNN form)
+        // routinely list code-asset file names (e.g. "WBP_UnitTooltip_Blueprint_Design.md")
+        // which would otherwise flip needs_bp/needs_client through keyword matches. Use the
+        // feat_id prefix as the authoritative signal and suppress impl-flags so feature.yaml
+        // does not route the run into BP/server/client branches.
+        String featId = String.valueOf(out.getOrDefault("feat_id", "")).toLowerCase(Locale.ROOT);
+        boolean isDocs = featId.startsWith("feat-docs-") || featId.startsWith("feat-doc-")
+                      || featId.startsWith("docs-")      || featId.startsWith("doc-");
+        out.put("is_docs", isDocs);
+        if (isDocs) {
+            IMPL_FLAGS.forEach(f -> out.put(f, false));
+        }
+
+        boolean anyNeed = IMPL_FLAGS.stream().anyMatch(k -> Boolean.TRUE.equals(out.get(k)));
         boolean hasFilePaths = lower.contains("/src/") || lower.contains("\\src\\")
             || lower.contains(".cpp") || lower.contains(".h") || lower.contains(".java");
         out.put("is_greenfield", !anyNeed && !hasFilePaths);
+    }
+
+    /**
+     * Whole-token keyword match: wraps {@code keyword} in {@code \b...\b} so substrings
+     * inside compound identifiers do not trigger. Example: keyword {@code blueprint}
+     * matches "create a Blueprint actor" but NOT "DiceRoll_Blueprint_Design.md" where
+     * the surrounding {@code _} characters keep the boundary on word-word transitions.
+     *
+     * <p>If the keyword's first or last character is itself non-word ({@code .uasset},
+     * {@code .umap}, paths like {@code client/}), the corresponding {@code \b} is dropped
+     * so the pattern still anchors at the literal character. Keywords ending in {@code _}
+     * (e.g. {@code wbp_}) become unmatchable under this scheme — that is intentional
+     * because UE asset prefixes are ambiguous between code (WBP_HUD_Widget) and doc-file
+     * (WBP_..._Blueprint_Design.md) contexts; rely on co-keywords (blueprint, widget, umg).
+     */
+    private static boolean keywordMatches(String text, String keyword) {
+        if (keyword == null || keyword.isEmpty()) return false;
+        char first = keyword.charAt(0);
+        char last = keyword.charAt(keyword.length() - 1);
+        String leading = isWordChar(first) ? "\\b" : "";
+        String trailing = isWordChar(last) ? "\\b" : "";
+        try {
+            return Pattern.compile(leading + Pattern.quote(keyword) + trailing)
+                .matcher(text).find();
+        } catch (Exception e) {
+            // Fallback to substring contains() if a malformed keyword sneaks in via
+            // operator-configured UNREAL.heuristicKeywords.
+            return text.contains(keyword);
+        }
+    }
+
+    private static boolean isWordChar(char c) {
+        return Character.isLetterOrDigit(c) || c == '_';
     }
 
     @SuppressWarnings("unchecked")

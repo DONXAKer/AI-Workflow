@@ -99,6 +99,12 @@ const PROVIDER_BADGE: Record<LlmProvider, { label: string; Icon: React.Component
     cls: 'bg-cyan-950/50 border-cyan-800/50 text-cyan-300',
     tooltip: 'AITunnel.ru — российский AI-шлюз',
   },
+  ALLTOKENS: {
+    label: 'AllTokens',
+    Icon: Globe,
+    cls: 'bg-teal-950/50 border-teal-800/50 text-teal-300',
+    tooltip: 'AllTokens.ru — российский AI-шлюз с auto-fallback',
+  },
   VLLM: {
     label: 'vLLM',
     Icon: Cpu,

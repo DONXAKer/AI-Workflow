@@ -490,7 +490,7 @@ public class PipelineConfigValidator {
                     } catch (IllegalArgumentException e) {
                         errors.add(ValidationError.warn(ESCALATION_UNKNOWN_PROVIDER,
                             "Block '" + blockId + "' escalation step " + s + " has unknown provider '"
-                                + cloud.provider() + "'. Known: OPENROUTER, OLLAMA, VLLM, CLAUDE_CODE_CLI, AITUNNEL.",
+                                + cloud.provider() + "'. Known: OPENROUTER, OLLAMA, VLLM, CLAUDE_CODE_CLI, AITUNNEL, ALLTOKENS.",
                             stepLoc + ".provider", blockId));
                     }
                 }

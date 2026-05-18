@@ -12,8 +12,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Facade over the 5 {@link com.workflow.llm.provider.LlmProviderClient} implementations
- * (OpenRouter, AITunnel, Ollama, vLLM, Claude Code CLI). Blocks inject {@code LlmClient}
+ * Facade over the 6 {@link com.workflow.llm.provider.LlmProviderClient} implementations
+ * (OpenRouter, AITunnel, AllTokens, Ollama, vLLM, Claude Code CLI). Blocks inject {@code LlmClient}
  * and call {@code complete}/{@code completeWithMessages}/{@code completeWithTools} —
  * {@link LlmProviderRouter} picks the right provider from the current
  * {@link LlmCallContext}'s preferred provider (pinned per-run by

@@ -266,10 +266,11 @@ export default function SettingsTab() {
           <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">
             LLM-провайдер по умолчанию
           </label>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
             {([
               ['OPENROUTER',    'OpenRouter',      'Платный API, оплачивается по токенам',    Globe,    'emerald'],
               ['AITUNNEL',      'AITunnel',        'Российский OpenAI-шлюз (aitunnel.ru)',    Globe,    'cyan'],
+              ['ALLTOKENS',     'AllTokens',       'Российский OpenAI-шлюз (alltokens.ru) с auto-fallback', Globe, 'teal'],
               ['CLAUDE_CODE_CLI','Claude Code CLI', 'Локальный claude -p, ваша Max-подписка',  Terminal, 'orange'],
               ['OLLAMA',        'Ollama',           'Локальный Ollama, бесплатно',             Cpu,      'purple'],
               ['VLLM',          'vLLM',             'Локальный vLLM (OpenAI-совместимый, AWQ)', Cpu,      'pink'],
@@ -278,12 +279,14 @@ export default function SettingsTab() {
               const accentBorder =
                 accent === 'emerald' ? (active ? 'border-emerald-600 bg-emerald-950/40' : 'border-slate-700 hover:border-emerald-800/60') :
                 accent === 'cyan'    ? (active ? 'border-cyan-600 bg-cyan-950/40'       : 'border-slate-700 hover:border-cyan-800/60')    :
+                accent === 'teal'    ? (active ? 'border-teal-600 bg-teal-950/40'       : 'border-slate-700 hover:border-teal-800/60')    :
                 accent === 'orange'  ? (active ? 'border-orange-600 bg-orange-950/40'   : 'border-slate-700 hover:border-orange-800/60')  :
                 accent === 'pink'    ? (active ? 'border-pink-600 bg-pink-950/40'       : 'border-slate-700 hover:border-pink-800/60')    :
                                        (active ? 'border-purple-600 bg-purple-950/40'   : 'border-slate-700 hover:border-purple-800/60')
               const iconColor =
                 accent === 'emerald' ? 'text-emerald-400' :
                 accent === 'cyan'    ? 'text-cyan-400'    :
+                accent === 'teal'    ? 'text-teal-400'    :
                 accent === 'orange'  ? 'text-orange-400'  :
                 accent === 'pink'    ? 'text-pink-400'    : 'text-purple-400'
               return (
