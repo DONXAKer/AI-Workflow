@@ -65,16 +65,21 @@ public class OllamaEmbedder {
      *
      * @return one vector per input, in the same order; empty if the request fails
      */
+    // nomic-embed-text:v1.5 context is 2048 tokens. Dense code/markdown can tokenize at
+    // 2 chars/token, so 3000 chars ≈ 1500 tokens — safely under the limit.
+    private static final int MAX_INPUT_CHARS = 3000;
+
     public List<float[]> embedBatch(List<String> inputs) {
         if (inputs == null || inputs.isEmpty()) return List.of();
 
         ObjectNode body = mapper.createObjectNode();
         body.put("model", embedModel);
         if (inputs.size() == 1) {
-            body.put("input", inputs.get(0));
+            String text = inputs.get(0);
+            body.put("input", text.length() > MAX_INPUT_CHARS ? text.substring(0, MAX_INPUT_CHARS) : text);
         } else {
             ArrayNode arr = body.putArray("input");
-            inputs.forEach(arr::add);
+            inputs.forEach(t -> arr.add(t.length() > MAX_INPUT_CHARS ? t.substring(0, MAX_INPUT_CHARS) : t));
         }
 
         WebClient client = buildClient();

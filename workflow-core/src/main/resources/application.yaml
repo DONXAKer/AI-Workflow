@@ -107,8 +107,9 @@ workflow:
     # same on both sides (mismatch → mismatched dims → empty results). 274 MB,
     # 768-dim; mxbai-embed-large (1024-dim) is the next step up if recall is weak.
     embed-model: ${EMBED_MODEL:nomic-embed-text:v1.5}
-    chunk-lines: 200
-    chunk-overlap: 30
+    # nomic-embed-text:v1.5 supports 2048 tokens (~6000 chars). 50 lines ≈ 400-600 tokens.
+    chunk-lines: 50
+    chunk-overlap: 10
 
 logging:
   level:

@@ -183,6 +183,7 @@ pipeline:
       working_dir: /projects/Personal_assistant
       max_iterations: 25
       allowed_tools:
+        - Search
         - Read
         - Write
         - Edit

@@ -1,6 +1,7 @@
 package com.workflow.model;
 
 import com.workflow.security.EncryptedStringConverter;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.*;
 import java.time.Instant;
 
@@ -75,6 +76,7 @@ public class IntegrationConfig {
     public String getExtraConfigJson() { return extraConfigJson; }
     public void setExtraConfigJson(String extraConfigJson) { this.extraConfigJson = extraConfigJson; }
     public boolean isDefault() { return isDefault; }
+    @JsonProperty("isDefault")
     public void setDefault(boolean aDefault) { isDefault = aDefault; }
 
     public String getProjectSlug() { return projectSlug; }

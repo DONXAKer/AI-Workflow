@@ -1579,7 +1579,7 @@ Rules:
         try {
             String rescue = llmClient.complete(model,
                 "Output only valid JSON. No preamble, no markdown fences, no explanation.",
-                userPrompt, 1024, 0.0);
+                userPrompt, 4096, 0.0);
             Map<String, Object> result = extractJson(rescue);
             if (!result.containsKey("raw_text")) {
                 log.info("orchestrator: rescue JSON extraction succeeded");

@@ -140,25 +140,67 @@ export function blockTypeLabelWithCode(blockType: string | undefined): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * Per-provider tier → resolved model map. Mirrors ModelPresetResolver.java.
+ * Used in SettingsTab and PipelineEditor to show provider-appropriate options.
+ */
+export const MODEL_TIERS_BY_PROVIDER: Record<string, Array<{ preset: string; label: string; model: string; tier: 'premium' | 'balanced' | 'fast' | 'cheap' }>> = {
+  CLAUDE_CODE_CLI: [
+    { preset: 'reasoning', label: 'Claude Opus 4.7',   model: 'claude-opus-4-7',    tier: 'premium' },
+    { preset: 'smart',     label: 'Claude Sonnet 4.6', model: 'claude-sonnet-4-6',  tier: 'balanced' },
+    { preset: 'flash',     label: 'Claude Haiku 4.5',  model: 'claude-haiku-4-5',   tier: 'fast' },
+  ],
+  OPENROUTER: [
+    { preset: 'reasoning', label: 'Gemini 2.5 Pro',        model: 'google/gemini-2.5-pro',           tier: 'premium' },
+    { preset: 'smart',     label: 'z-ai/GLM-4.6',          model: 'z-ai/glm-4.6',                    tier: 'balanced' },
+    { preset: 'flash',     label: 'z-ai/GLM-4.7 Flash',    model: 'z-ai/glm-4.7-flash',              tier: 'fast' },
+    { preset: 'fast',      label: 'Gemini 2.5 Flash Lite', model: 'google/gemini-2.5-flash-lite',     tier: 'fast' },
+    { preset: 'cheap',     label: 'GPT-4o mini',           model: 'openai/gpt-4o-mini',               tier: 'cheap' },
+  ],
+  AITUNNEL: [
+    { preset: 'reasoning', label: 'Gemini 2.5 Pro',        model: 'google/gemini-2.5-pro',           tier: 'premium' },
+    { preset: 'smart',     label: 'z-ai/GLM-4.6',          model: 'z-ai/glm-4.6',                    tier: 'balanced' },
+    { preset: 'flash',     label: 'z-ai/GLM-4.7 Flash',    model: 'z-ai/glm-4.7-flash',              tier: 'fast' },
+    { preset: 'fast',      label: 'Gemini 2.5 Flash Lite', model: 'google/gemini-2.5-flash-lite',     tier: 'fast' },
+    { preset: 'cheap',     label: 'GPT-4o mini',           model: 'openai/gpt-4o-mini',               tier: 'cheap' },
+  ],
+  OLLAMA: [
+    { preset: 'smart',     label: 'qwen3_cline_roocode:8b', model: 'mychen76/qwen3_cline_roocode:8b', tier: 'balanced' },
+  ],
+  VLLM: [
+    { preset: 'smart',     label: 'Qwen3-4B-AWQ',           model: 'Qwen/Qwen3-4B-AWQ',               tier: 'balanced' },
+  ],
+}
+
+/**
  * Curated model presets by capability tier.
  * Shown as suggestions in PipelineEditor.
+ * Note: preset values (smart/reasoning/etc.) resolve to provider-appropriate models at runtime.
+ * See MODEL_TIERS_BY_PROVIDER for per-provider mappings.
  */
 export const MODEL_TIERS = [
   {
     preset:      'reasoning',
-    model:       'anthropic/claude-opus-4-7',
-    label:       'Claude Opus 4.7',
+    model:       'google/gemini-2.5-pro',
+    label:       'reasoning',
     tier:        'premium' as const,
     priceHint:   '$$$$',
-    description: 'Глубокое рассуждение, сложный анализ',
+    description: 'Глубокое рассуждение, сложный анализ (CLI→Opus, OR→Gemini Pro)',
   },
   {
     preset:      'smart',
-    model:       'anthropic/claude-sonnet-4-6',
-    label:       'Claude Sonnet 4.6',
+    model:       'z-ai/glm-4.6',
+    label:       'smart',
     tier:        'balanced' as const,
     priceHint:   '$$$',
-    description: 'Лучший баланс для кодирования',
+    description: 'Лучший баланс для кодирования (CLI→Sonnet, OR→GLM-4.6)',
+  },
+  {
+    preset:      'flash',
+    model:       'z-ai/glm-4.7-flash',
+    label:       'flash',
+    tier:        'fast' as const,
+    priceHint:   '$$',
+    description: 'Быстрый исполнитель (CLI→Haiku, OR→GLM-4.7 Flash)',
   },
   {
     preset:      'gemini-pro',

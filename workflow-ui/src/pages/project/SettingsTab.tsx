@@ -13,6 +13,33 @@ const INTEGRATION_TYPE_LABELS: Record<string, string> = {
   YOUTRACK: 'YouTrack',
 }
 
+/** Tier → resolved model per provider. Matches ModelPresetResolver on the backend. */
+const PROVIDER_MODEL_TIERS: Record<string, Array<{ preset: string; label: string; model: string }>> = {
+  CLAUDE_CODE_CLI: [
+    { preset: 'reasoning', label: 'Opus 4.7',   model: 'claude-opus-4-7' },
+    { preset: 'smart',     label: 'Sonnet 4.6', model: 'claude-sonnet-4-6' },
+    { preset: 'flash',     label: 'Haiku 4.5',  model: 'claude-haiku-4-5' },
+  ],
+  OPENROUTER: [
+    { preset: 'reasoning', label: 'Gemini 2.5 Pro',       model: 'google/gemini-2.5-pro' },
+    { preset: 'smart',     label: 'GLM-4.6',              model: 'z-ai/glm-4.6' },
+    { preset: 'flash',     label: 'GLM-4.7 Flash',        model: 'z-ai/glm-4.7-flash' },
+    { preset: 'fast',      label: 'Gemini 2.5 Flash Lite', model: 'google/gemini-2.5-flash-lite' },
+  ],
+  AITUNNEL: [
+    { preset: 'reasoning', label: 'Gemini 2.5 Pro',       model: 'google/gemini-2.5-pro' },
+    { preset: 'smart',     label: 'GLM-4.6',              model: 'z-ai/glm-4.6' },
+    { preset: 'flash',     label: 'GLM-4.7 Flash',        model: 'z-ai/glm-4.7-flash' },
+    { preset: 'fast',      label: 'Gemini 2.5 Flash Lite', model: 'google/gemini-2.5-flash-lite' },
+  ],
+  OLLAMA: [
+    { preset: 'smart', label: 'qwen3_cline_roocode:8b', model: 'mychen76/qwen3_cline_roocode:8b' },
+  ],
+  VLLM: [
+    { preset: 'smart', label: 'Qwen3-4B-AWQ', model: 'Qwen/Qwen3-4B-AWQ' },
+  ],
+}
+
 export default function SettingsTab() {
   const { slug } = useParams<{ slug: string }>()
   const navigate = useNavigate()
@@ -280,6 +307,9 @@ export default function SettingsTab() {
             Используется когда run стартует без явного <code className="font-mono bg-slate-800 px-1 rounded">inputs.provider</code>.
             Pipeline блоки могут гейтиться на <code className="font-mono bg-slate-800 px-1 rounded">$.input.provider == 'CLAUDE_CODE_CLI'</code>.
           </p>
+          <p className="text-xs text-amber-600/80 mt-1.5">
+            Применяется к новым запускам — текущий run использует провайдер, зафиксированный на момент старта.
+          </p>
         </div>
 
         {saveError && (
@@ -381,16 +411,63 @@ export default function SettingsTab() {
 
         <div>
           <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">
-            Модель по умолчанию
+            Модель оркестратора
           </label>
-          <input
-            type="text"
-            value={orchModel}
-            onChange={e => setOrchModel(e.target.value)}
-            placeholder="anthropic/claude-sonnet-4-5"
-            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:ring-2 focus:ring-purple-500"
-          />
-          <p className="text-xs text-slate-600 mt-1">Пусто — используется модель из YAML-блока.</p>
+          {/* Provider-aware tier chips */}
+          {(() => {
+            const tiers = PROVIDER_MODEL_TIERS[defaultProvider] ?? []
+            const isCustom = orchModel !== '' && !tiers.some(t => t.preset === orchModel)
+            return (
+              <div className="space-y-2">
+                <div className="flex flex-wrap gap-1.5">
+                  {tiers.map(t => {
+                    const active = orchModel === t.preset
+                    return (
+                      <button
+                        key={t.preset}
+                        type="button"
+                        onClick={() => setOrchModel(active ? '' : t.preset)}
+                        disabled={saving}
+                        className={`flex flex-col items-start px-3 py-1.5 rounded-lg border text-left transition-colors ${
+                          active
+                            ? 'border-purple-500 bg-purple-950/50 text-purple-200'
+                            : 'border-slate-700 hover:border-slate-500 text-slate-400'
+                        }`}
+                      >
+                        <span className="text-xs font-semibold">{t.preset}</span>
+                        <span className="text-[10px] font-mono text-slate-500 leading-tight">{t.model}</span>
+                      </button>
+                    )
+                  })}
+                  <button
+                    type="button"
+                    onClick={() => { if (!isCustom) setOrchModel('') }}
+                    disabled={saving}
+                    className={`flex flex-col items-start px-3 py-1.5 rounded-lg border text-left transition-colors ${
+                      orchModel === ''
+                        ? 'border-slate-500 bg-slate-800 text-slate-200'
+                        : 'border-slate-700 hover:border-slate-500 text-slate-500'
+                    }`}
+                  >
+                    <span className="text-xs font-semibold">из YAML</span>
+                    <span className="text-[10px] text-slate-600 leading-tight">умолчание</span>
+                  </button>
+                </div>
+                {isCustom && (
+                  <input
+                    type="text"
+                    value={orchModel}
+                    onChange={e => setOrchModel(e.target.value)}
+                    placeholder="custom model or tier"
+                    className="w-full bg-slate-950 border border-purple-700 rounded-lg px-3 py-2 text-sm text-slate-100 font-mono focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                )}
+                <p className="text-xs text-slate-600">
+                  Тир → конкретная модель выбирается провайдером. «Из YAML» — блок решает сам.
+                </p>
+              </div>
+            )
+          })()}
         </div>
 
         <div>
