@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
+import com.workflow.core.expr.StringInterpolator;
 import com.workflow.llm.LlmClient;
 import com.workflow.project.Project;
 import com.workflow.project.ProjectRepository;
@@ -105,6 +106,7 @@ public class ContextScanBlock implements Block {
     @Autowired private LlmClient llmClient;
     @Autowired private ObjectMapper objectMapper;
     @Autowired(required = false) private ProjectRepository projectRepository;
+    @Autowired(required = false) private StringInterpolator stringInterpolator;
 
     @Override public String getName() { return "context_scan"; }
 
@@ -137,7 +139,7 @@ public class ContextScanBlock implements Block {
     public Map<String, Object> run(Map<String, Object> input, BlockConfig blockConfig, PipelineRun run) throws Exception {
         Map<String, Object> cfg = blockConfig.getConfig() != null ? blockConfig.getConfig() : Map.of();
 
-        Path workingDir = resolveWorkingDir(cfg, run);
+        Path workingDir = resolveWorkingDir(cfg, input, run);
         String language = resolveLanguage(cfg, workingDir);
 
         ManifestExcerpt manifest = readManifest(workingDir);
@@ -390,9 +392,14 @@ public class ContextScanBlock implements Block {
 
     // ── working dir resolution ─────────────────────────────────────────────────
 
-    private Path resolveWorkingDir(Map<String, Object> cfg, PipelineRun run) {
+    private Path resolveWorkingDir(Map<String, Object> cfg, Map<String, Object> input, PipelineRun run) {
         Object raw = cfg.get("working_dir");
-        String resolved = raw != null ? raw.toString() : null;
+        String resolved = null;
+        if (raw != null && !raw.toString().isBlank()) {
+            resolved = stringInterpolator != null
+                ? stringInterpolator.interpolate(raw.toString(), run, input)
+                : raw.toString();
+        }
         if ((resolved == null || resolved.isBlank()) && projectRepository != null) {
             String slug = run.getProjectSlug();
             if (slug != null && !slug.isBlank()) {
