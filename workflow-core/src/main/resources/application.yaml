@@ -71,8 +71,12 @@ workflow:
     # Tier 'cloud' switches the block to a heavier model/provider and reruns with reset
     # loop counter; tier 'human' pauses for operator approval.
     defaults:
+      # Cloud-tier provider intentionally NOT hardcoded to openrouter — keeps the
+      # escalation aligned with whatever Project.defaultProvider runs the rest of
+      # the pipeline (so e.g. an AllTokens-scoped project stays on AllTokens for
+      # the cloud-tier retry instead of suddenly needing OpenRouter credits).
+      # EscalationService falls back to project's defaultProvider when blank.
       - tier: cloud
-        provider: openrouter
         model: smart
         max-iterations: 2
       - tier: human

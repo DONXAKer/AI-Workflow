@@ -113,7 +113,10 @@ public class EscalationService {
                 recordOverride(run, targetBlockId, override);
 
                 log.info("Escalation: run={} failingBlock={} -> cloud-tier (provider={}, model={}, attempt {}/{})",
-                        run.getId(), failingBlockId, cloud.provider(), cloud.model(),
+                        run.getId(), failingBlockId,
+                        (cloud.provider() != null && !cloud.provider().isBlank())
+                            ? cloud.provider() : "<project-default>",
+                        cloud.model(),
                         state.attemptsAtCurrentStep(), cloud.maxIterations());
                 return EscalationDecision.retryWithCloud(targetBlockId, override);
             }
