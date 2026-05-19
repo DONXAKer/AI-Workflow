@@ -102,8 +102,8 @@ pipeline:
         ${test_gen.tests}
 
         ## Test framework / conventions
-        ${context_scan.test_framework}
-        ${context_scan.conventions}
+        ${context_scan.tech_stack}
+        ${context_scan.code_conventions}
 
         Implement the test bodies, run them, fix failures (in tests only,
         not production code), and report when the suite is green.
