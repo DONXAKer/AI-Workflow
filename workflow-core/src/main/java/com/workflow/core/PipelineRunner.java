@@ -940,6 +940,29 @@ public class PipelineRunner {
             if (currentOutput != null) displayOutput.putAll(currentOutput);
             displayOutput.put("_escalation_bundle", pause.bundle());
 
+            // Honour run-level _autoApproveAll for the escalation human gate too:
+            // for E2E and unattended runs the operator has explicitly opted into
+            // auto-approving every gate, including the final escalation safety net.
+            if (run.getAutoApprove() != null && run.getAutoApprove().contains("*")) {
+                log.info("Escalation human gate auto-approved (run-level _autoApproveAll) for run={} block={}",
+                        run.getId(), failingBlockId);
+                Map<String, Object> overrideOut = new LinkedHashMap<>(
+                        currentOutput != null ? currentOutput : Map.of());
+                overrideOut.put("passed", true);
+                overrideOut.put("escalation_override", true);
+                overrideOut.put("escalation_step", "human");
+                overrideOut.put("override_reason", "auto-approved (_autoApproveAll)");
+                saveBlockOutput(run, failingBlockId, overrideOut, blockInputs, blockStart, Instant.now());
+                if (!run.getCompletedBlocks().contains(failingBlockId)) {
+                    run.getCompletedBlocks().add(failingBlockId);
+                }
+                clearApprovalTimeout(run);
+                run.setStatus(RunStatus.RUNNING);
+                runRepository.save(run);
+                if (wsHandler != null) wsHandler.sendBlockComplete(run.getId(), failingBlockId, overrideOut);
+                return currentIdx + 1;
+            }
+
             if (wsHandler != null) wsHandler.sendApprovalRequest(run.getId(), failingBlockId, desc, displayOutput);
             broadcastApprovalNotification(run, failingBlockId, desc);
 
