@@ -150,11 +150,14 @@ pipeline:
   - id: verify_fix
     block: verify
     approval: false
-    depends_on: [verify_tests, analysis]
+    depends_on: [verify_tests, analysis, impl]
     verify:
-      subject: tests
+      # Subject is `impl` so the LLM quality-check sees the actual fix
+      # (files_changed, final_text, diff_summary) and not just the test
+      # runner's stdout. Test-pass is already enforced by verify_tests.
+      subject: impl
       checks:
-        - { field: success, rule: equals, value: true }
+        - { field: files_changed, rule: min_items, value: 1 }
       llm_check:
         enabled: true
         prompt: |
