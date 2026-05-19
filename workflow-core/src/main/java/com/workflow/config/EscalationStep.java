@@ -34,7 +34,12 @@ public sealed interface EscalationStep permits EscalationStep.Cloud, EscalationS
             @JsonProperty("max_iterations") @JsonAlias("maxIterations") int maxIterations
     ) implements EscalationStep {
         public Cloud {
-            if (provider == null || provider.isBlank()) provider = "openrouter";
+            // provider intentionally NOT defaulted to "openrouter" — null/blank means
+            // "use the project's defaultProvider" (handled by EscalationService.effectiveProvider).
+            // Hardcoding openrouter here was the bug: AllTokens-scoped projects ended up
+            // pointed at OpenRouter on escalation even though the rest of the run was on
+            // AllTokens. Operators who explicitly want OpenRouter for cloud-tier set it
+            // in their block YAML's escalation: or Project.escalationDefaultsJson.
             if (model == null || model.isBlank()) model = "smart";
             if (maxIterations <= 0) maxIterations = 2;
         }

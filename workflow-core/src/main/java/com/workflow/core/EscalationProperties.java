@@ -23,7 +23,10 @@ public class EscalationProperties {
      * Replaced (not merged) when {@code workflow.escalation.defaults} is set in application.yaml.
      */
     private List<StepDefinition> defaults = new ArrayList<>(List.of(
-            StepDefinition.cloud("openrouter", "smart", 2),
+            // provider=null → cloud-tier follows the project's defaultProvider
+            // (so AllTokens-scoped projects stay on AllTokens for the escalation
+            // retry instead of suddenly needing OpenRouter credits).
+            StepDefinition.cloud(null, "smart", 2),
             StepDefinition.human(List.of("ui"), 86_400L)
     ));
 
