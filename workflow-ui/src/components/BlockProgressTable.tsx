@@ -1,4 +1,5 @@
 import { Loader2, CheckCircle, XCircle, SkipForward, Clock, AlertCircle, Copy, Check, Bell, ChevronDown, ChevronRight, Hand, Zap, BellRing, RotateCcw, Globe, Terminal, Cpu } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
 import { BlockStatus, BlockSnapshot, ApprovalMode, ToolCallEntry, LlmCallEntry, LlmProvider } from '../types'
 import { effectiveApprovalMode } from '../utils/configSnapshot'
 import { blockIdLabel } from '../utils/blockLabels'
@@ -498,7 +499,11 @@ function FieldValue({ value, kind }: { value: unknown; kind: FieldSpec['kind'] }
                 <span className={clsx('px-1.5 py-0.5 rounded border text-[10px] font-mono uppercase shrink-0', priorityCls)}>{priority}</span>
               )}
               {status && <span className={clsx('text-sm shrink-0', statusCls)}>{status === 'pass' ? '✓' : status === 'fail' ? '✗' : '·'}</span>}
-              <span className="text-slate-300 flex-1 min-w-0 break-words">{typeof main === 'string' ? main : JSON.stringify(main)}</span>
+              <span className="text-slate-300 flex-1 min-w-0 break-words [&_p]:m-0 [&_code]:bg-slate-800 [&_code]:px-1 [&_code]:rounded [&_code]:text-[10px] [&_code]:text-amber-200">
+                {typeof main === 'string'
+                  ? <ReactMarkdown>{main}</ReactMarkdown>
+                  : JSON.stringify(main)}
+              </span>
             </div>
           )
         })}
@@ -947,6 +952,32 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                                 #{block.iteration + 1}
                               </span>
                             )}
+                            {(() => {
+                              const out = block.output as Record<string, unknown> | undefined
+                              const step = out?.escalation_step
+                              if (step === 'cloud' || step === 'cloud-tier') {
+                                return (
+                                  <span title="Output saved during cloud-tier escalation retry" className="text-[10px] font-mono bg-purple-900/40 text-purple-300 border border-purple-700/50 rounded px-1 py-0.5 leading-none">
+                                    cloud-tier
+                                  </span>
+                                )
+                              }
+                              if (step === 'human') {
+                                return (
+                                  <span title="Approved via human escalation gate" className="text-[10px] font-mono bg-rose-900/40 text-rose-300 border border-rose-700/50 rounded px-1 py-0.5 leading-none">
+                                    human gate
+                                  </span>
+                                )
+                              }
+                              if (out?.escalation_override === true) {
+                                return (
+                                  <span title="Escalation override applied" className="text-[10px] font-mono bg-fuchsia-900/40 text-fuchsia-300 border border-fuchsia-700/50 rounded px-1 py-0.5 leading-none">
+                                    override
+                                  </span>
+                                )
+                              }
+                              return null
+                            })()}
                           </div>
                           {/* Bad finish reason warning */}
                           {badFinishReason && (
