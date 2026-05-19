@@ -105,7 +105,7 @@ pipeline:
     verify:
       subject: impl_docs
       checks:
-        - { field: changes, rule: min_items, value: 1 }
+        - { field: files_changed, rule: min_items, value: 1 }
       llm_check:
         enabled: true
         prompt: |
