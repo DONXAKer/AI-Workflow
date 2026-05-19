@@ -227,11 +227,12 @@ pipeline:
     depends_on: [verify_acceptance]
     config:
       working_dir: ${input.working_dir}
+      # Commit message sourced from analysis (always populated) instead of
+      # task_md (injected empty for from_requirement EP). The git commit
+      # convention here is "feat: <one-line summary>\n\n<technical approach>".
       command: |
         git add -A && \
-        git commit -m "feat: ${task_md.feat_id} ${task_md.title}
+        git commit -m "feat: ${analysis.summary}
 
-        ${task_md.to_be}
-
-        Implements acceptance criteria from ${task_md.slug}.md"
+        ${analysis.technical_approach}"
       allow_nonzero_exit: false
