@@ -1,4 +1,4 @@
-import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry, LlmCallEntry, McpServer, ValidationResult, PipelineConfigDto, BlockRegistryEntry, BlockConfigDto, EntryPointConfigDto, ReindexJobStatus } from '../types'
+import { IntegrationConfig, PipelineRun, ApprovalDecision, PipelineRunSummary, PaginatedResponse, RunFilters, RunStats, AgentProfile, SkillInfo, EntryPoint, CurrentUser, AuditEntry, AuditFilters, KillSwitchState, CostSummary, ProjectInfo, ProjectStats, UserInfo, CreateUserBody, UpdateUserBody, ToolCallEntry, LlmCallEntry, McpServer, ValidationResult, PipelineConfigDto, BlockRegistryEntry, BlockConfigDto, EntryPointConfigDto, ReindexJobStatus } from '../types'
 import { currentProjectSlug } from './projectContext'
 
 const BASE = '/api'
@@ -322,6 +322,9 @@ export const api = {
   // Projects
   listProjects: (): Promise<ProjectInfo[]> =>
     request<ProjectInfo[]>(`${BASE}/projects`),
+
+  listProjectStats: (): Promise<ProjectStats[]> =>
+    request<ProjectStats[]>(`${BASE}/projects/stats`),
 
   createProject: (body: { slug: string; displayName: string; description?: string; configDir?: string }) =>
     request<ProjectInfo>(

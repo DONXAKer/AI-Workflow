@@ -1,5 +1,7 @@
 package com.workflow.api;
 
+import com.workflow.core.PipelineRunRepository;
+import com.workflow.core.RunStatus;
 import com.workflow.knowledge.ProjectIndexService;
 import com.workflow.knowledge.ProjectIndexer;
 import com.workflow.preflight.PreflightCacheService;
@@ -14,6 +16,9 @@ import org.springframework.web.bind.annotation.*;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,12 +39,53 @@ public class ProjectController {
     @Autowired
     private TemplateService templateService;
 
+    @Autowired
+    private PipelineRunRepository pipelineRunRepository;
+
     @Value("${workflow.config-dir:./config}")
     private String globalConfigDir;
 
     @GetMapping
     public List<Project> list() {
         return repository.findAll();
+    }
+
+    /**
+     * GET /api/projects/stats
+     *
+     * <p>Returns per-project run-status counters for the projects list page:
+     * running, awaiting-approval, completed-today, failed-today. Uses
+     * {@link PipelineRunRepository}'s {@code countByProjectSlugAndStatusIn}
+     * variants for efficient aggregation (one query per (slug,statusBucket)
+     * pair, no full-row materialization).
+     */
+    @GetMapping("/stats")
+    public ResponseEntity<List<Map<String, Object>>> stats() {
+        Instant startOfDay = LocalDate.now(ZoneOffset.UTC).atStartOfDay(ZoneOffset.UTC).toInstant();
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (Project p : repository.findAll()) {
+            String slug = p.getSlug();
+            long running = pipelineRunRepository.countByProjectSlugAndStatusIn(
+                slug, List.of(RunStatus.RUNNING));
+            long awaiting = pipelineRunRepository.countByProjectSlugAndStatusIn(
+                slug, List.of(RunStatus.PAUSED_FOR_APPROVAL));
+            long completedToday = pipelineRunRepository
+                .countByProjectSlugAndStatusAndCompletedAtAfter(slug, RunStatus.COMPLETED, startOfDay)
+              + pipelineRunRepository
+                .countByProjectSlugAndStatusAndCompletedAtIsNullAndStartedAtAfter(slug, RunStatus.COMPLETED, startOfDay);
+            long failedToday = pipelineRunRepository
+                .countByProjectSlugAndStatusAndCompletedAtAfter(slug, RunStatus.FAILED, startOfDay)
+              + pipelineRunRepository
+                .countByProjectSlugAndStatusAndCompletedAtIsNullAndStartedAtAfter(slug, RunStatus.FAILED, startOfDay);
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("slug", slug);
+            row.put("running", running);
+            row.put("awaitingApproval", awaiting);
+            row.put("completedToday", completedToday);
+            row.put("failedToday", failedToday);
+            out.add(row);
+        }
+        return ResponseEntity.ok(out);
     }
 
     @GetMapping("/{slug}")

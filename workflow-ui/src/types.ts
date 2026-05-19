@@ -559,6 +559,14 @@ export interface BlockRegistryEntry {
   metadata: BlockMetadataDto
 }
 
+export interface ProjectStats {
+  slug: string
+  running: number
+  awaitingApproval: number
+  completedToday: number
+  failedToday: number
+}
+
 export interface ProjectInfo {
   id: number
   slug: string

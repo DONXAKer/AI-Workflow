@@ -1,17 +1,40 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, FolderOpen, AlertCircle, Loader2, X, Save, ChevronRight } from 'lucide-react'
+import { Plus, FolderOpen, AlertCircle, Loader2, X, Save, ChevronRight, Zap, Hand, Check, XCircle } from 'lucide-react'
 import { api } from '../services/api'
-import { ProjectInfo } from '../types'
+import { ProjectInfo, ProjectStats } from '../types'
 import PathInput from '../components/PathInput'
+import clsx from 'clsx'
 
 function slugify(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }
 
+type StatusKind = 'running' | 'awaiting' | 'done' | 'failed'
+const STATUS_PILL_META: Record<StatusKind, { Icon: typeof Zap; cls: string; title: string }> = {
+  running:  { Icon: Zap,     cls: 'bg-blue-900/40 border-blue-700/50 text-blue-300',       title: 'Запущенные сейчас' },
+  awaiting: { Icon: Hand,    cls: 'bg-amber-900/40 border-amber-700/50 text-amber-300',    title: 'Ожидают одобрения' },
+  done:     { Icon: Check,   cls: 'bg-emerald-900/30 border-emerald-700/50 text-emerald-300', title: 'Завершены сегодня (UTC)' },
+  failed:   { Icon: XCircle, cls: 'bg-red-900/40 border-red-700/60 text-red-300',          title: 'Упали сегодня (UTC)' },
+}
+
+function StatusPill({ kind, count }: { kind: StatusKind; count: number }) {
+  if (count === 0) return null
+  const { Icon, cls, title } = STATUS_PILL_META[kind]
+  return (
+    <span title={title}
+      className={clsx('inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[10px] font-mono leading-none', cls)}
+    >
+      <Icon className="w-3 h-3 shrink-0" />
+      {count}
+    </span>
+  )
+}
+
 export default function ProjectsListPage() {
   const navigate = useNavigate()
   const [projects, setProjects] = useState<ProjectInfo[]>([])
+  const [stats, setStats] = useState<Map<string, ProjectStats>>(new Map())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
@@ -32,7 +55,24 @@ export default function ProjectsListPage() {
     }
   }, [])
 
+  // Run-status counters per project. Polled every 10s so an operator can see
+  // pipelines transition into running / awaiting-approval without re-navigating.
+  // Errors swallowed — counters are decoration; project list still works without.
+  const loadStats = useCallback(async () => {
+    try {
+      const rows = await api.listProjectStats()
+      setStats(new Map(rows.map(r => [r.slug, r])))
+    } catch {
+      /* keep prior stats on transient failure */
+    }
+  }, [])
+
   useEffect(() => { load() }, [load])
+  useEffect(() => {
+    loadStats()
+    const id = window.setInterval(loadStats, 10_000)
+    return () => window.clearInterval(id)
+  }, [loadStats])
 
   const openCreate = () => {
     setShowCreate(true)
@@ -171,29 +211,40 @@ export default function ProjectsListPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {projects.map(p => (
-            <button
-              key={p.slug}
-              type="button"
-              onClick={() => navigate(`/projects/${p.slug}`)}
-              className="text-left bg-slate-900 border border-slate-800 hover:border-blue-700 rounded-xl p-5 transition-all group"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium text-white text-sm group-hover:text-blue-300 transition-colors">
-                    {p.displayName}
-                  </p>
-                  {p.configDir && (
-                    <p className="text-xs text-slate-500 font-mono mt-1.5 truncate">{p.configDir}</p>
-                  )}
-                  {p.description && (
-                    <p className="text-xs text-slate-400 mt-1 truncate">{p.description}</p>
-                  )}
+          {projects.map(p => {
+            const s = stats.get(p.slug)
+            return (
+              <button
+                key={p.slug}
+                type="button"
+                onClick={() => navigate(`/projects/${p.slug}`)}
+                className="text-left bg-slate-900 border border-slate-800 hover:border-blue-700 rounded-xl p-5 transition-all group"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-white text-sm group-hover:text-blue-300 transition-colors">
+                      {p.displayName}
+                    </p>
+                    {p.configDir && (
+                      <p className="text-xs text-slate-500 font-mono mt-1.5 truncate">{p.configDir}</p>
+                    )}
+                    {p.description && (
+                      <p className="text-xs text-slate-400 mt-1 truncate">{p.description}</p>
+                    )}
+                    {s && (
+                      <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
+                        <StatusPill kind="running" count={s.running} />
+                        <StatusPill kind="awaiting" count={s.awaitingApproval} />
+                        <StatusPill kind="done" count={s.completedToday} />
+                        <StatusPill kind="failed" count={s.failedToday} />
+                      </div>
+                    )}
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-blue-400 flex-shrink-0 mt-0.5 transition-colors" />
                 </div>
-                <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-blue-400 flex-shrink-0 mt-0.5 transition-colors" />
-              </div>
-            </button>
-          ))}
+              </button>
+            )
+          })}
         </div>
       )}
     </div>
