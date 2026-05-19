@@ -89,6 +89,28 @@ const REGISTRY: Record<string, BlockViewSpec> = {
   verify_acceptance: verifyAcceptanceSpec,
 }
 
-export function getBlockView(blockId: string): BlockViewSpec | undefined {
-  return REGISTRY[blockId]
+/**
+ * Fallback registry keyed by block TYPE — used when no spec is registered for
+ * the exact YAML block id. Lets ad-hoc pipelines (bugfix/docs/feature-generic
+ * with their own block ids like `impl`, `impl_docs`, `verify_fix`, `verify_docs`)
+ * still get a structured output view instead of a raw JSON dump.
+ */
+const TYPE_REGISTRY: Record<string, BlockViewSpec> = {
+  task_md_input: taskMdSpec,
+  analysis: analysisSpec,
+  clarification: clarificationSpec,
+  preflight: preflightSpec,
+  intake_assessment: intakeAssessmentSpec,
+  context_scan: contextScanSpec,
+  test_planning: testPlanningSpec,
+  run_report: runReportSpec,
+  shell_exec: shellExecSpec,
+  verify: verifyBlockSpec,
+  agent_with_tools: implServerSpec,
+  agent_verify: verifyAcceptanceSpec,
+  orchestrator: planBlockSpec, // plan-mode default; review-mode pipelines should override per-id
+}
+
+export function getBlockView(blockId: string, blockType?: string): BlockViewSpec | undefined {
+  return REGISTRY[blockId] ?? (blockType ? TYPE_REGISTRY[blockType] : undefined)
 }

@@ -925,7 +925,7 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
               const isExpanded = expandedBlocks.has(rowKey)
               const hasActionsCol = !!(onReviewApproval || onRelaunchFromBlock)
               const colSpan = hasActionsCol ? 7 : 6
-              const spec = getBlockView(block.blockId)
+              const spec = getBlockView(block.blockId, snapshots?.get(block.blockId)?.block)
               // Skipped blocks have output={_skipped:true} but no meaningful details
               // to show — exclude them from click-to-expand so they don't look broken.
               const hasDetails = block.status !== 'skipped' && (iterCalls.length > 0 || !!block.output || !!block.input)
