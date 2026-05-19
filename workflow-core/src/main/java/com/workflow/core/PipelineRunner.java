@@ -94,6 +94,9 @@ public class PipelineRunner {
     @Autowired(required = false)
     private DagLevelExecutor dagLevelExecutor;
 
+    @Autowired(required = false)
+    private com.workflow.tools.BashApprovalGate bashApprovalGate;
+
     @Autowired
     private EscalationProperties escalationProperties;
 
@@ -141,6 +144,7 @@ public class PipelineRunner {
             catch (Exception e) { log.warn("Failed to serialize runInputs: {}", e.getMessage()); }
             if (Boolean.TRUE.equals(runInputs.get("_autoApproveAll"))) {
                 pipelineRun.getAutoApprove().add("*");
+                if (bashApprovalGate != null) bashApprovalGate.autoApproveRun(runId);
                 log.info("Auto-approve-all enabled for run {}", runId);
             }
         }
@@ -203,6 +207,7 @@ public class PipelineRunner {
             catch (Exception e) { log.warn("Failed to serialize runInputs: {}", e.getMessage()); }
             if (Boolean.TRUE.equals(runInputs.get("_autoApproveAll"))) {
                 pipelineRun.getAutoApprove().add("*");
+                if (bashApprovalGate != null) bashApprovalGate.autoApproveRun(runId);
                 log.info("Auto-approve-all enabled for run {}", runId);
             }
         }

@@ -29,6 +29,10 @@ public class BashApprovalGate {
     /** Keys are "{runId}:{blockId}" — commands for these are auto-approved without dialog. */
     private final java.util.Set<String> autoApprovedBlocks =
         java.util.Collections.newSetFromMap(new ConcurrentHashMap<>());
+    /** runIds whose bash commands are auto-approved across all blocks (set when
+     *  {@code _autoApproveAll: true} flag is supplied on POST /api/runs). */
+    private final java.util.Set<UUID> autoApprovedRuns =
+        java.util.Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     /**
      * Sends a BASH_APPROVAL_REQUEST to the UI and blocks until the operator decides.
@@ -37,6 +41,10 @@ public class BashApprovalGate {
      * @return true if allowed, false if denied or timed out
      */
     public boolean requestApproval(UUID runId, String blockId, String command) {
+        if (autoApprovedRuns.contains(runId)) {
+            log.info("Bash auto-approved (run-level): run={} block={} cmd={}", runId, blockId, command);
+            return true;
+        }
         if (autoApprovedBlocks.contains(runId + ":" + blockId)) {
             log.info("Bash auto-approved (block-level): run={} block={} cmd={}", runId, blockId, command);
             return true;
@@ -74,5 +82,15 @@ public class BashApprovalGate {
     public void autoApproveBlock(UUID runId, String blockId) {
         autoApprovedBlocks.add(runId + ":" + blockId);
         log.info("Bash auto-approve enabled for run={} block={}", runId, blockId);
+    }
+
+    /** Enables auto-approval of all bash commands for this run, across every block.
+     *  Wired from PipelineRunner when the run is started with {@code _autoApproveAll: true}
+     *  so the run-level approval flag also covers the bash-tool gate (otherwise agents
+     *  inside agent_with_tools blocks still hit the 5-min wait → modal in UI even
+     *  though the pipeline is auto-approved at the block level). */
+    public void autoApproveRun(UUID runId) {
+        autoApprovedRuns.add(runId);
+        log.info("Bash auto-approve enabled (run-level) for run={}", runId);
     }
 }
