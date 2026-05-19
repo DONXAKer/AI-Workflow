@@ -6,6 +6,7 @@ import { api } from '../services/api'
 import { connectToRun } from '../services/websocket'
 import { PipelineRun, BlockStatus, WsMessage, ApprovalDecision, ToolCallEntry, LlmCallEntry, BlockEvent } from '../types'
 import BlockProgressTable from '../components/BlockProgressTable'
+import PipelineOverview from '../components/PipelineOverview'
 import ApprovalDialog from '../components/ApprovalDialog'
 import ReturnDialog from '../components/ReturnDialog'
 import LoopbackTimeline from '../components/LoopbackTimeline'
@@ -993,6 +994,18 @@ export default function RunPage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Top-of-page pipeline overview — sticky on scroll, click pill to jump to the block row */}
+      {blockSnapshots.size > 0 && (
+        <div className="sticky top-0 z-20 -mx-6 px-6 py-2 mb-3 bg-slate-950/85 backdrop-blur border-b border-slate-800/60">
+          <PipelineOverview
+            blockSnapshots={blockSnapshots}
+            blockStatuses={blockStatuses}
+            currentBlock={run?.currentBlock ?? null}
+            runStatus={run?.status ?? 'PENDING'}
+          />
         </div>
       )}
 

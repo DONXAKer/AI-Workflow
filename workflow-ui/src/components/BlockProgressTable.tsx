@@ -902,6 +902,11 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
               const Icon = cfg.Icon
               const blockIteration = block.iteration ?? 0
               const rowKey = `${block.blockId}:${blockIteration}`
+              // Stable DOM id for PipelineOverview click-to-scroll. Anchor the FIRST
+              // iter-row of each blockId so the overview can jump to the start of
+              // that block's section regardless of how many loopback iters followed.
+              const isFirstRowForBlock =
+                blockStatuses.findIndex(b => b.blockId === block.blockId) === index
               // Filter tool/LLM calls to THIS loopback iteration only — without this,
               // every iteration row shows all calls from every iteration (audit's
               // `iteration` field is the LLM-loop counter, which resets per invocation
@@ -938,7 +943,8 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
               return (
                 <Fragment key={rowKey}>
                   <tr
-                    className={clsx('transition-colors', cfg.rowClass, hasDetails && 'cursor-pointer hover:bg-slate-800/30')}
+                    id={isFirstRowForBlock ? `block-row-${block.blockId}` : undefined}
+                    className={clsx('transition-colors', cfg.rowClass, hasDetails && 'cursor-pointer hover:bg-slate-800/30', 'scroll-mt-24')}
                     onClick={hasDetails ? () => toggleBlock(rowKey) : undefined}
                   >
                     <td className="px-5 py-3.5 text-slate-600 text-xs">{index + 1}</td>
