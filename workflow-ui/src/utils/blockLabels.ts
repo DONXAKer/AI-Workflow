@@ -118,7 +118,6 @@ const BLOCK_ID_LABELS: Record<string, string> = {
 
   // Generic pipeline templates (feature-generic / bugfix / docs / refactor / write-tests / code-review)
   git_branch:          'Ветка Git',
-  plan_docs:           'Планирование документации',
   verify_docs:         'Верификация документации',
   verify_fix:          'Верификация фикса',
   verify_review:       'Верификация ревью',
@@ -127,7 +126,6 @@ const BLOCK_ID_LABELS: Record<string, string> = {
   refactor_impl:       'Рефакторинг',
   impl_tests:          'Реализация тестов',
   test_gen:            'Генерация тестов',
-  review_docs:         'Ревью документации',
 }
 
 /**
