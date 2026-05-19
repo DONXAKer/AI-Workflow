@@ -86,11 +86,15 @@ pipeline:
     config:
       working_dir: ${input.working_dir}
       preload_from: plan_impl
+      # Pull feature description from analysis, not task_md — the from_requirement
+      # entry point injects task_md as empty, so referencing task_md.* here used
+      # to break that EP entirely (PathNotFoundException on first interpolation).
+      # analysis fields are populated in both EP flows.
       user_message: |
-        Feature: ${task_md.title}
+        Feature: ${analysis.summary}
 
         ## Description
-        ${task_md.to_be}
+        ${analysis.technical_approach}
 
         ## Plan (from orchestrator)
         Goal: ${plan_impl.goal}

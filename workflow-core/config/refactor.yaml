@@ -49,6 +49,11 @@ pipeline:
     depends_on: [task_md]
     config:
       working_dir: ${input.working_dir}
+      # Refactor pipeline operates on whichever branch the operator already has
+      # checked out — default to `main` so from_task_md EP works without operator
+      # configuring a branch up front. For the from_branch EP, set this to the
+      # ${input.branch_name} value explicitly via your overlay.
+      branch: main
 
   - id: context_scan
     block: context_scan

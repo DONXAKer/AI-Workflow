@@ -19,13 +19,10 @@ const PROJECT_SPECIFIC_PIPELINES = new Set([
 
 /**
  * Pipelines whose YAML still hardcodes per-block config that the test can't
- * synthesize from a fresh mini-target-repo. Tracked as a follow-up — these
- * need a config-field default (e.g. {@code branch: main} in git_branch_input)
- * before they can run portably.
+ * synthesize from a fresh mini-target-repo. (currently empty — refactor.yaml
+ * has a sane `branch: main` default now)
  */
-const PIPELINES_WITH_HARDCODED_BLOCK_DEPS = new Set([
-  'refactor.yaml', // git_branch_input requires `branch` config, no default
-])
+const PIPELINES_WITH_HARDCODED_BLOCK_DEPS = new Set<string>()
 
 export function pipelineSkipReason(p: EnumeratedPipeline): string | undefined {
   const env = loadEnv()
@@ -64,15 +61,11 @@ const EXTERNAL_STATE_INPUTS = new Set([
 ])
 
 /**
- * Entry-points that inject an upstream block as empty (typical for "from_requirement"
- * shapes) while downstream blocks still hard-reference fields on that injected
- * block (e.g. impl reads ${task_md.title} even when task_md was injected empty).
- * Fixing those YAMLs to fall back to analysis fields is a separate piece of work;
- * for now skip these EPs in the matrix so the rest of the test pack stays clean.
+ * Entry-points that inject an upstream block as empty while downstream blocks
+ * still hard-reference fields on that injected block. (currently empty —
+ * feature-generic.yaml now uses ${analysis.*} fields that survive inject:empty)
  */
-const FROM_REQUIREMENT_BROKEN_EPS = new Set<string>([
-  'feature-generic.yaml::from_requirement',
-])
+const FROM_REQUIREMENT_BROKEN_EPS = new Set<string>()
 
 export function entryPointSkipReason(
   p: EnumeratedPipeline,
