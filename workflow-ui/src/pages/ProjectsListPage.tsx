@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, FolderOpen, AlertCircle, Loader2, X, Save, ChevronRight, Zap, Hand, Check, XCircle } from 'lucide-react'
+import { Plus, FolderOpen, AlertCircle, Loader2, X, Save, ChevronRight, Zap, Hand, Check, XCircle, Layers } from 'lucide-react'
 import { api } from '../services/api'
 import { ProjectInfo, ProjectStats } from '../types'
 import PathInput from '../components/PathInput'
@@ -10,12 +10,13 @@ function slugify(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }
 
-type StatusKind = 'running' | 'awaiting' | 'done' | 'failed'
+type StatusKind = 'running' | 'awaiting' | 'done' | 'failed' | 'total'
 const STATUS_PILL_META: Record<StatusKind, { Icon: typeof Zap; cls: string; title: string }> = {
   running:  { Icon: Zap,     cls: 'bg-blue-900/40 border-blue-700/50 text-blue-300',       title: 'Запущенные сейчас' },
   awaiting: { Icon: Hand,    cls: 'bg-amber-900/40 border-amber-700/50 text-amber-300',    title: 'Ожидают одобрения' },
   done:     { Icon: Check,   cls: 'bg-emerald-900/30 border-emerald-700/50 text-emerald-300', title: 'Завершены сегодня (UTC)' },
   failed:   { Icon: XCircle, cls: 'bg-red-900/40 border-red-700/60 text-red-300',          title: 'Упали сегодня (UTC)' },
+  total:    { Icon: Layers,  cls: 'bg-slate-800/60 border-slate-700/50 text-slate-400',    title: 'Всего запусков (за всё время)' },
 }
 
 function StatusPill({ kind, count }: { kind: StatusKind; count: number }) {
@@ -237,6 +238,7 @@ export default function ProjectsListPage() {
                         <StatusPill kind="awaiting" count={s.awaitingApproval} />
                         <StatusPill kind="done" count={s.completedToday} />
                         <StatusPill kind="failed" count={s.failedToday} />
+                        <StatusPill kind="total" count={s.total} />
                       </div>
                     )}
                   </div>

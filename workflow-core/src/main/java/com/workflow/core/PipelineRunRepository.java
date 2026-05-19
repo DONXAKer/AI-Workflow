@@ -25,6 +25,8 @@ public interface PipelineRunRepository extends JpaRepository<PipelineRun, UUID>,
 
     long countByProjectSlugAndStatusIn(String projectSlug, List<RunStatus> statuses);
 
+    long countByProjectSlug(String projectSlug);
+
     long countByStatusAndCompletedAtAfter(RunStatus status, Instant after);
 
     long countByProjectSlugAndStatusAndCompletedAtAfter(String projectSlug, RunStatus status, Instant after);

@@ -77,12 +77,14 @@ public class ProjectController {
                 .countByProjectSlugAndStatusAndCompletedAtAfter(slug, RunStatus.FAILED, startOfDay)
               + pipelineRunRepository
                 .countByProjectSlugAndStatusAndCompletedAtIsNullAndStartedAtAfter(slug, RunStatus.FAILED, startOfDay);
+            long total = pipelineRunRepository.countByProjectSlug(slug);
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("slug", slug);
             row.put("running", running);
             row.put("awaitingApproval", awaiting);
             row.put("completedToday", completedToday);
             row.put("failedToday", failedToday);
+            row.put("total", total);
             out.add(row);
         }
         return ResponseEntity.ok(out);

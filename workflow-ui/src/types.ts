@@ -565,6 +565,9 @@ export interface ProjectStats {
   awaitingApproval: number
   completedToday: number
   failedToday: number
+  /** Lifetime total — shown as a muted pill so projects that haven't run today
+   *  still have visible "scale of activity" instead of looking empty. */
+  total: number
 }
 
 export interface ProjectInfo {
