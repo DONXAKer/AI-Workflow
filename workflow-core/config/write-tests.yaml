@@ -99,7 +99,7 @@ pipeline:
         ${test_planning.cases}
 
         ## Scaffold (from test_generation)
-        ${test_gen.scaffold_files}
+        ${test_gen.tests}
 
         ## Test framework / conventions
         ${context_scan.test_framework}

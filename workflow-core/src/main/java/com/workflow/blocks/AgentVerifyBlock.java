@@ -117,6 +117,7 @@ public class AgentVerifyBlock implements Block {
     @Autowired private ObjectMapper objectMapper;
     @Autowired(required = false) private ToolCallAuditRepository auditRepository;
     @Autowired(required = false) private ProjectRepository projectRepository;
+    @Autowired(required = false) private com.workflow.core.expr.StringInterpolator stringInterpolator;
     @Autowired(required = false) private RunWebSocketHandler wsHandler;
 
     @Override public String getName() { return "agent_verify"; }
@@ -208,7 +209,7 @@ public class AgentVerifyBlock implements Block {
             return buildResult(true, List.of(), List.of(), List.of(), 0, "");
         }
 
-        Path workingDir = resolveWorkingDir(cfg);
+        Path workingDir = resolveWorkingDir(cfg, input, run);
         if (!workingDir.toFile().isDirectory()) {
             throw new IllegalArgumentException(
                 "agent_verify: working_dir is not a directory: " + workingDir);
@@ -489,10 +490,14 @@ public class AgentVerifyBlock implements Block {
         return objectMapper.readValue(trimmed, new TypeReference<Map<String, Object>>() {});
     }
 
-    private Path resolveWorkingDir(Map<String, Object> cfg) {
+    private Path resolveWorkingDir(Map<String, Object> cfg, Map<String, Object> input, PipelineRun run) {
         Object inline = cfg.get("working_dir");
         if (inline != null && !inline.toString().isBlank()) {
-            return Paths.get(inline.toString()).toAbsolutePath();
+            String raw = inline.toString();
+            String resolved = stringInterpolator != null
+                ? stringInterpolator.interpolate(raw, run, input)
+                : raw;
+            return Paths.get(resolved).toAbsolutePath();
         }
         if (projectRepository != null) {
             String slug = ProjectContext.get();

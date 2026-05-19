@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import { apiGet, apiPost } from './api-client'
+import { apiGet, apiPost, apiPut } from './api-client'
 import { requireAllTokensApiKey } from './env'
 
 interface IntegrationSummary {
@@ -29,7 +29,27 @@ export async function ensureAllTokensIntegration(
     projectSlug,
   })
   const existing = Array.isArray(list) ? list.find((i) => i?.type === 'ALLTOKENS') : null
-  if (existing) return false
+  if (existing) {
+    // Existing integration may have isDefault=false from a previous partial run.
+    // AllTokensProviderClient looks up `findByTypeAndIsDefaultTrueAndProjectSlug`
+    // for routing, so make sure the row we're reusing is actually the default.
+    if (existing.id != null && existing.isDefault !== true) {
+      await apiPut(
+        page,
+        `/api/integrations/${existing.id}`,
+        {
+          name: existing.name ?? `${NAME}-${projectSlug}`,
+          type: 'ALLTOKENS',
+          displayName: DISPLAY,
+          baseUrl: existing.baseUrl ?? BASE_URL,
+          token: apiKey,
+          isDefault: true,
+        },
+        { projectSlug },
+      )
+    }
+    return false
+  }
   await apiPost(
     page,
     '/api/integrations',
