@@ -1,4 +1,4 @@
-import { Check, Loader2, Hand, XCircle, Circle, SkipForward, Cloud, Shield } from 'lucide-react'
+import { Check, Loader2, Hand, XCircle, Circle, SkipForward, Cloud, Shield, AlertTriangle } from 'lucide-react'
 import clsx from 'clsx'
 import { BlockSnapshot, BlockStatus, RunStatus } from '../types'
 import { blockIdLabel } from '../utils/blockLabels'
@@ -8,6 +8,41 @@ interface Props {
   blockStatuses: BlockStatus[]
   currentBlock: string | null
   runStatus: RunStatus
+  pipelineName?: string | null
+}
+
+/**
+ * Heuristic: warn when the selected pipeline doesn't match the task.md flags.
+ * task_md_input emits `heuristics: string[]` and a few boolean fields (is_docs,
+ * is_greenfield, is_bugfix-ish). Pipeline filename hints at expected category.
+ * Returns a short user-facing reason or null when no mismatch detected.
+ */
+function detectTaskPipelineMismatch(
+  pipelineName: string | null | undefined,
+  blockStatuses: BlockStatus[],
+): string | null {
+  if (!pipelineName) return null
+  const taskMd = blockStatuses.find(b => b.blockId === 'task_md')
+  const out = taskMd?.output as Record<string, unknown> | undefined
+  if (!out) return null
+  const heuristics = new Set<string>(Array.isArray(out.heuristics) ? out.heuristics as string[] : [])
+  const isDocs = out.is_docs === true || heuristics.has('is_docs')
+  const isGreenfield = heuristics.has('is_greenfield')
+  const lower = pipelineName.toLowerCase()
+
+  if (lower.includes('docs') && !isDocs) {
+    return 'Pipeline для документации, но task.md не помечен как docs — `code-only` задача проедет docs-флоу и может выдать только markdown без правки кода.'
+  }
+  if (lower.includes('bugfix') && isGreenfield) {
+    return 'Pipeline для багфикса, но task.md помечен как greenfield (новая функциональность) — bugfix-аналитик намеренно ограничивает scope и может отвергнуть задачу.'
+  }
+  if ((lower.includes('refactor') || lower === 'refactor.yaml') && isGreenfield) {
+    return 'Refactor-pipeline на greenfield task — refactor ожидает существующий код для улучшения, не новой реализации.'
+  }
+  if ((lower.includes('write-tests') || lower.includes('write_tests')) && isDocs) {
+    return 'Pipeline для генерации тестов, но task.md помечен как docs.'
+  }
+  return null
 }
 
 type Visual =
@@ -62,22 +97,30 @@ function scrollToBlock(blockId: string): void {
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
-export default function PipelineOverview({ blockSnapshots, blockStatuses, currentBlock, runStatus }: Props) {
+export default function PipelineOverview({ blockSnapshots, blockStatuses, currentBlock, runStatus, pipelineName }: Props) {
   const all = Array.from(blockSnapshots.values())
   if (all.length === 0) return null
   const states = all.map(s => deriveBlockState(s.id, blockStatuses, currentBlock, runStatus))
   const done = states.filter(s => s.visual === 'done').length
   const total = all.length
+  const mismatch = detectTaskPipelineMismatch(pipelineName, blockStatuses)
 
   return (
-    <div className="flex items-start gap-3 flex-wrap py-1.5">
-      <div className="flex items-center gap-1.5 text-xs text-slate-400 shrink-0 font-medium">
-        <span className="uppercase tracking-wide text-[10px] text-slate-500">Пайплайн</span>
-        <span className="text-slate-200 font-mono">{done}/{total}</span>
-        <span className="text-slate-600">блоков</span>
-      </div>
-      <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-        {all.map((snap, idx) => {
+    <div className="space-y-1.5">
+      {mismatch && (
+        <div className="flex items-start gap-1.5 px-2 py-1 rounded-md bg-amber-950/40 border border-amber-800/60 text-amber-200 text-xs leading-snug">
+          <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-400" />
+          <span><span className="font-semibold uppercase tracking-wide text-[10px] mr-1.5">Mismatch</span>{mismatch}</span>
+        </div>
+      )}
+      <div className="flex items-start gap-3 flex-wrap py-1.5">
+        <div className="flex items-center gap-1.5 text-xs text-slate-400 shrink-0 font-medium">
+          <span className="uppercase tracking-wide text-[10px] text-slate-500">Пайплайн</span>
+          <span className="text-slate-200 font-mono">{done}/{total}</span>
+          <span className="text-slate-600">блоков</span>
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+          {all.map((snap, idx) => {
           const state = states[idx]
           const { cls, Icon } = VISUAL_STYLES[state.visual]
           const isCurrent = currentBlock === snap.id && (runStatus === 'RUNNING' || runStatus === 'PAUSED_FOR_APPROVAL')
@@ -106,9 +149,10 @@ export default function PipelineOverview({ blockSnapshots, blockStatuses, curren
               {Escalation && (
                 <Escalation className="w-3 h-3 ml-0.5 text-fuchsia-300/90 shrink-0" />
               )}
-            </button>
-          )
-        })}
+              </button>
+            )
+          })}
+        </div>
       </div>
     </div>
   )

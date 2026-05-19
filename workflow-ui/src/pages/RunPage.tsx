@@ -1005,6 +1005,7 @@ export default function RunPage() {
             blockStatuses={blockStatuses}
             currentBlock={run?.currentBlock ?? null}
             runStatus={run?.status ?? 'PENDING'}
+            pipelineName={run?.pipelineName ?? null}
           />
         </div>
       )}

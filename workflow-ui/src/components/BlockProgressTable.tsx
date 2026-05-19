@@ -953,11 +953,27 @@ export default function BlockProgressTable({ blockStatuses, onReviewApproval, on
                         <div>
                           <div className="flex items-center gap-1.5">
                             <span className="text-sm text-slate-100 font-medium leading-tight">{blockIdLabel(block.blockId)}</span>
-                            {block.iteration != null && block.iteration > 0 && (
-                              <span className="text-[10px] font-mono bg-amber-900/40 text-amber-400 border border-amber-700/50 rounded px-1 py-0.5 leading-none">
-                                #{block.iteration + 1}
-                              </span>
-                            )}
+                            {block.iteration != null && block.iteration > 0 && (() => {
+                              const out = block.output as Record<string, unknown> | undefined
+                              const step = out?.escalation_step
+                              const isCloud = step === 'cloud' || step === 'cloud-tier'
+                              const isHuman = step === 'human'
+                              const cls = isCloud
+                                ? 'bg-purple-900/40 text-purple-300 border border-purple-700/50'
+                                : isHuman
+                                  ? 'bg-rose-900/40 text-rose-300 border border-rose-700/50'
+                                  : 'bg-amber-900/40 text-amber-400 border border-amber-700/50'
+                              const title = isCloud
+                                ? 'Cloud-tier retry — counter beyond YAML max_iterations'
+                                : isHuman
+                                  ? 'Human-gate approved — counter beyond local + cloud retries'
+                                  : `Loopback iteration #${block.iteration + 1}`
+                              return (
+                                <span title={title} className={clsx('text-[10px] font-mono rounded px-1 py-0.5 leading-none', cls)}>
+                                  #{block.iteration + 1}
+                                </span>
+                              )
+                            })()}
                             {(() => {
                               const out = block.output as Record<string, unknown> | undefined
                               const step = out?.escalation_step

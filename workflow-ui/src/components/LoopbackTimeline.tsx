@@ -1,4 +1,4 @@
-import { RotateCcw, AlertCircle, UserCircle, ShieldAlert, History, Repeat } from 'lucide-react'
+import { RotateCcw, AlertCircle, UserCircle, ShieldAlert, History, Repeat, Check, Plus, Minus } from 'lucide-react'
 import { LoopbackEntry } from '../types'
 import clsx from 'clsx'
 
@@ -52,12 +52,50 @@ function metaFor(source: string | undefined) {
   ) {
     return SOURCE_META[source]
   }
-  // Default (verify loopback without explicit source, legacy entries)
   return SOURCE_META.verify
+}
+
+/** Adjacent entries sharing the same to_block form a logical loopback cycle
+ *  (impl → verify → impl → verify → …). Grouping them makes the timeline
+ *  readable when there are 5+ iterations against one target. */
+interface Cycle {
+  toBlock: string
+  entries: LoopbackEntry[]
+}
+
+function groupIntoCycles(entries: LoopbackEntry[]): Cycle[] {
+  const cycles: Cycle[] = []
+  for (const entry of entries) {
+    const last = cycles[cycles.length - 1]
+    if (last && last.toBlock === entry.to_block) {
+      last.entries.push(entry)
+    } else {
+      cycles.push({ toBlock: entry.to_block, entries: [entry] })
+    }
+  }
+  return cycles
+}
+
+interface IssueDelta {
+  resolved: string[]   // present prev, gone now
+  persisted: string[]  // in both
+  added: string[]      // new this iter
+}
+
+function diffIssues(prev: string[] | undefined, curr: string[] | undefined): IssueDelta {
+  const p = new Set(prev ?? [])
+  const c = new Set(curr ?? [])
+  const resolved: string[] = []
+  const persisted: string[] = []
+  const added: string[] = []
+  for (const it of p) (c.has(it) ? persisted : resolved).push(it)
+  for (const it of c) if (!p.has(it)) added.push(it)
+  return { resolved, persisted, added }
 }
 
 export default function LoopbackTimeline({ loopHistoryJson }: Props) {
   const entries = parseHistory(loopHistoryJson)
+  const cycles = groupIntoCycles(entries)
 
   if (entries.length === 0) {
     return (
@@ -73,54 +111,79 @@ export default function LoopbackTimeline({ loopHistoryJson }: Props) {
       <div className="px-4 py-3 border-b border-slate-800 flex items-center gap-2">
         <RotateCcw className="w-4 h-4 text-slate-400" />
         <h2 className="text-sm font-medium text-slate-300">
-          История итераций ({entries.length})
+          История итераций · {entries.length} {entries.length === 1 ? 'возврат' : 'возвратов'} в {cycles.length} {cycles.length === 1 ? 'цикле' : 'циклах'}
         </h2>
       </div>
-      <ol className="divide-y divide-slate-800/60">
-        {entries.map((entry, idx) => {
-          const meta = metaFor(entry.source)
-          const Icon = meta.icon
-          return (
-            <li key={idx} className="px-4 py-3">
-              <div className="flex items-start gap-3">
-                <div className={clsx('flex-shrink-0 w-8 h-8 rounded-full border flex items-center justify-center', meta.bg)}>
-                  <Icon className={clsx('w-4 h-4', meta.color)} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-2 mb-1">
-                    <span className={clsx('text-xs font-medium', meta.color)}>{meta.label}</span>
-                    <span className="text-xs text-slate-500">•</span>
-                    <span className="text-xs text-slate-400 font-mono">
-                      {entry.from_block ? `${entry.from_block} → ` : ''}{entry.to_block}
-                    </span>
-                    <span className="text-xs text-slate-500">•</span>
-                    <span className="text-xs text-slate-500 font-mono">итерация #{entry.iteration}</span>
-                    <span className="ml-auto text-xs text-slate-600 font-mono">
-                      {new Date(entry.timestamp).toLocaleString()}
-                    </span>
-                  </div>
-                  {entry.comment && (
-                    <div className="mt-1.5 text-sm text-slate-200 bg-slate-950/50 rounded px-3 py-2 border border-slate-800/80">
-                      <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Комментарий оператора</p>
-                      {entry.comment}
+      <div className="divide-y divide-slate-800/60">
+        {cycles.map((cycle, ci) => (
+          <section key={ci} className="px-4 py-3">
+            <header className="flex items-center gap-2 mb-2">
+              <Repeat className="w-3.5 h-3.5 text-slate-500" />
+              <span className="text-xs uppercase tracking-wide text-slate-500">Цикл</span>
+              <span className="text-sm font-mono text-slate-300">→ {cycle.toBlock}</span>
+              <span className="text-xs text-slate-600">·</span>
+              <span className="text-xs text-slate-500">{cycle.entries.length} {cycle.entries.length === 1 ? 'итерация' : 'итерации'}</span>
+            </header>
+            <ol className="space-y-2 ml-5 border-l border-slate-800/80 pl-4">
+              {cycle.entries.map((entry, ei) => {
+                const meta = metaFor(entry.source)
+                const Icon = meta.icon
+                const prev = ei > 0 ? cycle.entries[ei - 1] : undefined
+                const delta = diffIssues(prev?.issues, entry.issues)
+                return (
+                  <li key={ei} className="relative">
+                    <div className={clsx('absolute -left-[26px] top-0 w-6 h-6 rounded-full border flex items-center justify-center', meta.bg)}>
+                      <Icon className={clsx('w-3 h-3', meta.color)} />
                     </div>
-                  )}
-                  {entry.issues && entry.issues.length > 0 && (
-                    <ul className="mt-1.5 space-y-0.5 text-sm text-slate-300">
-                      {entry.issues.map((iss, i) => (
-                        <li key={i} className="flex items-start gap-1.5">
-                          <span className="text-slate-600 mt-0.5">•</span>
-                          <span>{iss}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </div>
-            </li>
-          )
-        })}
-      </ol>
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                      <span className={clsx('text-xs font-medium', meta.color)}>{meta.label}</span>
+                      <span className="text-xs text-slate-500">•</span>
+                      <span className="text-xs text-slate-400 font-mono">
+                        {entry.from_block ? `${entry.from_block} → ` : ''}{entry.to_block}
+                      </span>
+                      <span className="text-xs text-slate-500">•</span>
+                      <span className="text-xs text-slate-500 font-mono">итер. #{entry.iteration}</span>
+                      <span className="ml-auto text-xs text-slate-600 font-mono">
+                        {new Date(entry.timestamp).toLocaleString()}
+                      </span>
+                    </div>
+                    {entry.comment && (
+                      <div className="mt-1.5 text-sm text-slate-200 bg-slate-950/50 rounded px-3 py-2 border border-slate-800/80">
+                        <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Комментарий оператора</p>
+                        {entry.comment}
+                      </div>
+                    )}
+                    {entry.issues && entry.issues.length > 0 && (
+                      <ul className="mt-1.5 space-y-0.5 text-sm">
+                        {prev && delta.resolved.map((iss, i) => (
+                          <li key={`r${i}`} className="flex items-start gap-1.5 text-emerald-400/80 line-through decoration-emerald-700/50" title="Issue из предыдущей итерации больше не упоминается">
+                            <Check className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                            <span className="line-clamp-2">{iss}</span>
+                          </li>
+                        ))}
+                        {delta.persisted.map((iss, i) => (
+                          <li key={`p${i}`} className="flex items-start gap-1.5 text-amber-300" title="Issue повторяется (потенциальное зацикливание)">
+                            <Minus className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                            <span>{iss}</span>
+                          </li>
+                        ))}
+                        {delta.added.map((iss, i) => (
+                          <li key={`a${i}`} className={clsx('flex items-start gap-1.5', prev ? 'text-rose-300' : 'text-slate-300')} title={prev ? 'Новая проблема в этой итерации' : undefined}>
+                            {prev
+                              ? <Plus className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                              : <span className="text-slate-600 mt-0.5">•</span>}
+                            <span>{iss}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                )
+              })}
+            </ol>
+          </section>
+        ))}
+      </div>
     </div>
   )
 }
