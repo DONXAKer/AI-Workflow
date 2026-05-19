@@ -28,6 +28,9 @@ public class VerifyBlock implements Block {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired(required = false)
+    private com.workflow.core.expr.StringInterpolator stringInterpolator;
+
     @Override
     public String getName() {
         return "verify";
@@ -85,6 +88,27 @@ public class VerifyBlock implements Block {
         Map<String, Object> subject = new HashMap<>();
         if (subjectOutput instanceof Map) {
             subject = (Map<String, Object>) subjectOutput;
+        } else if (run != null && subjectId != null) {
+            // The verify block's `subject:` may name a block that isn't in `depends_on`
+            // (e.g. bugfix.yaml has verify_fix.subject=tests but verify_fix only
+            // depends_on verify_tests/analysis — `tests` block ran upstream and its
+            // output lives in PipelineRun.outputs). Without this fallback the subject
+            // map stayed empty and every structural check resolved to "field is null".
+            // Walk completed outputs in reverse for the latest iteration of subjectId.
+            for (int i = run.getOutputs().size() - 1; i >= 0; i--) {
+                com.workflow.core.BlockOutput bo = run.getOutputs().get(i);
+                if (subjectId.equals(bo.getBlockId())) {
+                    try {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> latest = objectMapper.readValue(
+                            bo.getOutputJson(), new TypeReference<Map<String, Object>>() {});
+                        subject = latest;
+                        break;
+                    } catch (Exception e) {
+                        log.warn("verify: failed to deserialize subject '{}' output: {}", subjectId, e.getMessage());
+                    }
+                }
+            }
         }
 
         // --- Structural field checks ---
@@ -119,7 +143,16 @@ public class VerifyBlock implements Block {
             }
 
             String subjectJson = objectMapper.writeValueAsString(subject);
-            String llmPrompt = llmCheck.getPrompt() +
+            // Interpolate the operator-provided prompt — typically references analysis
+            // fields like ${analysis.summary} or ${analysis.acceptance_checklist} — so
+            // the LLM sees the actual diagnosis instead of "Missing root cause summary".
+            // Was a silent bug: the field came through as a literal "${...}" string,
+            // and the LLM then complained about empty context.
+            String rawPrompt = llmCheck.getPrompt() != null ? llmCheck.getPrompt() : "";
+            String interpolated = stringInterpolator != null
+                ? stringInterpolator.interpolate(rawPrompt, run, input)
+                : rawPrompt;
+            String llmPrompt = interpolated +
                 "\n\n## Subject Output\n```json\n" + subjectJson + "\n```\n\n" +
                 "## Structural Issues Found\n" + (issues.isEmpty() ? "None" : String.join("\n", issues.stream().map(s -> "- " + s).toList())) +
                 "\n\nRespond ONLY with a JSON object: {\"passed\": bool, \"score\": 0-10, \"issues\": [], \"recommendation\": \"\"}";
