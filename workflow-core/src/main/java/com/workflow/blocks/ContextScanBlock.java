@@ -224,7 +224,7 @@ public class ContextScanBlock implements Block {
 
     private static final String[] MANIFEST_CANDIDATES = {
             "build.gradle.kts", "build.gradle", "pom.xml",
-            "package.json", "pyproject.toml", "go.mod", "Cargo.toml"
+            "package.json", "pyproject.toml", "go.mod", "Cargo.toml", "CMakeLists.txt"
     };
 
     private ManifestExcerpt readManifest(Path workingDir) {
@@ -240,6 +240,22 @@ public class ContextScanBlock implements Block {
                     log.debug("context_scan: failed to read {}: {}", f, e.getMessage());
                 }
             }
+        }
+        // Unreal Engine project: the .uproject (JSON) enumerates modules + plugins —
+        // the closest equivalent to a dependency manifest. Filename is project-specific
+        // (<ProjectName>.uproject), so glob rather than match a fixed name.
+        try (Stream<Path> s = Files.list(workingDir)) {
+            Path up = s.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().endsWith(".uproject"))
+                    .findFirst().orElse(null);
+            if (up != null) {
+                String content = Files.readString(up, StandardCharsets.UTF_8);
+                boolean truncated = content.length() > MAX_MANIFEST_BYTES;
+                if (truncated) content = content.substring(0, MAX_MANIFEST_BYTES);
+                return new ManifestExcerpt(up.getFileName().toString(), content, truncated);
+            }
+        } catch (IOException e) {
+            log.debug("context_scan: .uproject scan failed in {}: {}", workingDir, e.getMessage());
         }
         return null;
     }
@@ -265,6 +281,11 @@ public class ContextScanBlock implements Block {
         }
         if (Files.isRegularFile(workingDir.resolve("go.mod"))) return "go";
         if (Files.isRegularFile(workingDir.resolve("Cargo.toml"))) return "rust";
+        // Unreal Engine / C++ — a .uproject at the root, or a CMake build.
+        if (Files.isRegularFile(workingDir.resolve("CMakeLists.txt"))) return "cpp";
+        try (Stream<Path> s = Files.list(workingDir)) {
+            if (s.anyMatch(p -> p.getFileName().toString().endsWith(".uproject"))) return "cpp";
+        } catch (IOException ignored) {}
         return "unknown";
     }
 
@@ -312,6 +333,7 @@ public class ContextScanBlock implements Block {
             case "typescript", "javascript" -> new String[]{"src", "app"};
             case "go" -> new String[]{"."};
             case "rust" -> new String[]{"src"};
+            case "cpp" -> new String[]{"Source", "src"};
             default -> new String[]{"src", "."};
         };
     }
@@ -324,7 +346,8 @@ public class ContextScanBlock implements Block {
             case "javascript" -> new String[]{".js", ".jsx"};
             case "go" -> new String[]{".go"};
             case "rust" -> new String[]{".rs"};
-            default -> new String[]{".java", ".py", ".ts", ".js", ".go", ".rs"};
+            case "cpp" -> new String[]{".cpp", ".h", ".hpp"};
+            default -> new String[]{".java", ".py", ".ts", ".js", ".go", ".rs", ".cpp", ".h"};
         };
     }
 
