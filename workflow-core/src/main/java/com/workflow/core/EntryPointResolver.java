@@ -400,7 +400,7 @@ public class EntryPointResolver {
         Optional<IntegrationConfig> scoped =
             integrationConfigRepository.findByTypeAndIsDefaultTrueAndProjectSlug(type, scope);
         if (scoped.isPresent()) return scoped;
-        return integrationConfigRepository.findByTypeAndIsDefaultTrue(type);
+        return integrationConfigRepository.findFirstByTypeAndIsDefaultTrue(type);
     }
 
     private GitLabClient buildGitLabClient(IntegrationConfig cfg) {

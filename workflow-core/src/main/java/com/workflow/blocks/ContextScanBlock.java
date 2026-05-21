@@ -366,7 +366,12 @@ public class ContextScanBlock implements Block {
 
     private Map<String, Object> parseSafely(String response) {
         try {
-            return objectMapper.readValue(response, new TypeReference<Map<String, Object>>() {});
+            Map<String, Object> result =
+                    objectMapper.readValue(response, new TypeReference<Map<String, Object>>() {});
+            // readValue returns Java null when the response is the JSON literal `null`
+            // (no exception thrown) — finalize() then NPEs on getOrDefault. Never
+            // hand a null map downstream: degrade to an empty context instead.
+            return result != null ? result : new LinkedHashMap<>();
         } catch (Exception e) {
             log.warn("context_scan: failed to parse JSON, returning empty result: {}", e.getMessage());
             return new LinkedHashMap<>();

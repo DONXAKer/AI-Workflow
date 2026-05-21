@@ -397,7 +397,7 @@ public class VllmProviderClient implements LlmProviderClient {
         String baseUrl = "http://host.docker.internal:8003/v1";
         String apiKey = null;
         Optional<IntegrationConfig> vllmConfig =
-            integrationConfigRepository.findByTypeAndIsDefaultTrue(IntegrationType.VLLM);
+            integrationConfigRepository.findFirstByTypeAndIsDefaultTrue(IntegrationType.VLLM);
         if (vllmConfig.isPresent()) {
             IntegrationConfig cfg = vllmConfig.get();
             if (cfg.getBaseUrl() != null && !cfg.getBaseUrl().isBlank()) {

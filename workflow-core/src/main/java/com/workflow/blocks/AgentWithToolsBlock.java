@@ -296,6 +296,7 @@ public class AgentWithToolsBlock implements Block {
             .budgetUsdCap(budgetUsdCap)
             .workingDir(workingDir)
             .completionSignal(agent.getCompletionSignal())
+            .mcpServerNames(mcpServerNames)
             .progressCallback(wsHandler != null ? detail ->
                 wsHandler.sendBlockProgress(runId, blockId, detail) : null)
             .build();
