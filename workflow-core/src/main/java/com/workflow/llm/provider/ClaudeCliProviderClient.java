@@ -52,7 +52,11 @@ public class ClaudeCliProviderClient implements LlmProviderClient {
 
     private static final Logger log = LoggerFactory.getLogger(ClaudeCliProviderClient.class);
 
-    private static final int CLI_TIMEOUT_SEC = 1800;
+    // 3600s (was 1800): on the CLI route the agentic tool-use loop runs entirely
+    // inside the `claude` subprocess — the block's max_iterations does not apply,
+    // so this wall-clock cap is the only guard. A full impl_bp UE task (build the
+    // UMG tree via MCP + C++ wiring + verify) legitimately needs 30-60 min.
+    private static final int CLI_TIMEOUT_SEC = 3600;
     private static final int CLI_MAX_OUTPUT_BYTES = 1024 * 1024;
 
     private final IntegrationConfigRepository integrationConfigRepository;
