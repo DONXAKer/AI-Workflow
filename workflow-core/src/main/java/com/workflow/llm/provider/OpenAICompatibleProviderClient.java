@@ -60,12 +60,35 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
     protected final ModelPresetResolver presetResolver;
     private final LlmCallRepository llmCallRepository;
 
+    /**
+     * Field-injected (not constructor) so the five concrete provider subclasses don't all
+     * need a new constructor parameter. Optional — absent in unit-test slices that don't
+     * load the billing module.
+     */
+    @Autowired(required = false)
+    private com.workflow.billing.BillingService billingService;
+
     protected OpenAICompatibleProviderClient(ObjectMapper objectMapper,
                                              ModelPresetResolver presetResolver,
                                              @Autowired(required = false) LlmCallRepository llmCallRepository) {
         this.objectMapper = objectMapper;
         this.presetResolver = presetResolver;
         this.llmCallRepository = llmCallRepository;
+    }
+
+    /**
+     * Debits the customer wallet for a just-persisted LLM call. Failures are logged at
+     * ERROR (a stuck debit is lost revenue) but never propagate — billing must not break
+     * the LLM loop.
+     */
+    private void debit(LlmCall call) {
+        if (billingService == null || call == null) return;
+        try {
+            billingService.debitForLlmCall(call);
+        } catch (Exception e) {
+            logger().error("Wallet debit failed for LlmCall {} (account {}): {}",
+                call.getId(), call.getAccountId(), e.getMessage(), e);
+        }
     }
 
     /** Subclass-specific logger so log lines carry the provider name. */
@@ -522,8 +545,15 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
                 toolMsg.put("content", result.content() == null ? "" : result.content());
             }
 
-            if (totalCostUsd >= request.budgetUsdCap()) {
-                logger().warn("Tool-use budget exceeded: spent=${} cap=${}",
+            // Per-iteration wallet check: budgetUsdCap is per tool-use loop, but a run has
+            // many loops sharing one wallet. Re-reading the wallet each iteration catches
+            // depletion caused by sibling blocks too. recordToolUseUsage above already
+            // debited this iteration, so the balance is current.
+            boolean walletDepleted = billingService != null
+                && billingService.isWalletDepleted(request.accountId());
+            if (totalCostUsd >= request.budgetUsdCap() || walletDepleted) {
+                logger().warn("Tool-use halted ({}): spent=${} cap=${}",
+                    walletDepleted ? "wallet exhausted" : "budget exceeded",
                     totalCostUsd, request.budgetUsdCap());
                 return new ToolUseResponse(LlmTextUtils.stripCodeFences(finalText.strip()),
                     StopReason.BUDGET_EXCEEDED, history,
@@ -646,6 +676,7 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
                 call.setBlockId(ctx.blockId());
             });
             llmCallRepository.save(call);
+            debit(call);
         } catch (Exception e) {
             logger().debug("LlmCall persist failed: {}", e.getMessage());
         }
@@ -675,6 +706,7 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
                 call.setToolCallsMadeJson(objectMapper.writeValueAsString(toolNames));
             }
             llmCallRepository.save(call);
+            debit(call);
         } catch (Exception e) {
             logger().debug("LlmCall persist failed (tool-use iter {}): {}", iteration, e.getMessage());
         }

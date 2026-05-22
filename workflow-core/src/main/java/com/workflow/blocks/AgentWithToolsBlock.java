@@ -124,6 +124,7 @@ public class AgentWithToolsBlock implements Block {
     @Autowired(required = false) private com.workflow.knowledge.KnowledgeBase knowledgeBase;
 
     @Autowired(required = false) private TechContextInjector techContextInjector;
+    @Autowired(required = false) private com.workflow.billing.BillingService billingService;
 
     @Override public String getName() { return "agent_with_tools"; }
 
@@ -283,6 +284,20 @@ public class AgentWithToolsBlock implements Block {
         int maxIterations = asInt(cfg, "max_iterations", DEFAULT_MAX_ITERATIONS);
         double budgetUsdCap = asDouble(cfg, "budget_usd_cap", DEFAULT_BUDGET_USD_CAP);
 
+        // Clamp the per-loop budget to what the customer's wallet can actually afford
+        // (balance / markup, since budgetUsdCap is denominated in raw LLM cost). The
+        // per-iteration wallet check inside completeWithTools is the tight stop; this
+        // just avoids handing the loop a cap it can never reach.
+        final Long accountId = run.getAccountId();
+        if (billingService != null && accountId != null) {
+            double affordable = billingService.remainingRawBudgetUsd(accountId);
+            if (affordable < budgetUsdCap) {
+                log.info("agent_with_tools[{}]: budget cap clamped ${} -> ${} by wallet (account {})",
+                    blockConfig.getId(), budgetUsdCap, affordable, accountId);
+                budgetUsdCap = affordable;
+            }
+        }
+
         final String blockId = blockConfig.getId();
         final java.util.UUID runId = run.getId();
         ToolUseRequest request = ToolUseRequest.builder()
@@ -297,6 +312,7 @@ public class AgentWithToolsBlock implements Block {
             .workingDir(workingDir)
             .completionSignal(agent.getCompletionSignal())
             .mcpServerNames(mcpServerNames)
+            .accountId(accountId)
             .progressCallback(wsHandler != null ? detail ->
                 wsHandler.sendBlockProgress(runId, blockId, detail) : null)
             .build();
@@ -443,11 +459,16 @@ public class AgentWithToolsBlock implements Block {
     }
 
     /**
-     * Resolves working_dir in priority order: block config → current project's
-     * {@link Project#getWorkingDir()}. Fails if neither is set.
+     * Resolves working_dir in priority order: per-run sandbox ({@link PipelineRun#getWorkspaceDir()})
+     * → block config → current project's {@link Project#getWorkingDir()}. Fails if none is set.
      */
     private String resolveWorkingDir(Map<String, Object> cfg,
             Map<String, Object> input, PipelineRun run) {
+        // Highest priority: per-run repo sandbox cloned by WorkspaceProvisioner. This also
+        // becomes the PathScope root, so native tools stay sandboxed to the clone.
+        if (run != null && run.getWorkspaceDir() != null && !run.getWorkspaceDir().isBlank()) {
+            return run.getWorkspaceDir();
+        }
         Object inline = cfg.get("working_dir");
         if (inline != null && !inline.toString().isBlank()) {
             String raw = inline.toString();

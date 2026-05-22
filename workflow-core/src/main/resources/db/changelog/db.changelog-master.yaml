@@ -1,0 +1,21 @@
+# Liquibase master changelog. Liquibase runs these before Hibernate on startup and
+# records applied changeSets in DATABASECHANGELOG.
+#
+# changelog-000-baseline.yaml was produced by `liquibase generateChangeLog` against the
+# live workflow_ai schema (2026-05-22) — it is the full schema baseline (20 tables, all
+# indexes / unique constraints / foreign keys), including the SaaS Phase 1 objects
+# (account, wallet, ledger_entry, account_id columns).
+#
+# Adopting it on a database that ALREADY has the schema (every existing install): run
+# `liquibase changelog-sync` once so the baseline changeSets are marked applied without
+# re-executing — see docs. Fresh databases apply the baseline normally.
+#
+# Append new migrations below as changelog-001, changelog-002, ... — never edit the
+# baseline (its changeSet checksums are recorded by changelog-sync).
+databaseChangeLog:
+  - include:
+      file: db/changelog/changelog-000-baseline.yaml
+  - include:
+      file: db/changelog/changelog-001-email-verification.yaml
+  - include:
+      file: db/changelog/changelog-002-pipeline-run-index.yaml

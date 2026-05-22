@@ -1,6 +1,8 @@
 package com.workflow.core;
 
+import com.workflow.account.TenantContext;
 import jakarta.persistence.*;
+import org.hibernate.annotations.Filter;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -12,7 +14,11 @@ import java.util.Set;
 import java.util.UUID;
 
 @Entity
-@Table(name = "pipeline_run")
+@Table(name = "pipeline_run", indexes = {
+    // Backs the GET /api/runs list query: WHERE project_slug = ? ORDER BY started_at DESC.
+    @Index(name = "idx_pipeline_run_project_started", columnList = "project_slug, started_at")
+})
+@Filter(name = "accountFilter")
 @NamedEntityGraph(
     name = "PipelineRun.withCompletedBlocks",
     attributeNodes = @NamedAttributeNode("completedBlocks")
@@ -137,10 +143,26 @@ public class PipelineRun {
     @Column(name = "total_cost_usd")
     private Double totalCostUsd;
 
+    /** Owning account (multi-tenancy). Nullable for pre-migration rows; backfilled at startup. */
+    @Column(name = "account_id")
+    private Long accountId;
+
+    /**
+     * Absolute path to the per-run repo sandbox cloned by {@code WorkspaceProvisioner}.
+     * Null for runs against a project's manually-configured {@code workingDir} (self-hosted /
+     * power users). When set, it becomes the effective working directory + PathScope root.
+     */
+    @Column(name = "workspace_dir")
+    private String workspaceDir;
+
     @PrePersist
     protected void onCreate() {
         if (startedAt == null) {
             startedAt = Instant.now();
+        }
+        if (accountId == null) {
+            Long tenant = TenantContext.get();
+            if (tenant != null) accountId = tenant;
         }
     }
 
@@ -244,4 +266,10 @@ public class PipelineRun {
 
     public double getTotalCostUsd() { return totalCostUsd != null ? totalCostUsd : 0.0; }
     public void setTotalCostUsd(double totalCostUsd) { this.totalCostUsd = Math.max(0.0, totalCostUsd); }
+
+    public Long getAccountId() { return accountId; }
+    public void setAccountId(Long accountId) { this.accountId = accountId; }
+
+    public String getWorkspaceDir() { return workspaceDir; }
+    public void setWorkspaceDir(String workspaceDir) { this.workspaceDir = workspaceDir; }
 }

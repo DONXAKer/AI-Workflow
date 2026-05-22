@@ -1,6 +1,8 @@
 package com.workflow.security.audit;
 
+import com.workflow.account.TenantContext;
 import jakarta.persistence.*;
+import org.hibernate.annotations.Filter;
 
 import java.time.Instant;
 
@@ -17,6 +19,7 @@ import java.time.Instant;
     @Index(name = "idx_audit_actor", columnList = "actor"),
     @Index(name = "idx_audit_target", columnList = "targetType,targetId"),
 })
+@Filter(name = "accountFilter")
 public class AuditLog {
 
     @Id
@@ -46,10 +49,25 @@ public class AuditLog {
     @Column(nullable = false)
     private String projectSlug = "default";
 
+    /** Owning account (multi-tenancy). Nullable for pre-migration / contextless rows. */
+    @Column(name = "account_id")
+    private Long accountId;
+
     public AuditLog() {}
+
+    @PrePersist
+    void onCreate() {
+        if (accountId == null) {
+            Long tenant = TenantContext.get();
+            if (tenant != null) accountId = tenant;
+        }
+    }
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
+
+    public Long getAccountId() { return accountId; }
+    public void setAccountId(Long accountId) { this.accountId = accountId; }
 
     public Instant getTimestamp() { return timestamp; }
     public void setTimestamp(Instant timestamp) { this.timestamp = timestamp; }

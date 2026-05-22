@@ -17,9 +17,13 @@ import IntegrationsTab from './pages/project/IntegrationsTab'
 import McpServersTab from './pages/project/McpServersTab'
 import SettingsTab from './pages/project/SettingsTab'
 
-import RunPage from './pages/RunPage'
+import SimpleRunPage from './pages/SimpleRunPage'
 import RunHistoryPage from './pages/RunHistoryPage'
 import LoginPage from './pages/LoginPage'
+import RegisterPage from './pages/RegisterPage'
+import ConnectRepoPage from './pages/ConnectRepoPage'
+import OnboardingWizard from './pages/OnboardingWizard'
+import BillingPage from './pages/BillingPage'
 import ActiveRunsPage from './pages/ActiveRunsPage'
 
 import IntegrationsSettings from './components/IntegrationsSettings'
@@ -29,6 +33,7 @@ import KillSwitchPage from './pages/KillSwitchPage'
 import CostDashboardPage from './pages/CostDashboardPage'
 import UsersSettingsPage from './pages/UsersSettingsPage'
 import ProjectsSettingsPage from './pages/ProjectsSettingsPage'
+import AccountsAdminPage from './pages/AccountsAdminPage'
 import SystemLayout from './pages/SystemLayout'
 
 function MobileTopBar({ onOpen }: { onOpen: () => void }) {
@@ -107,6 +112,12 @@ function AppLayout() {
             {/* Main: projects list */}
             <Route path="/" element={<ProjectsListPage />} />
 
+            {/* Self-serve: connect a GitHub/GitLab repository as a new project */}
+            <Route path="/connect-repo" element={<ConnectRepoPage />} />
+
+            {/* Wallet — balance, top-up, ledger history */}
+            <Route path="/billing" element={<BillingPage />} />
+
             {/* Project workspace */}
             <Route path="/projects/:slug" element={<ProjectWorkspacePage />}>
               <Route index element={<Navigate to="smart-start" replace />} />
@@ -118,17 +129,18 @@ function AppLayout() {
               <Route path="mcp" element={<McpServersTab />} />
               <Route path="settings" element={<SettingsTab />} />
               {/* Run opened from inside a project — keeps project tab bar visible */}
-              <Route path="runs/:runId" element={<RunPage />} />
+              <Route path="runs/:runId" element={<SimpleRunPage />} />
             </Route>
 
             {/* Run detail — global: redirects to project-scoped URL if run has a project */}
-            <Route path="/runs/:runId" element={<RunPage />} />
-            <Route path="/run/:runId" element={<RunPage />} />
+            <Route path="/runs/:runId" element={<SimpleRunPage />} />
+            <Route path="/run/:runId" element={<SimpleRunPage />} />
 
             {/* System settings (admin) */}
             <Route path="/system" element={<SystemLayout />}>
               <Route index element={<Navigate to="users" replace />} />
               <Route path="users" element={<UsersSettingsPage />} />
+              <Route path="accounts" element={<AccountsAdminPage />} />
               <Route path="integrations" element={<IntegrationsSettings />} />
               <Route path="agent-profiles" element={<AgentProfilesSettings />} />
               <Route path="audit" element={<AuditLogPage />} />
@@ -167,6 +179,15 @@ function RequireAuth() {
   if (!user) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />
   }
+  // Onboarding gate: a freshly self-registered account (accountOnboarded === false)
+  // is sent through the wizard first. Platform staff and legacy accounts skip it.
+  const needsOnboarding = user.role !== 'PLATFORM_ADMIN' && user.accountOnboarded === false
+  if (needsOnboarding && location.pathname !== '/onboarding') {
+    return <Navigate to="/onboarding" replace />
+  }
+  if (location.pathname === '/onboarding') {
+    return <OnboardingWizard />
+  }
   return (
     <RunsProvider>
       <AppLayout />
@@ -180,6 +201,7 @@ export default function App() {
       <ToastProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
           <Route path="/*" element={<RequireAuth />} />
         </Routes>
         <ToastContainer />

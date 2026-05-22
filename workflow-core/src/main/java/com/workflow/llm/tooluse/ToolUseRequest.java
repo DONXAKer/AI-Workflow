@@ -34,7 +34,8 @@ public record ToolUseRequest(
     String responseFormat,
     String finalizeToolName,
     int forceFinalizeAfter,
-    List<String> mcpServerNames
+    List<String> mcpServerNames,
+    Long accountId
 ) {
 
     public static Builder builder() {
@@ -57,6 +58,7 @@ public record ToolUseRequest(
         private String finalizeToolName;
         private int forceFinalizeAfter;
         private List<String> mcpServerNames = List.of();
+        private Long accountId;
 
         public Builder model(String v) { this.model = v; return this; }
         public Builder systemPrompt(String v) { this.systemPrompt = v; return this; }
@@ -84,13 +86,18 @@ public record ToolUseRequest(
          *  CLI route to pass {@code --mcp-config} to the claude subprocess; ignored by
          *  HTTP providers (they connect to MCP servers in-process). */
         public Builder mcpServerNames(List<String> v) { this.mcpServerNames = v == null ? List.of() : v; return this; }
+        /** Owning account — lets the tool-use loop halt the moment that account's wallet
+         *  runs dry (per-iteration check), independent of the per-loop {@code budgetUsdCap}.
+         *  Null for unbilled calls (CLI route, tests). */
+        public Builder accountId(Long v) { this.accountId = v; return this; }
 
         public ToolUseRequest build() {
             if (model == null || model.isBlank()) throw new IllegalArgumentException("model required");
             if (userMessage == null) throw new IllegalArgumentException("userMessage required");
             return new ToolUseRequest(model, systemPrompt, userMessage, tools,
                 maxTokens, temperature, maxIterations, budgetUsdCap, progressCallback, workingDir,
-                completionSignal, responseFormat, finalizeToolName, forceFinalizeAfter, mcpServerNames);
+                completionSignal, responseFormat, finalizeToolName, forceFinalizeAfter, mcpServerNames,
+                accountId);
         }
     }
 }

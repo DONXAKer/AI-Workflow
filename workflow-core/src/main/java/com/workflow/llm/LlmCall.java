@@ -1,6 +1,8 @@
 package com.workflow.llm;
 
+import com.workflow.account.TenantContext;
 import jakarta.persistence.*;
+import org.hibernate.annotations.Filter;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -18,6 +20,7 @@ import java.util.UUID;
     @Index(name = "idx_llmcall_run", columnList = "runId"),
     @Index(name = "idx_llmcall_model", columnList = "model"),
 })
+@Filter(name = "accountFilter")
 public class LlmCall {
 
     @Id
@@ -79,7 +82,23 @@ public class LlmCall {
     @Column(name = "finish_reason")
     private String finishReason;
 
+    /**
+     * Owning account (multi-tenancy) — drives wallet debiting in {@code BillingService}.
+     * Nullable for pre-migration / contextless rows; auto-populated from {@link TenantContext}
+     * at persist time (run threads snapshot the account id; see {@code PipelineRunner}).
+     */
+    @Column(name = "account_id")
+    private Long accountId;
+
     public LlmCall() {}
+
+    @PrePersist
+    void onCreate() {
+        if (accountId == null) {
+            Long tenant = TenantContext.get();
+            if (tenant != null) accountId = tenant;
+        }
+    }
 
     public Long getId() { return id; }
     public Instant getTimestamp() { return timestamp; }
@@ -115,4 +134,7 @@ public class LlmCall {
 
     public String getFinishReason() { return finishReason; }
     public void setFinishReason(String finishReason) { this.finishReason = finishReason; }
+
+    public Long getAccountId() { return accountId; }
+    public void setAccountId(Long accountId) { this.accountId = accountId; }
 }

@@ -5,12 +5,15 @@ import { UserInfo, UserRole, CreateUserBody, UpdateUserBody } from '../types'
 import PageHeader from '../components/layout/PageHeader'
 import clsx from 'clsx'
 
+// PLATFORM_ADMIN is platform staff — not an assignable tenant role, so it is omitted
+// from ROLES (the create/edit dropdown) but still mapped for label/colour display.
 const ROLES: UserRole[] = ['VIEWER', 'OPERATOR', 'RELEASE_MANAGER', 'ADMIN']
 const ROLE_LABEL: Record<UserRole, string> = {
   VIEWER: 'Viewer',
   OPERATOR: 'Operator',
   RELEASE_MANAGER: 'Release Manager',
   ADMIN: 'Admin',
+  PLATFORM_ADMIN: 'Platform Admin',
 }
 
 const ROLE_COLOR: Record<UserRole, string> = {
@@ -18,6 +21,7 @@ const ROLE_COLOR: Record<UserRole, string> = {
   OPERATOR: 'bg-blue-950/40 border-blue-800/60 text-blue-300',
   RELEASE_MANAGER: 'bg-amber-950/40 border-amber-800/60 text-amber-300',
   ADMIN: 'bg-red-950/40 border-red-800/60 text-red-300',
+  PLATFORM_ADMIN: 'bg-purple-950/40 border-purple-800/60 text-purple-300',
 }
 
 interface FormState {

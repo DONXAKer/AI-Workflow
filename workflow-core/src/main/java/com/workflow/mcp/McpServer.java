@@ -1,10 +1,13 @@
 package com.workflow.mcp;
 
+import com.workflow.account.TenantContext;
 import jakarta.persistence.*;
+import org.hibernate.annotations.Filter;
 import java.time.Instant;
 
 @Entity
 @Table(name = "mcp_server")
+@Filter(name = "accountFilter")
 public class McpServer {
 
     @Id
@@ -28,11 +31,21 @@ public class McpServer {
     @Column(nullable = false)
     private boolean enabled = true;
 
+    /** Owning account (multi-tenancy). Nullable for pre-migration rows; backfilled at startup. */
+    @Column(name = "account_id")
+    private Long accountId;
+
     private Instant createdAt;
     private Instant updatedAt;
 
     @PrePersist
-    protected void onCreate() { createdAt = updatedAt = Instant.now(); }
+    protected void onCreate() {
+        createdAt = updatedAt = Instant.now();
+        if (accountId == null) {
+            Long tenant = TenantContext.get();
+            if (tenant != null) accountId = tenant;
+        }
+    }
 
     @PreUpdate
     protected void onUpdate() { updatedAt = Instant.now(); }
@@ -59,6 +72,9 @@ public class McpServer {
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
+
+    public Long getAccountId() { return accountId; }
+    public void setAccountId(Long accountId) { this.accountId = accountId; }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

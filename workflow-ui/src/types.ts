@@ -215,7 +215,7 @@ export interface SkillInfo {
   description: string
 }
 
-export type UserRole = 'VIEWER' | 'OPERATOR' | 'RELEASE_MANAGER' | 'ADMIN'
+export type UserRole = 'VIEWER' | 'OPERATOR' | 'RELEASE_MANAGER' | 'ADMIN' | 'PLATFORM_ADMIN'
 
 export interface CurrentUser {
   id: number
@@ -223,6 +223,9 @@ export interface CurrentUser {
   displayName: string | null
   email: string | null
   role: UserRole
+  accountId?: number | null
+  accountOnboarded?: boolean
+  emailVerified?: boolean
 }
 
 export interface AuditEntry {
