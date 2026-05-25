@@ -498,6 +498,12 @@ public class RunController {
     private boolean isCrossAccount(PipelineRun run) {
         if (run == null) return false;
         if (com.workflow.account.TenantContext.isPlatformAdmin()) return false;
+        // Legacy / pre-tenancy runs carry no accountId — they predate row-level
+        // isolation and belong to no account, so they are not "cross" account.
+        // Without this guard a tenant user gets a 404 on every legacy run, even
+        // though GET /api/runs still lists them (the list query is project-scoped,
+        // not account-scoped) — the detail endpoint must stay consistent with it.
+        if (run.getAccountId() == null) return false;
         Long ctx = com.workflow.account.TenantContext.get();
         return ctx != null && !ctx.equals(run.getAccountId());
     }

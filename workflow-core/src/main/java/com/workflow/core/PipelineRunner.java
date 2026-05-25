@@ -149,6 +149,11 @@ public class PipelineRunner {
 
     public CompletableFuture<Void> run(PipelineConfig config, String requirement, UUID runId,
                                         boolean dryRun, Map<String, Object> runInputs) {
+        // Capture caller's tenant from the POST-handler thread BEFORE we spawn the
+        // run-thread — Spring Data JPA's save() takes the merge() path for our
+        // pre-id'd PipelineRun (UUID set by RunController) so @PrePersist never
+        // fires and would never populate accountId on its own.
+        Long callerAccountId = com.workflow.account.TenantContext.get();
         PipelineRun pipelineRun = PipelineRun.builder()
             .id(runId)
             .pipelineName(config.getName())
@@ -161,6 +166,7 @@ public class PipelineRunner {
             .build();
         pipelineRun.setDryRun(dryRun);
         pipelineRun.setProjectSlug(com.workflow.project.ProjectContext.get());
+        if (callerAccountId != null) pipelineRun.setAccountId(callerAccountId);
         if (runInputs != null && runInputs.get("_workspaceDir") instanceof String wd0 && !wd0.isBlank()) {
             pipelineRun.setWorkspaceDir(wd0);
         }
@@ -220,6 +226,9 @@ public class PipelineRunner {
                                             String fromBlockId, Map<String, Map<String, Object>> injectedOutputs,
                                             UUID runId, Map<String, Object> runInputs,
                                             Map<String, Instant[]> blockTimestamps) {
+        // See run() above for why accountId has to be set explicitly here rather
+        // than relying on @PrePersist (merge-path skips lifecycle callbacks).
+        Long callerAccountId = com.workflow.account.TenantContext.get();
         PipelineRun pipelineRun = PipelineRun.builder()
             .id(runId)
             .pipelineName(config.getName())
@@ -231,6 +240,7 @@ public class PipelineRunner {
             .outputs(new ArrayList<>())
             .build();
         pipelineRun.setProjectSlug(com.workflow.project.ProjectContext.get());
+        if (callerAccountId != null) pipelineRun.setAccountId(callerAccountId);
         if (runInputs != null && runInputs.get("_workspaceDir") instanceof String wd1 && !wd1.isBlank()) {
             pipelineRun.setWorkspaceDir(wd1);
         }
