@@ -264,6 +264,7 @@ All earlier phases are merged into `main`:
 - **Pipeline config validator** (`cb2b0c7`) — Level 1/2/3 checks via `PipelineConfigValidator`; pre-run gate on `POST /api/runs`, on-save gate in `PipelineConfigWriter`, explicit endpoint `POST /api/pipelines/validate`.
 - **Pipeline editor UI** (Phase 2, `0cd2ff3` + `e2e26db`) — visual editor in `workflow-ui`.
 - **Smart-tier checklist + agent_verify** (`f2e9882`) — `acceptance_checklist` from `analysis` is the single source of truth for "done"; `agent_verify` block enforces it.
+- **Compile gate in review_bp** (2026-05-25, FEAT-PIPELINE-002) — `review_bp.system_prompt` в `D:/WarCard/.ai-workflow/pipelines/feature.yaml` содержит обязательный COMPILE GATE: после wiring-проверки вызывает `compile_blueprint` для каждого modified Blueprint. Hard-fail при `compiled: false` или orphan-node / missing-struct warnings. Дополнительный CDO-binding check: если родительский C++ класс имеет `EditDefaultsOnly TSubclassOf<*>` UPROPERTY — проверяет что default value выставлен в Class Defaults через `get_blueprint_class_info`. Lesson learned: без compile-gate pipeline три раза пропустил orphan-node, missing-struct, null-CDO regressions.
 
 ### Manager audit (2026-05-18) — guardrails & CI/CD blocks
 
