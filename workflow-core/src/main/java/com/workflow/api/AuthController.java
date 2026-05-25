@@ -8,9 +8,11 @@ import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.DisabledException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContext;
@@ -21,6 +23,7 @@ import org.springframework.security.web.context.HttpSessionSecurityContextReposi
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.web.bind.annotation.*;
 
+import java.net.URI;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -41,6 +44,18 @@ public class AuthController {
 
     @Autowired
     private RememberMeServices rememberMeServices;
+
+    @Autowired
+    private com.workflow.account.RegistrationService registrationService;
+
+    @Autowired
+    private com.workflow.account.AccountRepository accountRepository;
+
+    @Autowired
+    private com.workflow.account.RegistrationRateLimiter registrationRateLimiter;
+
+    @Value("${workflow.app-base-url:http://localhost:5173}")
+    private String appBaseUrl;
 
     /**
      * Session repo must be populated explicitly when authentication is set outside the
@@ -78,9 +93,80 @@ public class AuthController {
             return ResponseEntity.ok(currentUserPayload(username));
         } catch (BadCredentialsException e) {
             return ResponseEntity.status(401).body(Map.of("error", "Invalid credentials"));
+        } catch (DisabledException e) {
+            return ResponseEntity.status(403).body(Map.of(
+                "error", "Account is disabled or email is not verified"));
         } catch (Exception e) {
             log.error("Login failure for {}: {}", username, e.getMessage());
             return ResponseEntity.status(401).body(Map.of("error", "Authentication failed"));
+        }
+    }
+
+    /**
+     * Confirms an email address from the link in the verification message. Public + GET
+     * (clicked from the user's inbox) — permit-all in {@code SecurityConfig}. Redirects
+     * back to the SPA login with a {@code verified} flag.
+     */
+    @GetMapping("/verify-email")
+    public ResponseEntity<Void> verifyEmail(@RequestParam(value = "token", required = false) String token) {
+        boolean ok = false;
+        if (token != null && !token.isBlank()) {
+            var userOpt = userRepository.findByVerificationToken(token);
+            if (userOpt.isPresent()) {
+                User user = userOpt.get();
+                user.setEmailVerified(true);
+                user.setVerificationToken(null);
+                userRepository.save(user);
+                auditService.record("EMAIL_VERIFIED", "user", user.getUsername(), Map.of());
+                ok = true;
+            }
+        }
+        URI redirect = URI.create(appBaseUrl + "/login?verified=" + (ok ? "1" : "0"));
+        return ResponseEntity.status(302).location(redirect).build();
+    }
+
+    /**
+     * Self-serve sign-up: provisions a new account + owner user + wallet, then logs the
+     * user straight in (same session-cookie flow as {@link #login}). CSRF-exempt and
+     * permit-all in {@code SecurityConfig}, alongside {@code /api/auth/login}.
+     */
+    @PostMapping("/register")
+    public ResponseEntity<Map<String, Object>> register(@RequestBody Map<String, Object> body,
+                                                         HttpServletRequest request,
+                                                         HttpServletResponse response) {
+        if (!registrationRateLimiter.tryRegister(clientIp(request))) {
+            return ResponseEntity.status(429).body(Map.of(
+                "error", "Too many registration attempts — please try again later"));
+        }
+        String email = body.get("email") instanceof String s ? s : null;
+        String password = body.get("password") instanceof String s ? s : null;
+        String displayName = body.get("displayName") instanceof String s ? s : null;
+        if (email == null || password == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "email and password are required"));
+        }
+        try {
+            registrationService.register(email, password, displayName);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Registration failed for {}: {}", email, e.getMessage(), e);
+            return ResponseEntity.internalServerError().body(Map.of("error", "Registration failed"));
+        }
+
+        String username = email.trim().toLowerCase();
+        try {
+            Authentication auth = authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(username, password));
+            SecurityContext context = SecurityContextHolder.createEmptyContext();
+            context.setAuthentication(auth);
+            SecurityContextHolder.setContext(context);
+            securityContextRepository.saveContext(context, request, response);
+            auditService.record("REGISTER", "user", username, Map.of());
+            return ResponseEntity.ok(currentUserPayload(username));
+        } catch (Exception e) {
+            // Account is created — surface success and let the user log in manually.
+            log.warn("Auto-login after registration failed for {}: {}", username, e.getMessage());
+            return ResponseEntity.ok(Map.of("registered", true));
         }
     }
 
@@ -112,6 +198,15 @@ public class AuthController {
         return ResponseEntity.ok(currentUserPayload(authentication.getName()));
     }
 
+    /** Best-effort client IP — first X-Forwarded-For hop when behind a proxy. */
+    private static String clientIp(HttpServletRequest request) {
+        String xff = request.getHeader("X-Forwarded-For");
+        if (xff != null && !xff.isBlank()) {
+            return xff.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
+    }
+
     private Map<String, Object> currentUserPayload(String username) {
         User user = userRepository.findByUsername(username)
             .orElseThrow(() -> new IllegalStateException("Authenticated user not found in DB: " + username));
@@ -121,6 +216,14 @@ public class AuthController {
         payload.put("displayName", user.getDisplayName());
         payload.put("email", user.getEmail());
         payload.put("role", user.getRole().name());
+        payload.put("accountId", user.getAccountId());
+        payload.put("emailVerified", user.isEmailVerified());
+        // Drives the post-login onboarding-wizard redirect.
+        boolean onboarded = user.getAccountId() != null
+            && accountRepository.findById(user.getAccountId())
+                .map(a -> a.getOnboardedAt() != null)
+                .orElse(false);
+        payload.put("accountOnboarded", onboarded);
         return payload;
     }
 }

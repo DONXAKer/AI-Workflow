@@ -361,7 +361,21 @@
       "Bash(mkdir -p \"C:/tmp/wf-ui-tc\")",
       "Bash(cp -r \"D:/Проекты/AI-Workflow/workflow-ui/.\" \"C:/tmp/wf-ui-tc/\")",
       "Bash(docker port *)",
-      "WebFetch(domain:docs.alltokens.ru)"
+      "WebFetch(domain:docs.alltokens.ru)",
+      "Bash(grep -rnE 'totalCostUsd|costUsd|\\\\\\\\\\\\$\\\\{' \"D:/Проекты/AI-Workflow/workflow-ui/src\")",
+      "Bash(grep -rn 'formatUsd\\\\|totalCostUsd\\\\|\\\\\\\\$\\\\${' \"D:/Проекты/AI-Workflow/workflow-ui/src\")",
+      "Bash(mkdir -p \"C:/tmp/wf-ui-tc2\")",
+      "Bash(cp -r \"D:/Проекты/AI-Workflow/workflow-ui/.\" \"C:/tmp/wf-ui-tc2/\")",
+      "Bash(PYTHONIOENCODING=utf-8 python3 -c ' *)",
+      "Bash(xargs -I {} bash -c 'echo \"=== {} ===\" && head -20 \"{}\"')",
+      "Bash(Get-ChildItem -Path \"D:\\\\Проекты\\\\AI-Workflow\" -Filter \"*.yaml\" -Recurse)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "PowerShell(Write-Output \\(\"CWD: \" + \\(Get-Location\\).Path\\); Get-ChildItem -Directory -ErrorAction SilentlyContinue | Select-Object -First 10 -ExpandProperty Name)",
+      "Bash(rm -rf /c/wf-build/workflow-core)",
+      "Bash(mkdir -p /c/wf-build/workflow-core)",
+      "Bash(cp -r D:/Проекты/AI-Workflow/workflow-core/src /c/wf-build/workflow-core/src)",
+      "Bash(cp D:/Проекты/AI-Workflow/workflow-core/build.gradle.kts D:/Проекты/AI-Workflow/workflow-core/settings.gradle.kts /c/wf-build/workflow-core/)",
+      "Bash([ -f \"$S/gradle.properties\" ])"
     ]
   }
 }

@@ -115,8 +115,33 @@ public class McpClient {
         JsonNode response = postEnvelope(server, envelope);
         if (response.has("error")) {
             JsonNode err = response.get("error");
+            int code = err.path("code").asInt(0);
+            String msg = err.path("message").asText("");
+            // -32600 (Invalid Request) is what Streamable-HTTP MCP servers return when
+            // they receive a request with an unknown Mcp-Session-Id — typically right
+            // after a server restart wiped its in-memory session map. The HTTP-level
+            // session-retry in postEnvelope() doesn't fire because the response is a
+            // valid JSON 200 with the error embedded. Recover the same way:
+            // drop cached session + initialize-flag, re-handshake, retry once.
+            // Guard against initialize-recursion since ensureInitialized also calls rpc.
+            if (code == -32600 && !"initialize".equals(method)) {
+                log.warn("MCP server '{}' {} returned -32600 '{}' — invalidating session and retrying",
+                    server.getName(), method, msg);
+                reset(server);
+                ensureInitialized(server);
+                int retryId = seq.getAndIncrement();
+                ObjectNode retryEnvelope = buildEnvelope(method, params, retryId);
+                JsonNode retryResponse = postEnvelope(server, retryEnvelope);
+                if (retryResponse.has("error")) {
+                    JsonNode retryErr = retryResponse.get("error");
+                    throw new RuntimeException("MCP " + server.getName() + " " + method
+                        + " failed after session-retry: " + retryErr.path("code").asInt(0)
+                        + " " + retryErr.path("message").asText(""));
+                }
+                return retryResponse.path("result");
+            }
             throw new RuntimeException("MCP " + server.getName() + " " + method
-                + " failed: " + err.path("code").asInt(0) + " " + err.path("message").asText(""));
+                + " failed: " + code + " " + msg);
         }
         return response.path("result");
     }

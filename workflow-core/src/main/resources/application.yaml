@@ -11,9 +11,17 @@ spring:
       maximum-pool-size: 10
   jpa:
     hibernate:
+      # Liquibase (below) owns versioned schema migrations. `update` is kept as a
+      # transitional safety net for the legacy pre-Liquibase baseline (the ~30 tables
+      # created before db/changelog existed) — it no-ops over anything Liquibase
+      # already created. New schema changes MUST be added as a Liquibase changeSet.
       ddl-auto: update
     database-platform: ${DB_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
     show-sql: false
+  liquibase:
+    # Default location; Liquibase runs before Hibernate on every startup.
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+    enabled: ${LIQUIBASE_ENABLED:true}
   main:
     banner-mode: off
 

@@ -102,6 +102,7 @@ public class SecurityConfig {
                 .csrfTokenRequestHandler(requestHandler)
                 .ignoringRequestMatchers(
                     "/api/auth/login",
+                    "/api/auth/register",
                     "/api/auth/logout",
                     "/ws/**",
                     "/api/webhooks/**",
@@ -111,6 +112,8 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
                     "/api/auth/login",
+                    "/api/auth/register",
+                    "/api/auth/verify-email",
                     "/api/auth/logout",
                     "/ws/**",
                     "/api/webhooks/**",

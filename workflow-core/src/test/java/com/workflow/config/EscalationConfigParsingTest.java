@@ -107,7 +107,9 @@ class EscalationConfigParsingTest {
                 """;
         OnFailConfig cfg = yaml.readValue(src, OnFailConfig.class);
         EscalationStep.Cloud cloud = (EscalationStep.Cloud) cfg.getEscalation().steps().get(0);
-        assertEquals("openrouter", cloud.provider());
+        // provider is intentionally NOT defaulted — null means "follow the project's
+        // defaultProvider" (see EscalationStep.Cloud). model/maxIterations do default.
+        assertNull(cloud.provider());
         assertEquals("smart", cloud.model());
         assertEquals(2, cloud.maxIterations());
     }

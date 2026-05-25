@@ -12,11 +12,15 @@ import java.security.SecureRandom;
 import java.util.Base64;
 
 /**
- * Ensures at least one {@link UserRole#ADMIN} exists on startup. Password comes from the
- * {@code workflow.bootstrap-admin-password} property (env {@code WORKFLOW_BOOTSTRAP_ADMIN_PASSWORD});
- * when unset, a random one is generated and logged once — operator must rotate it immediately.
+ * Ensures a platform administrator exists on startup. The bootstrap user is created as
+ * {@link UserRole#PLATFORM_ADMIN} — platform staff that sees across all customer accounts.
+ * Password comes from the {@code workflow.bootstrap-admin-password} property (env
+ * {@code WORKFLOW_BOOTSTRAP_ADMIN_PASSWORD}); when unset, a random one is generated and
+ * logged once — operator must rotate it immediately.
  *
- * <p>Runs only when the users table has no admin. On subsequent starts it is a no-op.
+ * <p>Runs only when the users table has no admin-tier user (ADMIN or PLATFORM_ADMIN). On
+ * subsequent starts it is a no-op — pre-existing single-tenant {@code ADMIN} users are
+ * left untouched (they become legacy-account admins via {@code AccountBackfillInitializer}).
  */
 @Component
 public class BootstrapAdminInitializer {
@@ -37,7 +41,8 @@ public class BootstrapAdminInitializer {
 
     @PostConstruct
     public void initialize() {
-        if (userRepository.existsByRole(UserRole.ADMIN)) {
+        if (userRepository.existsByRole(UserRole.ADMIN)
+                || userRepository.existsByRole(UserRole.PLATFORM_ADMIN)) {
             log.debug("Admin already exists — skipping bootstrap");
             return;
         }
@@ -49,8 +54,9 @@ public class BootstrapAdminInitializer {
         admin.setUsername(adminUsername);
         admin.setPasswordHash(passwordEncoder.encode(password));
         admin.setDisplayName("Bootstrap Admin");
-        admin.setRole(UserRole.ADMIN);
+        admin.setRole(UserRole.PLATFORM_ADMIN);
         admin.setEnabled(true);
+        admin.setEmailVerified(true);
         userRepository.save(admin);
 
         if (configuredPassword == null || configuredPassword.isBlank()) {

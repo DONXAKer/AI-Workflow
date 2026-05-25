@@ -59,7 +59,7 @@ public class OpenRouterProviderClient extends OpenAICompatibleProviderClient {
         String apiKey = null;
 
         Optional<IntegrationConfig> openRouterConfig =
-            integrationConfigRepository.findByTypeAndIsDefaultTrue(IntegrationType.OPENROUTER);
+            integrationConfigRepository.findFirstByTypeAndIsDefaultTrue(IntegrationType.OPENROUTER);
 
         if (openRouterConfig.isPresent()) {
             IntegrationConfig cfg = openRouterConfig.get();

@@ -1,0 +1,1358 @@
+databaseChangeLog:
+- changeSet:
+    id: 1779426215469-1
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: audit_log_pkey
+            name: id
+            type: BIGINT
+        - column:
+            constraints:
+              nullable: false
+            name: action
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: actor
+            type: VARCHAR(255)
+        - column:
+            name: details_json
+            type: TEXT
+        - column:
+            constraints:
+              nullable: false
+            name: outcome
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: project_slug
+            type: VARCHAR(255)
+        - column:
+            name: remote_addr
+            type: VARCHAR(255)
+        - column:
+            name: target_id
+            type: VARCHAR(255)
+        - column:
+            name: target_type
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: timestamp
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: account_id
+            type: BIGINT
+        tableName: audit_log
+- changeSet:
+    id: 1779426215469-2
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: block_output_pkey
+            name: id
+            type: BIGINT
+        - column:
+            constraints:
+              nullable: false
+            name: block_id
+            type: VARCHAR(255)
+        - column:
+            name: cache_key
+            type: VARCHAR(64)
+        - column:
+            name: cache_scope
+            type: VARCHAR(128)
+        - column:
+            name: cacheable
+            type: BOOLEAN
+        - column:
+            name: completed_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: input_json
+            type: TEXT
+        - column:
+            name: iteration
+            type: INTEGER
+        - column:
+            name: output_json
+            type: TEXT
+        - column:
+            name: source_output_id
+            type: BIGINT
+        - column:
+            name: started_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            constraints:
+              nullable: false
+            name: run_id
+            type: UUID
+        tableName: block_output
+- changeSet:
+    id: 1779426215469-3
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: llm_call_pkey
+            name: id
+            type: BIGINT
+        - column:
+            name: block_id
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: cost_usd
+            type: FLOAT8
+        - column:
+            constraints:
+              nullable: false
+            name: duration_ms
+            type: INTEGER
+        - column:
+            name: finish_reason
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: iteration
+            type: INTEGER
+        - column:
+            constraints:
+              nullable: false
+            name: model
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: project_slug
+            type: VARCHAR(255)
+        - column:
+            name: provider
+            type: VARCHAR(255)
+        - column:
+            name: run_id
+            type: UUID
+        - column:
+            constraints:
+              nullable: false
+            name: timestamp
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            constraints:
+              nullable: false
+            name: tokens_in
+            type: INTEGER
+        - column:
+            constraints:
+              nullable: false
+            name: tokens_out
+            type: INTEGER
+        - column:
+            name: tool_calls_made_json
+            type: TEXT
+        - column:
+            name: account_id
+            type: BIGINT
+        tableName: llm_call
+- changeSet:
+    id: 1779426215469-4
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: preflight_snapshot_pkey
+            name: id
+            type: BIGINT
+        - column:
+            name: baseline_failures_json
+            type: TEXT
+        - column:
+            name: build_cmd
+            type: VARCHAR(1024)
+        - column:
+            name: build_ok
+            type: BOOLEAN
+        - column:
+            constraints:
+              nullable: false
+            name: config_hash
+            type: VARCHAR(64)
+        - column:
+            constraints:
+              nullable: false
+            name: created_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: duration_ms
+            type: BIGINT
+        - column:
+            name: log_excerpt
+            type: TEXT
+        - column:
+            constraints:
+              nullable: false
+            name: main_commit_sha
+            type: VARCHAR(64)
+        - column:
+            constraints:
+              nullable: false
+            name: project_slug
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: status
+            type: VARCHAR(255)
+        - column:
+            name: test_cmd
+            type: VARCHAR(1024)
+        - column:
+            name: test_ok
+            type: BOOLEAN
+        tableName: preflight_snapshot
+- changeSet:
+    id: 1779426215469-5
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: project_index_entry_pkey
+            name: id
+            type: BIGINT
+        - column:
+            constraints:
+              nullable: false
+            name: chunk_count
+            type: INTEGER
+        - column:
+            constraints:
+              nullable: false
+            name: embed_model
+            type: VARCHAR(100)
+        - column:
+            constraints:
+              nullable: false
+            name: file_hash
+            type: VARCHAR(64)
+        - column:
+            constraints:
+              nullable: false
+            name: indexed_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            constraints:
+              nullable: false
+            name: line_count
+            type: INTEGER
+        - column:
+            constraints:
+              nullable: false
+            name: path
+            type: VARCHAR(1024)
+        - column:
+            constraints:
+              nullable: false
+            name: project_slug
+            type: VARCHAR(255)
+        tableName: project_index_entry
+- changeSet:
+    id: 1779426215469-6
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: tool_call_audit_pkey
+            name: id
+            type: BIGINT
+        - column:
+            name: block_id
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: duration_ms
+            type: INTEGER
+        - column:
+            name: input_json
+            type: TEXT
+        - column:
+            constraints:
+              nullable: false
+            name: is_error
+            type: BOOLEAN
+        - column:
+            name: iteration
+            type: INTEGER
+        - column:
+            name: output_text
+            type: TEXT
+        - column:
+            constraints:
+              nullable: false
+            name: project_slug
+            type: VARCHAR(255)
+        - column:
+            name: run_id
+            type: UUID
+        - column:
+            constraints:
+              nullable: false
+            name: timestamp
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            constraints:
+              nullable: false
+            name: tool_name
+            type: VARCHAR(255)
+        - column:
+            name: tool_use_id
+            type: VARCHAR(255)
+        tableName: tool_call_audit
+- changeSet:
+    id: 1779426215469-7
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: deployment_history_pkey
+            name: id
+            type: BIGINT
+        - column:
+            constraints:
+              nullable: false
+            name: artifact_id
+            type: VARCHAR(255)
+        - column:
+            name: artifact_version
+            type: VARCHAR(255)
+        - column:
+            name: block_id
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: deployed_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: deployment_url
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: environment
+            type: VARCHAR(255)
+        - column:
+            name: project_slug
+            type: VARCHAR(255)
+        - column:
+            name: run_id
+            type: UUID
+        - column:
+            constraints:
+              nullable: false
+            name: status
+            type: VARCHAR(255)
+        tableName: deployment_history
+- changeSet:
+    id: 1779426215469-8
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: account_pkey
+            name: id
+            type: BIGINT
+        - column:
+            name: created_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            constraints:
+              nullable: false
+            name: name
+            type: VARCHAR(255)
+        - column:
+            name: onboarded_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            constraints:
+              nullable: false
+            name: slug
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: status
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: tier
+            type: VARCHAR(255)
+        - column:
+            name: updated_at
+            type: TIMESTAMP WITH TIME ZONE
+        tableName: account
+- changeSet:
+    id: 1779426215469-9
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: ledger_entry_pkey
+            name: id
+            type: BIGINT
+        - column:
+            constraints:
+              nullable: false
+            name: account_id
+            type: BIGINT
+        - column:
+            constraints:
+              nullable: false
+            name: amount_usd
+            type: numeric(12, 4)
+        - column:
+            constraints:
+              nullable: false
+            name: balance_after_usd
+            type: numeric(12, 4)
+        - column:
+            constraints:
+              nullable: false
+            name: created_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: description
+            type: TEXT
+        - column:
+            name: llm_call_id
+            type: BIGINT
+        - column:
+            name: payment_ref
+            type: VARCHAR(255)
+        - column:
+            name: run_id
+            type: UUID
+        - column:
+            constraints:
+              nullable: false
+            name: type
+            type: VARCHAR(255)
+        tableName: ledger_entry
+- changeSet:
+    id: 1779426215469-10
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: app_user_pkey
+            name: id
+            type: BIGINT
+        - column:
+            name: created_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: display_name
+            type: VARCHAR(255)
+        - column:
+            name: email
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: enabled
+            type: BOOLEAN
+        - column:
+            constraints:
+              nullable: false
+            name: password_hash
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: role
+            type: VARCHAR(255)
+        - column:
+            name: updated_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            constraints:
+              nullable: false
+            name: username
+            type: VARCHAR(255)
+        - column:
+            name: account_id
+            type: BIGINT
+        - column:
+            name: email_verified
+            type: BOOLEAN
+        tableName: app_user
+- changeSet:
+    id: 1779426215469-11
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: integration_config_pkey
+            name: id
+            type: BIGINT
+        - column:
+            name: base_url
+            type: VARCHAR(255)
+        - column:
+            name: created_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: display_name
+            type: VARCHAR(255)
+        - column:
+            name: extra_config_json
+            type: TEXT
+        - column:
+            constraints:
+              nullable: false
+            name: is_default
+            type: BOOLEAN
+        - column:
+            constraints:
+              nullable: false
+            name: name
+            type: VARCHAR(255)
+        - column:
+            name: owner
+            type: VARCHAR(255)
+        - column:
+            name: project
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: project_slug
+            type: VARCHAR(255)
+        - column:
+            name: repo
+            type: VARCHAR(255)
+        - column:
+            name: token
+            type: TEXT
+        - column:
+            constraints:
+              nullable: false
+            name: type
+            type: VARCHAR(50)
+        - column:
+            name: updated_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: account_id
+            type: BIGINT
+        tableName: integration_config
+- changeSet:
+    id: 1779426215469-12
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: pipeline_run_pkey
+            name: id
+            type: UUID
+        - column:
+            name: approval_timeout_action
+            type: VARCHAR(255)
+        - column:
+            name: approval_timeout_seconds
+            type: INTEGER
+        - column:
+            name: completed_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: config_snapshot_json
+            type: TEXT
+        - column:
+            name: current_block
+            type: VARCHAR(255)
+        - column:
+            name: current_operation
+            type: TEXT
+        - column:
+            constraints:
+              nullable: false
+            name: dry_run
+            type: BOOLEAN
+        - column:
+            name: entry_point_id
+            type: VARCHAR(255)
+        - column:
+            name: error
+            type: TEXT
+        - column:
+            name: escalation_state_json
+            type: TEXT
+        - column:
+            name: last_activity_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: loop_history_json
+            type: TEXT
+        - column:
+            name: paused_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            constraints:
+              nullable: false
+            name: pipeline_name
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: project_slug
+            type: VARCHAR(255)
+        - column:
+            name: requirement
+            type: TEXT
+        - column:
+            name: run_inputs_json
+            type: TEXT
+        - column:
+            name: runtime_overrides_json
+            type: TEXT
+        - column:
+            name: skills_snapshot_json
+            type: TEXT
+        - column:
+            name: started_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            constraints:
+              nullable: false
+            name: status
+            type: VARCHAR(255)
+        - column:
+            name: total_cost_usd
+            type: FLOAT8
+        - column:
+            name: account_id
+            type: BIGINT
+        - column:
+            name: workspace_dir
+            type: VARCHAR(255)
+        tableName: pipeline_run
+- changeSet:
+    id: 1779426215469-13
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: project_pkey
+            name: id
+            type: BIGINT
+        - column:
+            name: config_dir
+            type: VARCHAR(255)
+        - column:
+            name: created_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: default_provider
+            type: VARCHAR(255)
+        - column:
+            name: description
+            type: TEXT
+        - column:
+            constraints:
+              nullable: false
+            name: display_name
+            type: VARCHAR(255)
+        - column:
+            name: escalation_defaults_json
+            type: TEXT
+        - column:
+            name: orchestrator_enabled
+            type: BOOLEAN
+        - column:
+            name: orchestrator_model
+            type: VARCHAR(255)
+        - column:
+            name: orchestrator_system_prompt_extra
+            type: TEXT
+        - column:
+            constraints:
+              nullable: false
+            name: slug
+            type: VARCHAR(255)
+        - column:
+            name: tech_stack_json
+            type: TEXT
+        - column:
+            name: updated_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: working_dir
+            type: VARCHAR(255)
+        - column:
+            name: default_tracker_provider
+            type: VARCHAR(255)
+        - column:
+            name: account_id
+            type: BIGINT
+        - column:
+            name: default_branch
+            type: VARCHAR(255)
+        - column:
+            name: repo_provider
+            type: VARCHAR(255)
+        - column:
+            name: repo_token
+            type: TEXT
+        - column:
+            name: repo_url
+            type: VARCHAR(255)
+        tableName: project
+- changeSet:
+    id: 1779426215469-14
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: agent_profile_pkey
+            name: id
+            type: BIGINT
+        - column:
+            constraints:
+              nullable: false
+            name: builtin
+            type: BOOLEAN
+        - column:
+            name: created_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: custom_prompt
+            type: TEXT
+        - column:
+            name: description
+            type: TEXT
+        - column:
+            name: display_name
+            type: VARCHAR(255)
+        - column:
+            name: knowledge_sources_json
+            type: TEXT
+        - column:
+            name: max_tokens
+            type: INTEGER
+        - column:
+            name: model
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: name
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: project_slug
+            type: VARCHAR(255)
+        - column:
+            name: recommended_preset
+            type: VARCHAR(255)
+        - column:
+            name: role_prompt
+            type: TEXT
+        - column:
+            name: skills_json
+            type: TEXT
+        - column:
+            name: temperature
+            type: FLOAT8
+        - column:
+            name: updated_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            constraints:
+              nullable: false
+            name: use_examples
+            type: BOOLEAN
+        tableName: agent_profile
+- changeSet:
+    id: 1779426215469-15
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: kill_switch_pkey
+            name: id
+            type: BIGINT
+        - column:
+            name: activated_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: activated_by
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: active
+            type: BOOLEAN
+        - column:
+            constraints:
+              nullable: false
+            name: project_slug
+            type: VARCHAR(255)
+        - column:
+            name: reason
+            type: TEXT
+        tableName: kill_switch
+- changeSet:
+    id: 1779426215469-16
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: wallet_pkey
+            name: id
+            type: BIGINT
+        - column:
+            constraints:
+              nullable: false
+            name: account_id
+            type: BIGINT
+        - column:
+            constraints:
+              nullable: false
+            name: balance_usd
+            type: numeric(12, 4)
+        - column:
+            name: created_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: updated_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: version
+            type: BIGINT
+        tableName: wallet
+- changeSet:
+    id: 1779426215469-17
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: timestamp
+        indexName: idx_audit_timestamp
+        tableName: audit_log
+        using: btree
+- changeSet:
+    id: 1779426215469-18
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: actor
+        indexName: idx_audit_actor
+        tableName: audit_log
+        using: btree
+- changeSet:
+    id: 1779426215469-19
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: target_type
+        - column:
+            name: target_id
+        indexName: idx_audit_target
+        tableName: audit_log
+        using: btree
+- changeSet:
+    id: 1779426215469-20
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: cache_scope
+        - column:
+            name: cache_key
+        indexName: idx_block_output_cache
+        tableName: block_output
+        using: btree
+- changeSet:
+    id: 1779426215469-21
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: timestamp
+        indexName: idx_llmcall_timestamp
+        tableName: llm_call
+        using: btree
+- changeSet:
+    id: 1779426215469-22
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: run_id
+        indexName: idx_llmcall_run
+        tableName: llm_call
+        using: btree
+- changeSet:
+    id: 1779426215469-23
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: model
+        indexName: idx_llmcall_model
+        tableName: llm_call
+        using: btree
+- changeSet:
+    id: 1779426215469-24
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: project_slug
+        - column:
+            name: main_commit_sha
+        - column:
+            name: config_hash
+        indexName: idx_preflight_lookup
+        tableName: preflight_snapshot
+        using: btree
+- changeSet:
+    id: 1779426215469-25
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: created_at
+        indexName: idx_preflight_created
+        tableName: preflight_snapshot
+        using: btree
+- changeSet:
+    id: 1779426215469-26
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: project_slug
+        indexName: idxgbtx1a84cldm91xs4whogfs2a
+        tableName: project_index_entry
+        using: btree
+- changeSet:
+    id: 1779426215469-27
+    author: liquibase (generated)
+    changes:
+    - addUniqueConstraint:
+        columnNames: project_slug, path
+        constraintName: uk2ojjatugit0a0agvjghtsa9cp
+        tableName: project_index_entry
+- changeSet:
+    id: 1779426215469-28
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: timestamp
+        indexName: idx_toolcall_timestamp
+        tableName: tool_call_audit
+        using: btree
+- changeSet:
+    id: 1779426215469-29
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: run_id
+        indexName: idx_toolcall_run
+        tableName: tool_call_audit
+        using: btree
+- changeSet:
+    id: 1779426215469-30
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: tool_name
+        indexName: idx_toolcall_tool
+        tableName: tool_call_audit
+        using: btree
+- changeSet:
+    id: 1779426215469-31
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: project_slug
+        - column:
+            name: environment
+        - column:
+            name: deployed_at
+        indexName: idx_deployhist_proj_env_time
+        tableName: deployment_history
+        using: btree
+- changeSet:
+    id: 1779426215469-32
+    author: liquibase (generated)
+    changes:
+    - addUniqueConstraint:
+        columnNames: slug
+        constraintName: uk1lkycns3lr49s8jbouu25ftop
+        tableName: account
+- changeSet:
+    id: 1779426215469-33
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: account_id
+        - column:
+            name: created_at
+        indexName: idx_ledger_account
+        tableName: ledger_entry
+        using: btree
+- changeSet:
+    id: 1779426215469-34
+    author: liquibase (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: payment_ref
+        indexName: idx_ledger_payment
+        tableName: ledger_entry
+        using: btree
+- changeSet:
+    id: 1779426215469-35
+    author: liquibase (generated)
+    changes:
+    - addUniqueConstraint:
+        columnNames: llm_call_id, type
+        constraintName: uq_ledger_llmcall_type
+        tableName: ledger_entry
+- changeSet:
+    id: 1779426215469-36
+    author: liquibase (generated)
+    changes:
+    - addUniqueConstraint:
+        columnNames: email
+        constraintName: uk1j9d9a06i600gd43uu3km82jw
+        tableName: app_user
+- changeSet:
+    id: 1779426215469-37
+    author: liquibase (generated)
+    changes:
+    - addUniqueConstraint:
+        columnNames: username
+        constraintName: uk3k4cplvh82srueuttfkwnylq0
+        tableName: app_user
+- changeSet:
+    id: 1779426215469-38
+    author: liquibase (generated)
+    changes:
+    - addUniqueConstraint:
+        columnNames: name
+        constraintName: ukh485g6vlvpg7m4xwi9e433rxd
+        tableName: integration_config
+- changeSet:
+    id: 1779426215469-39
+    author: liquibase (generated)
+    changes:
+    - addUniqueConstraint:
+        columnNames: slug
+        constraintName: ukfuxkbuidqwwj8bjlojr7m240c
+        tableName: project
+- changeSet:
+    id: 1779426215469-40
+    author: liquibase (generated)
+    changes:
+    - addUniqueConstraint:
+        columnNames: name
+        constraintName: uk9t8p7vya8bfodxr9rup9dkud3
+        tableName: agent_profile
+- changeSet:
+    id: 1779426215469-41
+    author: liquibase (generated)
+    changes:
+    - addUniqueConstraint:
+        columnNames: project_slug
+        constraintName: uky5qm18e7oh4nce4k61y86f1y
+        tableName: kill_switch
+- changeSet:
+    id: 1779426215469-42
+    author: liquibase (generated)
+    changes:
+    - addUniqueConstraint:
+        columnNames: account_id
+        constraintName: uq_wallet_account
+        tableName: wallet
+- changeSet:
+    id: 1779426215469-43
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            autoIncrement: true
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: mcp_server_pkey
+            name: id
+            type: BIGINT
+        - column:
+            name: created_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            name: description
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: enabled
+            type: BOOLEAN
+        - column:
+            name: headers_json
+            type: TEXT
+        - column:
+            constraints:
+              nullable: false
+            name: name
+            type: VARCHAR(255)
+        - column:
+            constraints:
+              nullable: false
+            name: project_slug
+            type: VARCHAR(255)
+        - column:
+            name: updated_at
+            type: TIMESTAMP WITH TIME ZONE
+        - column:
+            constraints:
+              nullable: false
+            name: url
+            type: VARCHAR(255)
+        - column:
+            name: account_id
+            type: BIGINT
+        tableName: mcp_server
+- changeSet:
+    id: 1779426215469-44
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            constraints:
+              nullable: false
+            name: run_id
+            type: UUID
+        - column:
+            name: block_id
+            type: VARCHAR(255)
+        tableName: pipeline_run_auto_approve
+- changeSet:
+    id: 1779426215469-45
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            constraints:
+              nullable: false
+            name: run_id
+            type: UUID
+        - column:
+            name: block_id
+            type: VARCHAR(255)
+        tableName: pipeline_run_completed_blocks
+- changeSet:
+    id: 1779426215469-46
+    author: liquibase (generated)
+    changes:
+    - createTable:
+        columns:
+        - column:
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: pipeline_run_loop_iterations_pkey
+            name: run_id
+            type: UUID
+        - column:
+            name: iteration_count
+            type: INTEGER
+        - column:
+            constraints:
+              nullable: false
+              primaryKey: true
+              primaryKeyName: pipeline_run_loop_iterations_pkey
+            name: loop_key
+            type: VARCHAR(255)
+        tableName: pipeline_run_loop_iterations
+- changeSet:
+    id: 1779426215469-47
+    author: liquibase (generated)
+    changes:
+    - addForeignKeyConstraint:
+        baseColumnNames: run_id
+        baseTableName: pipeline_run_loop_iterations
+        constraintName: fk63vbkf1g0wj7giimldg0ajxmn
+        deferrable: false
+        initiallyDeferred: false
+        onDelete: NO ACTION
+        onUpdate: NO ACTION
+        referencedColumnNames: id
+        referencedTableName: pipeline_run
+        validate: true
+- changeSet:
+    id: 1779426215469-48
+    author: liquibase (generated)
+    changes:
+    - addForeignKeyConstraint:
+        baseColumnNames: run_id
+        baseTableName: block_output
+        constraintName: fkcgad54cy5sh9i1togp3ew9299
+        deferrable: false
+        initiallyDeferred: false
+        onDelete: NO ACTION
+        onUpdate: NO ACTION
+        referencedColumnNames: id
+        referencedTableName: pipeline_run
+        validate: true
+- changeSet:
+    id: 1779426215469-49
+    author: liquibase (generated)
+    changes:
+    - addForeignKeyConstraint:
+        baseColumnNames: run_id
+        baseTableName: pipeline_run_auto_approve
+        constraintName: fknya6wae8wjr66jp0fxa0seov5
+        deferrable: false
+        initiallyDeferred: false
+        onDelete: NO ACTION
+        onUpdate: NO ACTION
+        referencedColumnNames: id
+        referencedTableName: pipeline_run
+        validate: true
+- changeSet:
+    id: 1779426215469-50
+    author: liquibase (generated)
+    changes:
+    - addForeignKeyConstraint:
+        baseColumnNames: run_id
+        baseTableName: pipeline_run_completed_blocks
+        constraintName: fksmqlrmp4jwx6iwombff44ua3
+        deferrable: false
+        initiallyDeferred: false
+        onDelete: NO ACTION
+        onUpdate: NO ACTION
+        referencedColumnNames: id
+        referencedTableName: pipeline_run
+        validate: true
+

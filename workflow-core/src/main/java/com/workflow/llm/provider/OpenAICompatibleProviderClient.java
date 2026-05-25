@@ -17,6 +17,7 @@ import com.workflow.llm.tooluse.ToolResult;
 import com.workflow.llm.tooluse.ToolUseRequest;
 import com.workflow.llm.tooluse.ToolUseResponse;
 import com.workflow.tools.ToolCallIteration;
+import io.netty.handler.timeout.ReadTimeoutException;
 import org.slf4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -59,12 +60,35 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
     protected final ModelPresetResolver presetResolver;
     private final LlmCallRepository llmCallRepository;
 
+    /**
+     * Field-injected (not constructor) so the five concrete provider subclasses don't all
+     * need a new constructor parameter. Optional — absent in unit-test slices that don't
+     * load the billing module.
+     */
+    @Autowired(required = false)
+    private com.workflow.billing.BillingService billingService;
+
     protected OpenAICompatibleProviderClient(ObjectMapper objectMapper,
                                              ModelPresetResolver presetResolver,
                                              @Autowired(required = false) LlmCallRepository llmCallRepository) {
         this.objectMapper = objectMapper;
         this.presetResolver = presetResolver;
         this.llmCallRepository = llmCallRepository;
+    }
+
+    /**
+     * Debits the customer wallet for a just-persisted LLM call. Failures are logged at
+     * ERROR (a stuck debit is lost revenue) but never propagate — billing must not break
+     * the LLM loop.
+     */
+    private void debit(LlmCall call) {
+        if (billingService == null || call == null) return;
+        try {
+            billingService.debitForLlmCall(call);
+        } catch (Exception e) {
+            logger().error("Wallet debit failed for LlmCall {} (account {}): {}",
+                call.getId(), call.getAccountId(), e.getMessage(), e);
+        }
     }
 
     /** Subclass-specific logger so log lines carry the provider name. */
@@ -351,13 +375,14 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
                             .block();
                         break;
                     } catch (Exception ex) {
-                        boolean transient_ = ex.getMessage() != null && (
-                            ex.getMessage().contains("PrematureCloseException") ||
-                            ex.getMessage().contains("Connection reset") ||
-                            ex.getMessage().contains("connection") && ex.getMessage().contains("closed"));
-                        if (transient_ && attempt < 3) {
-                            logger().warn("Tool-use iteration {} attempt {}/3 transient error, retrying: {}", iterations, attempt, ex.getMessage());
-                            Thread.sleep(2000L * attempt);
+                        if (isRetriableToolUseError(ex) && attempt < 3) {
+                            // Rate-limit (HTTP 429) needs a far longer wait than a dropped
+                            // connection — a provider's per-minute window won't clear in 2s.
+                            boolean rateLimited = isRateLimitError(ex);
+                            long backoffMs = (rateLimited ? 20000L : 2000L) * attempt;
+                            logger().warn("Tool-use iteration {} attempt {}/3 {} error, backing off {}ms: {}",
+                                iterations, attempt, rateLimited ? "rate-limit" : "transient", backoffMs, ex.toString());
+                            Thread.sleep(backoffMs);
                         } else {
                             lastEx = ex;
                             break;
@@ -520,8 +545,15 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
                 toolMsg.put("content", result.content() == null ? "" : result.content());
             }
 
-            if (totalCostUsd >= request.budgetUsdCap()) {
-                logger().warn("Tool-use budget exceeded: spent=${} cap=${}",
+            // Per-iteration wallet check: budgetUsdCap is per tool-use loop, but a run has
+            // many loops sharing one wallet. Re-reading the wallet each iteration catches
+            // depletion caused by sibling blocks too. recordToolUseUsage above already
+            // debited this iteration, so the balance is current.
+            boolean walletDepleted = billingService != null
+                && billingService.isWalletDepleted(request.accountId());
+            if (totalCostUsd >= request.budgetUsdCap() || walletDepleted) {
+                logger().warn("Tool-use halted ({}): spent=${} cap=${}",
+                    walletDepleted ? "wallet exhausted" : "budget exceeded",
                     totalCostUsd, request.budgetUsdCap());
                 return new ToolUseResponse(LlmTextUtils.stripCodeFences(finalText.strip()),
                     StopReason.BUDGET_EXCEEDED, history,
@@ -533,6 +565,76 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
         return new ToolUseResponse(LlmTextUtils.stripCodeFences(finalText.strip()),
             StopReason.MAX_ITERATIONS, history,
             iterations, totalTokensIn, totalTokensOut, totalCostUsd);
+    }
+
+    /**
+     * Whether a tool-use HTTP round-trip exception is worth retrying. Walks the
+     * cause chain because the signal is usually nested — Reactor wraps the netty
+     * {@link ReadTimeoutException} inside a {@code WebClientRequestException}, and
+     * {@code getMessage()} on the outer exception is often {@code null}. Covers
+     * read/socket timeouts (upstream pauses past {@code responseTimeout} on long
+     * tool-use generations) plus the connection-drop string signatures already
+     * handled before. See task FIX-LLM-002.
+     */
+    static boolean isRetriableToolUseError(Throwable ex) {
+        Throwable t = ex;
+        for (int depth = 0; t != null && depth < 12; t = t.getCause(), depth++) {
+            // A WebClientRequestException means the HTTP round-trip never completed —
+            // connection dropped / refused / reset, premature close, read timeout. These
+            // are always transient and worth a retry, whatever the message text says.
+            if (t instanceof org.springframework.web.reactive.function.client.WebClientRequestException) {
+                return true;
+            }
+            // A 429 rate-limit or transient upstream 5xx is retriable too (with backoff).
+            if (t instanceof org.springframework.web.reactive.function.client.WebClientResponseException w) {
+                int code = w.getStatusCode().value();
+                if (code == 429 || code == 502 || code == 503 || code == 504) {
+                    return true;
+                }
+            }
+            if (t instanceof ReadTimeoutException
+                || t instanceof java.util.concurrent.TimeoutException
+                || t instanceof java.net.SocketTimeoutException) {
+                return true;
+            }
+            // String fallback (case-insensitive) for when the transport error is
+            // re-wrapped as a plain exception that loses the WebClient* type.
+            String msg = t.getMessage();
+            if (msg != null) {
+                String m = msg.toLowerCase();
+                if (m.contains("prematurely closed")
+                    || m.contains("prematurecloseexception")
+                    || m.contains("connection reset")
+                    || m.contains("connection refused")
+                    || (m.contains("connection") && m.contains("closed"))
+                    || m.contains("readtimeout")
+                    || m.contains("rate limit")
+                    || m.contains("429 ")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether {@code ex} (or anything in its cause chain) is an HTTP 429 rate-limit
+     * response — these need a much longer backoff than a dropped connection because
+     * the provider's throttle window is per-minute, not per-second. See FIX-LLM-002.
+     */
+    static boolean isRateLimitError(Throwable ex) {
+        Throwable t = ex;
+        for (int depth = 0; t != null && depth < 12; t = t.getCause(), depth++) {
+            if (t instanceof org.springframework.web.reactive.function.client.WebClientResponseException w
+                && w.getStatusCode().value() == 429) {
+                return true;
+            }
+            String msg = t.getMessage();
+            if (msg != null && (msg.contains("429 ") || msg.contains("Rate Limit"))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Friendly error mapping for common HTTP failures. Overridable per provider —
@@ -574,6 +676,7 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
                 call.setBlockId(ctx.blockId());
             });
             llmCallRepository.save(call);
+            debit(call);
         } catch (Exception e) {
             logger().debug("LlmCall persist failed: {}", e.getMessage());
         }
@@ -603,6 +706,7 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
                 call.setToolCallsMadeJson(objectMapper.writeValueAsString(toolNames));
             }
             llmCallRepository.save(call);
+            debit(call);
         } catch (Exception e) {
             logger().debug("LlmCall persist failed (tool-use iter {}): {}", iteration, e.getMessage());
         }

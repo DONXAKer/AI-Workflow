@@ -1,5 +1,5 @@
 import { useState, FormEvent } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate, useLocation, Link } from 'react-router-dom'
 import { LogIn, AlertCircle, Loader2 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
@@ -97,6 +97,11 @@ export default function LoginPage() {
           {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogIn className="w-4 h-4" />}
           Войти
         </button>
+
+        <p className="text-center text-sm text-slate-400">
+          Нет аккаунта?{' '}
+          <Link to="/register" className="text-blue-400 hover:text-blue-300">Зарегистрироваться</Link>
+        </p>
       </form>
     </div>
   )

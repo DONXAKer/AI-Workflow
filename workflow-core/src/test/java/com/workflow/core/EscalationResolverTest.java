@@ -24,7 +24,7 @@ class EscalationResolverTest {
     @BeforeEach
     void setUp() {
         props = new EscalationProperties();
-        // EscalationProperties initializes with cloud(openrouter, smart, 2) + human(ui, 86400)
+        // EscalationProperties initializes with cloud(provider=null, smart, 2) + human(ui, 86400)
         mapper = new ObjectMapper();
         resolver = new EscalationResolver(props, mapper);
     }
@@ -139,7 +139,8 @@ class EscalationResolverTest {
         List<EscalationStep> resolved = resolver.resolve(EscalationConfig.defaults(), null);
         assertInstanceOf(EscalationStep.Cloud.class, resolved.get(0));
         var cloud = (EscalationStep.Cloud) resolved.get(0);
-        assertEquals("openrouter", cloud.provider());
+        // provider stays null by design — cloud-tier follows the project's defaultProvider.
+        assertNull(cloud.provider());
         assertEquals("smart", cloud.model());
         assertEquals(2, cloud.maxIterations());
 

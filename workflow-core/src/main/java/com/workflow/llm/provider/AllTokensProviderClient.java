@@ -73,7 +73,7 @@ public class AllTokensProviderClient extends OpenAICompatibleProviderClient {
                 IntegrationType.ALLTOKENS, slug)
             : Optional.empty();
         if (cfg.isEmpty()) {
-            cfg = integrationConfigRepository.findByTypeAndIsDefaultTrue(IntegrationType.ALLTOKENS);
+            cfg = integrationConfigRepository.findFirstByTypeAndIsDefaultTrue(IntegrationType.ALLTOKENS);
         }
         if (cfg.isPresent()) {
             IntegrationConfig c = cfg.get();
@@ -90,7 +90,11 @@ public class AllTokensProviderClient extends OpenAICompatibleProviderClient {
             .defaultHeader("Content-Type", "application/json")
             .clientConnector(new org.springframework.http.client.reactive.ReactorClientHttpConnector(
                 reactor.netty.http.client.HttpClient.create()
-                    .responseTimeout(java.time.Duration.ofSeconds(120))))
+                    // 180s (was 120s): long tool-use generations legitimately keep
+                    // the upstream silent past 120s; the netty read-timeout that fired
+                    // is now also retried (see FIX-LLM-002), but a wider window first
+                    // avoids burning a retry attempt on every slow-but-fine response.
+                    .responseTimeout(java.time.Duration.ofSeconds(180))))
             .build();
     }
 }

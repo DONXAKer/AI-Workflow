@@ -1,5 +1,7 @@
 # Lombok Guidelines
 
+Ключевые аннотации: @Data, @Value, @Builder, @RequiredArgsConstructor, @Getter, @Setter, @AllArgsConstructor.
+
 Используй Lombok для сокращения бойлерплейт кода:
 
 ## Аннотации
