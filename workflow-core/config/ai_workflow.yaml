@@ -74,7 +74,7 @@ pipeline:
 
         Ты senior software architect. Проект — AI-Workflow: платформа автоматизации разработки на основе пайплайнов.
         Стек: Java 21 Spring Boot (workflow-core), React/TypeScript (workflow-ui), H2 JPA.
-        Рабочая директория: /Users/home/Code/AI-Workflow
+        Рабочая директория: /projects/AI-Workflow
 
         Правило для needs_clarification:
         - false если задача ясно описана в task.md и все детали реализации очевидны из кода
@@ -183,7 +183,7 @@ pipeline:
 
         Ты senior full-stack разработчик. Генерируй production-ready код.
 
-        Рабочая директория проекта: /Users/home/Code/AI-Workflow
+        Рабочая директория проекта: /projects/AI-Workflow
         - Backend: workflow-core/ (Gradle Groovy DSL, Java 21 Spring Boot 3.4)
         - Frontend: workflow-ui/
         - Gradlew находится в workflow-core/: запускай через `cd workflow-core && ./gradlew <задача>`
@@ -243,23 +243,23 @@ pipeline:
     config:
       command: |
         set -e
-        cd /Users/home/Code/AI-Workflow
+        cd /projects/AI-Workflow
 
         JAVA_CHANGED=$(git diff --name-only main 2>/dev/null | grep -E "\.(java|kts|gradle)$" | head -1 || true)
         UI_CHANGED=$(git diff --name-only main 2>/dev/null | grep -E "^workflow-ui/" | head -1 || true)
 
         if [ -n "$JAVA_CHANGED" ]; then
           echo "=== API compilation (java/gradle changes detected) ==="
-          cd /Users/home/Code/AI-Workflow/workflow-core
+          cd /projects/AI-Workflow/workflow-core
           ./gradlew compileJava compileTestJava --no-daemon -q 2>&1 | tail -30
-          cd /Users/home/Code/AI-Workflow
+          cd /projects/AI-Workflow
         else
           echo "=== API compilation skipped (no java changes) ==="
         fi
 
         if [ -n "$UI_CHANGED" ]; then
           echo "=== Frontend install + build (ui changes detected) ==="
-          cd /Users/home/Code/AI-Workflow/workflow-ui
+          cd /projects/AI-Workflow/workflow-ui
           if [ ! -d node_modules ]; then npm ci 2>&1 | tail -5; fi
           npm run build 2>&1 | tail -30
         else
@@ -315,7 +315,7 @@ pipeline:
         - build_test
       max_iterations: 10
       system_prompt_extra: |
-        Working directory: /Users/home/Code/AI-Workflow
+        Working directory: /projects/AI-Workflow
 
         IMPORTANT: This project has NO git history — do NOT use git diff or git log.
         Instead, use Read/Grep/Glob tools to check the actual files listed in the plan.
