@@ -19,9 +19,9 @@ import java.util.Map;
  * <pre>
  * workflow:
  *   model-presets:
- *     smart: anthropic/claude-opus-4-7
- *     fast: anthropic/claude-haiku-4-5
- *     cheap: openai/gpt-4o-mini
+ *     smart: deepseek/deepseek-v4-pro
+ *     fast: google/gemini-2.5-flash-lite
+ *     cheap: deepseek/deepseek-v4-flash
  * </pre>
  *
  * <p>Strings that already look like full model identifiers (contain a '/') are passed

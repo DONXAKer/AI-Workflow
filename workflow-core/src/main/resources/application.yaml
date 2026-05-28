@@ -27,15 +27,14 @@ workflow:
   # Picked 2026-05-14 from aitunnel.ru/models (price/quality balance).
   model-presets:
     # Analytical roles (analysis, plan, review, agent_verify) — needs Tools+Reasoning.
-    # Реальный smart-tier модель задан в Models.OR_SMART (deepseek-v3.2 на 2026-05-18
-    # после миграции с z-ai/glm-4.6 из-за DeepInfra-апстрим деградации). Эта запись
-    # сохранена как комментарий для документации — Spring @Value-биндинг на Map<>
-    # silently не подхватывает её в текущем контексте; реальный источник истины —
-    # Models.java. См. CLAUDE.md → LLM routing & model presets.
-    smart: glm-4.6
-    # Executor / agent_with_tools (impl_*) — cheapest tool-capable flash with reasoning.
-    # glm-4.7-flash: ₽9.61/76.8, 200k ctx.
-    flash: glm-4.7-flash
+    # Реальный smart-tier задан в Models.OR_SMART (deepseek-v4-pro, обновлено 2026-05-21
+    # с alltokens.ru — V4 Pro: $0.435/M in, 1.05M ctx). Эта запись — документация;
+    # Spring @Value-биндинг на Map<> silently не подхватывает её в текущем контексте;
+    # реальный источник истины — Models.java. См. CLAUDE.md → LLM routing & model presets.
+    smart: deepseek-v4-pro
+    # Executor / agent_with_tools (impl_*) — DeepSeek V4 Flash: #4 global, $0.112/M in, 1.05M ctx.
+    # Заменяет glm-4.7-flash ($0.06/M) с кратным приростом качества (alltokens.ru 2026-05-21).
+    flash: deepseek-v4-flash
     # Quick / cheap intake / clarification — cheapest tool-capable with vision.
     # gpt-4.1-nano: ₽9.6/76.8 cached, 1M ctx.
     fast: gpt-4.1-nano
@@ -47,7 +46,7 @@ workflow:
     cheap: gpt-5-nano
     # Extended (referenced when a block pins `tier: coder` etc).
     coder: qwen3-coder
-    deepseek: deepseek-v3.2
+    deepseek: deepseek-v4-pro
     gemini-pro: gemini-3.1-pro-preview
     gemini-flash: gemini-2.5-flash
     glm: glm-4.7
@@ -56,7 +55,7 @@ workflow:
     # OpenRouter route → z-ai/glm-4.6, CLI route → claude-sonnet-4-6.
     default-model: smart
   smart-detect:
-    model: google/gemini-2.0-flash-001
+    model: google/gemini-2.5-flash-lite
     confidence-threshold: 0.7
   preflight:
     # TTL for cached PreflightSnapshot rows. Snapshots older than this are treated as

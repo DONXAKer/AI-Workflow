@@ -65,24 +65,27 @@ public final class Models {
     public static final String CLI_OPUS     = "claude-opus-4-7";
     public static final String CLI_FALLBACK = CLI_SONNET;
 
-    // ── OpenRouter tier defaults (operator-validated for WarCard pipeline) ─
-    // smart было z-ai/glm-4.6, но glm-4.6 в РФ хостят только DeepInfra+Novita,
-    // и при пиковой нагрузке оба упираются в 120с timeout на больших промптах
-    // (analysis-size, 5-15K токенов). Переехали на deepseek-v3.2 через Baidu-
-    // upstream (стабильный TTFT 3с) до восстановления DeepInfra. Откатить на
-    // "z-ai/glm-4.6" одной строкой когда апстрим оживёт. См. project_warcard_provider_routing.
-    public static final String OR_SMART     = "deepseek/deepseek-v3.2";
-    public static final String OR_FLASH     = "z-ai/glm-4.7-flash";
+    // ── OpenRouter tier defaults (validated May 2026, alltokens.ru catalog) ──
+    // smart: V4 Pro — прямой преемник V3.2, 1.05M ctx, $0.435/M in (~40 ₽/M).
+    // flash: V4 Flash — #4 по рейтингу alltokens.ru, 1.05M ctx, $0.112/M in (~10 ₽/M);
+    //        заменяет glm-4.7-flash ($0.06/M) с кратным приростом качества.
+    // cheap: то же V4 Flash — дешевле gpt-4o-mini ($0.15/M) и на порядок качественнее.
+    // fast/reasoning оставлены без изменений: Gemini 2.5 FL-Lite и 2.5 Pro —
+    //        лучшее value для quick-intake и hard-case ролей на текущем OpenRouter.
+    public static final String OR_SMART     = "deepseek/deepseek-v4-pro";
+    public static final String OR_FLASH     = "deepseek/deepseek-v4-flash";
     public static final String OR_FAST      = "google/gemini-2.5-flash-lite";
     public static final String OR_REASONING = "google/gemini-2.5-pro";
-    public static final String OR_CHEAP     = "openai/gpt-4o-mini";
+    public static final String OR_CHEAP     = "deepseek/deepseek-v4-flash";
     public static final String OR_FALLBACK  = OR_SMART;
 
     // ── OpenRouter extras (explicit pin via preset name) ───────────────────
-    public static final String OR_DEEPSEEK     = "deepseek/deepseek-chat-v3-0324";
+    public static final String OR_DEEPSEEK        = "deepseek/deepseek-chat-v3-0324";
+    public static final String OR_DEEPSEEK_V4_FLASH = "deepseek/deepseek-v4-flash";
+    public static final String OR_DEEPSEEK_V4_PRO   = "deepseek/deepseek-v4-pro";
     public static final String OR_GLM          = "z-ai/glm-5.1";
     public static final String OR_GEMINI_PRO   = "google/gemini-2.5-pro";
-    public static final String OR_GEMINI_FLASH = "google/gemini-2.0-flash-001";
+    public static final String OR_GEMINI_FLASH = "google/gemini-2.5-flash";
     public static final String OR_GPT4O        = "openai/gpt-4o";
     public static final String OR_MISTRAL      = "mistralai/mistral-large-2411";
     public static final String OR_QWEN         = "qwen/qwen-2.5-72b-instruct";
