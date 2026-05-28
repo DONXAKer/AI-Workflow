@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Sparkles, AlertCircle, Loader2, Play, ChevronDown } from 'lucide-react'
+import { Sparkles, AlertCircle, Loader2, Play, ChevronDown, Zap } from 'lucide-react'
 import { api } from '../../services/api'
 import { runHref } from '../../utils/runHref'
 import clsx from 'clsx'
@@ -36,6 +36,10 @@ export default function SmartStartTab() {
 
   const [launching, setLaunching] = useState(false)
   const [launchError, setLaunchError] = useState<string | null>(null)
+
+  const [featureInput, setFeatureInput] = useState('')
+  const [featureLaunching, setFeatureLaunching] = useState(false)
+  const [featureError, setFeatureError] = useState<string | null>(null)
 
   useEffect(() => {
     api.listPipelines()
@@ -97,6 +101,25 @@ export default function SmartStartTab() {
     }
   }
 
+  const handleFeatureLaunch = async () => {
+    if (!featureInput.trim() || !selectedPipeline) return
+    setFeatureLaunching(true)
+    setFeatureError(null)
+    try {
+      const run = await api.startRun({
+        configPath: selectedPipeline,
+        entryPointId: 'from_scratch',
+        requirement: featureInput.trim(),
+      })
+      if (run?.id) navigate(runHref(run.id, pathname))
+      else setFeatureError('Неожиданный ответ сервера')
+    } catch (e) {
+      setFeatureError(e instanceof Error ? e.message : 'Не удалось запустить. Сервер работает?')
+    } finally {
+      setFeatureLaunching(false)
+    }
+  }
+
   const activeEntryPointId = overrideEntryPoint ?? result?.suggested.entryPointId
 
   return (
@@ -129,6 +152,48 @@ export default function SmartStartTab() {
           </div>
         </div>
       )}
+
+      {/* Quick feature launch */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Zap className="w-4 h-4 text-amber-400" />
+          <span className="text-sm font-medium text-slate-300">Описание бизнес-фичи</span>
+        </div>
+        <p className="text-xs text-slate-500">
+          Опишите фичу одной строкой — пайплайн изучит проект и сформирует задачи.
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={featureInput}
+            onChange={e => setFeatureInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleFeatureLaunch() }}
+            placeholder="Например: добавить авторизацию через OAuth 2.0"
+            className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500"
+          />
+          <button
+            type="button"
+            onClick={handleFeatureLaunch}
+            disabled={featureLaunching || !featureInput.trim() || !selectedPipeline}
+            className="flex items-center gap-2 bg-amber-600 hover:bg-amber-500 disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors whitespace-nowrap"
+          >
+            {featureLaunching
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Запуск...</>
+              : <><Play className="w-4 h-4" /> Создать задачи</>}
+          </button>
+        </div>
+        {featureError && (
+          <div className="flex items-center gap-2 text-red-400 text-xs bg-red-950/50 border border-red-800 rounded-lg px-3 py-2">
+            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" /> {featureError}
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center gap-3 text-xs text-slate-600">
+        <div className="flex-1 border-t border-slate-800" />
+        <span>или используйте умный анализ</span>
+        <div className="flex-1 border-t border-slate-800" />
+      </div>
 
       {/* Input area */}
       <div className="space-y-3">

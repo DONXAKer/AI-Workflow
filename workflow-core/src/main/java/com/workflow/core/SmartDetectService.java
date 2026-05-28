@@ -52,7 +52,7 @@ public class SmartDetectService {
     @Autowired private PipelineConfigLoader pipelineConfigLoader;
     @Autowired private ObjectMapper objectMapper;
 
-    @Value("${workflow.smart-detect.model:google/gemini-2.0-flash-001}")
+    @Value("${workflow.smart-detect.model:google/gemini-2.5-flash-lite}")
     private String detectModel;
 
     @Value("${workflow.smart-detect.confidence-threshold:0.7}")
@@ -152,13 +152,14 @@ public class SmartDetectService {
         Optional<Project> projectOpt = projectRepository.findBySlug(projectSlug);
         if (projectOpt.isEmpty() || projectOpt.get().getWorkingDir() == null) return ProjectFacts.EMPTY;
 
-        Path workDir = Path.of(projectOpt.get().getWorkingDir());
+        var project = projectOpt.get();
+        Path workDir = Path.of(project.getWorkingDir());
         if (!Files.isDirectory(workDir)) return ProjectFacts.EMPTY;
 
         BuildSystem bs = detectBuildSystem(workDir);
         boolean hasTests        = detectHasTests(workDir);
-        boolean hasActiveTasks  = Files.isDirectory(workDir.resolve("tasks/active")) &&
-                                  countMdFiles(workDir.resolve("tasks/active")) > 0;
+        Path tasksPath          = workDir.resolve(project.getEffectiveTasksDir());
+        boolean hasActiveTasks  = Files.isDirectory(tasksPath) && countMdFiles(tasksPath) > 0;
         boolean uncommitted     = detectUncommittedChanges(workDir);
         String  branch          = detectCurrentBranch(workDir);
 

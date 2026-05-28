@@ -14,14 +14,19 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @RestController
 @RequestMapping("/api/projects")
@@ -119,9 +124,54 @@ public class ProjectController {
             if (body.getTechStackJson() != null) existing.setTechStackJson(body.getTechStackJson());
             if (body.getDefaultProvider() != null) existing.setDefaultProvider(body.getDefaultProvider());
             if (body.getDefaultTrackerProvider() != null) existing.setDefaultTrackerProvider(body.getDefaultTrackerProvider());
+            if (body.getTasksDir() != null) existing.setTasksDir(body.getTasksDir());
             existing.setOrchestratorEnabled(body.isOrchestratorEnabled());
             return ResponseEntity.ok(repository.save(existing));
         }).orElse(ResponseEntity.notFound().build());
+    }
+
+    private static final Pattern MD_HEADING = Pattern.compile("^#{1,6}\\s+(.+)$");
+
+    /**
+     * Lists .md task files in the project's tasksDir (default: tasks/active).
+     * Returns [{name, path, title}] — title is parsed from the first markdown heading.
+     */
+    @GetMapping("/{slug}/tasks")
+    public ResponseEntity<List<Map<String, Object>>> listTasks(@PathVariable String slug) {
+        return repository.findBySlug(slug).map(project -> {
+            String workingDir = project.getWorkingDir();
+            if (workingDir == null || workingDir.isBlank()) return ResponseEntity.ok(List.<Map<String, Object>>of());
+            Path tasksPath = Paths.get(workingDir).resolve(project.getEffectiveTasksDir()).normalize();
+            if (!Files.isDirectory(tasksPath)) return ResponseEntity.ok(List.<Map<String, Object>>of());
+            List<Map<String, Object>> result = new ArrayList<>();
+            try (var stream = Files.list(tasksPath)) {
+                stream.filter(p -> p.toString().endsWith(".md"))
+                    .sorted()
+                    .forEach(p -> {
+                        String title = extractTitle(p);
+                        Map<String, Object> entry = new LinkedHashMap<>();
+                        entry.put("name", p.getFileName().toString());
+                        entry.put("path", p.toString());
+                        entry.put("title", title);
+                        result.add(entry);
+                    });
+            } catch (IOException e) {
+                // return what we have
+            }
+            return ResponseEntity.ok(result);
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    private String extractTitle(Path mdFile) {
+        try (var lines = Files.lines(mdFile)) {
+            return lines.limit(20)
+                .map(l -> { Matcher m = MD_HEADING.matcher(l); return m.matches() ? m.group(1).trim() : null; })
+                .filter(t -> t != null)
+                .findFirst()
+                .orElse(null);
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     @PreAuthorize("hasRole('ADMIN')")

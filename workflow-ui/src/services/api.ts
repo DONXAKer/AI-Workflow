@@ -353,6 +353,11 @@ export const api = {
   getIndexStats: (slug: string): Promise<{ file_count: number; qdrant_enabled: boolean }> =>
     request(`${BASE}/projects/${slug}/index-stats`),
 
+  listProjectTasks: (slug: string): Promise<{ name: string; path: string; title: string | null }[]> =>
+    request<{ name: string; path: string; title: string | null }[]>(
+      `${BASE}/projects/${encodeURIComponent(slug)}/tasks`
+    ),
+
   browseFs: (path?: string): Promise<{ path: string; parent: string; directories: string[]; root: string }> =>
     request(`${BASE}/fs/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`),
 

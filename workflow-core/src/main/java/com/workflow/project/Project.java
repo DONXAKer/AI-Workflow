@@ -82,6 +82,13 @@ public class Project {
     private String defaultTrackerProvider;
 
     /**
+     * Relative path inside workingDir where task .md files live.
+     * Defaults to {@code "tasks/active"} when null.
+     */
+    @Column(name = "tasks_dir")
+    private String tasksDir;
+
+    /**
      * Per-project override for the global escalation ladder. JSON array of polymorphic
      * {@link com.workflow.config.EscalationStep} objects discriminated by {@code tier}.
      * When null, blocks fall back to {@code workflow.escalation.defaults} in application.yaml.
@@ -132,6 +139,12 @@ public class Project {
     /** Returns the configured tracker provider or {@code "youtrack"} when unset. */
     public String getEffectiveDefaultTrackerProvider() {
         return defaultTrackerProvider != null && !defaultTrackerProvider.isBlank() ? defaultTrackerProvider : "youtrack";
+    }
+    public String getTasksDir() { return tasksDir; }
+    public void setTasksDir(String tasksDir) { this.tasksDir = tasksDir; }
+    /** Returns configured tasksDir or {@code "tasks/active"} when unset. */
+    public String getEffectiveTasksDir() {
+        return tasksDir != null && !tasksDir.isBlank() ? tasksDir : "tasks/active";
     }
     public String getEscalationDefaultsJson() { return escalationDefaultsJson; }
     public void setEscalationDefaultsJson(String escalationDefaultsJson) { this.escalationDefaultsJson = escalationDefaultsJson; }

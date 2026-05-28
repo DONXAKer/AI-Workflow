@@ -584,6 +584,8 @@ export interface ProjectInfo {
   defaultProvider?: LlmProvider | null
   /** Default task tracker provider: youtrack | jira | github | gitlab | linear */
   defaultTrackerProvider?: string | null
+  /** Relative path inside workingDir for task .md files. Defaults to "tasks/active". */
+  tasksDir?: string | null
   createdAt: string
   updatedAt: string
 }

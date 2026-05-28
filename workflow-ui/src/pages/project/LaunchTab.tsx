@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
-import { Play, AlertCircle, Loader2, Trash2 } from 'lucide-react'
+import { useNavigate, useLocation, useParams } from 'react-router-dom'
+import { Play, AlertCircle, Loader2, Trash2, FileText } from 'lucide-react'
 import { api } from '../../services/api'
 import { EntryPoint } from '../../types'
 import { runHref } from '../../utils/runHref'
@@ -8,9 +8,12 @@ import clsx from 'clsx'
 
 type PipelineInfo = { path: string; name: string; pipelineName?: string; description?: string; error?: string }
 
+type TaskFile = { name: string; path: string; title: string | null }
+
 export default function LaunchTab() {
   const navigate = useNavigate()
   const { pathname } = useLocation()
+  const { slug } = useParams<{ slug: string }>()
   const [pipelines, setPipelines] = useState<PipelineInfo[]>([])
   const [loadingPipelines, setLoadingPipelines] = useState(true)
   const [pipelinesError, setPipelinesError] = useState<string | null>(null)
@@ -25,6 +28,10 @@ export default function LaunchTab() {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [dryRun, setDryRun] = useState(false)
+
+  const [taskFiles, setTaskFiles] = useState<TaskFile[]>([])
+
+  const hasTaskFileField = selectedEntryPoint?.inputFields.some(f => f.name === 'task_file') ?? false
 
   useEffect(() => {
     setLoadingPipelines(true)
@@ -65,6 +72,11 @@ export default function LaunchTab() {
       return next
     })
   }, [selectedEntryPoint])
+
+  useEffect(() => {
+    if (!hasTaskFileField || !slug) { setTaskFiles([]); return }
+    api.listProjectTasks(slug).then(setTaskFiles).catch(() => setTaskFiles([]))
+  }, [hasTaskFileField, slug])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -299,6 +311,33 @@ export default function LaunchTab() {
                 placeholder={field.placeholder}
                 className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+            )}
+            {field.name === 'task_file' && taskFiles.length > 0 && (
+              <div className="mt-2">
+                <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1.5">Выберите задачу</p>
+                <ul className="space-y-1 max-h-52 overflow-y-auto">
+                  {taskFiles.map(tf => (
+                    <li key={tf.path}>
+                      <button
+                        type="button"
+                        onClick={() => setFieldValues(prev => ({ ...prev, task_file: tf.path }))}
+                        className={clsx(
+                          'w-full text-left px-3 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors',
+                          fieldValues['task_file'] === tf.path
+                            ? 'bg-blue-950/60 border border-blue-700 text-blue-200'
+                            : 'bg-slate-800/60 hover:bg-slate-800 text-slate-300 hover:text-white'
+                        )}
+                      >
+                        <FileText className="w-3.5 h-3.5 shrink-0 text-slate-500" />
+                        <span className="truncate">
+                          {tf.title ?? tf.name}
+                          {tf.title && <span className="text-slate-500 ml-1.5 font-mono text-[11px]">{tf.name}</span>}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
           </div>
         ))}

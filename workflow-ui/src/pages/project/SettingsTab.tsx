@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { Save, Loader2, AlertCircle, Trash2, Plug, FileCode, FolderOpen, Brain, Globe, Terminal, Cpu, Database, RefreshCw } from 'lucide-react'
+import { Save, Loader2, AlertCircle, Trash2, Plug, FileCode, FolderOpen, Brain, Globe, Terminal, Cpu, Database, RefreshCw, ClipboardList } from 'lucide-react'
 import { api } from '../../services/api'
 import { ProjectInfo, IntegrationConfig, LlmProvider } from '../../types'
 import PathInput from '../../components/PathInput'
@@ -51,6 +51,7 @@ export default function SettingsTab() {
   const [displayName, setDisplayName] = useState('')
   const [configDir, setConfigDir] = useState('')
   const [workingDir, setWorkingDir] = useState('')
+  const [tasksDir, setTasksDir] = useState('')
   const [description, setDescription] = useState('')
   const [orchEnabled, setOrchEnabled] = useState(true)
   const [orchModel, setOrchModel] = useState('')
@@ -85,6 +86,7 @@ export default function SettingsTab() {
         setDisplayName(found.displayName)
         setConfigDir(found.configDir ?? '')
         setWorkingDir(found.workingDir ?? '')
+        setTasksDir(found.tasksDir ?? '')
         setDescription(found.description ?? '')
         setOrchEnabled(found.orchestratorEnabled ?? true)
         setOrchModel(found.orchestratorModel ?? '')
@@ -132,6 +134,7 @@ export default function SettingsTab() {
         displayName: displayName.trim(),
         configDir: configDir.trim(),
         workingDir: workingDir.trim(),
+        tasksDir: tasksDir.trim() || null,
         description: description.trim(),
         orchestratorEnabled: orchEnabled,
         orchestratorModel: orchModel.trim() || null,
@@ -262,6 +265,21 @@ export default function SettingsTab() {
           />
           <p className="text-xs text-slate-600 mt-1">
             Папка с YAML-файлами пайплайнов. Используется вкладкой «Запуск».
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">
+            <span className="flex items-center gap-1.5"><ClipboardList className="w-3.5 h-3.5" /> Папка задач</span>
+          </label>
+          <PathInput
+            value={tasksDir}
+            onChange={setTasksDir}
+            placeholder="tasks/active"
+            disabled={saving}
+          />
+          <p className="text-xs text-slate-600 mt-1">
+            Папка с .md-файлами задач относительно рабочей директории. По умолчанию <code className="font-mono bg-slate-800 px-1 rounded">tasks/active</code>.
           </p>
         </div>
 
