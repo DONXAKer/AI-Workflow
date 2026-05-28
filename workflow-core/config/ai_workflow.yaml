@@ -40,11 +40,11 @@ integrations:
 knowledge_base:
   sources:
     - type: files
-      path: /Users/home/Code/AI-Workflow/docs
+      path: /projects/AI-Workflow/docs
     - type: files
-      path: /Users/home/Code/AI-Workflow/workflow-core/src/main/java
+      path: /projects/AI-Workflow/workflow-core/src/main/java
     - type: files
-      path: /Users/home/Code/AI-Workflow/workflow-ui/src
+      path: /projects/AI-Workflow/workflow-ui/src
 
 # =============================================================================
 # Pipeline

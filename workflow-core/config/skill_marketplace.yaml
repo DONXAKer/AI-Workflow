@@ -147,7 +147,6 @@ pipeline:
         - task_md
         - analysis
         - clarification
-      working_dir: /projects/skill_marketplace
       max_iterations: 12
       system_prompt_extra: |
         Backend: api/ (Gradle Kotlin DSL, Flyway migrations in api/src/main/resources/db/migration/)
@@ -165,7 +164,6 @@ pipeline:
     depends_on:
       - plan
     config:
-      working_dir: /projects/skill_marketplace
       command: |
         set -e
         BRANCH="feature/${task_md.feat_id}-${task_md.slug}"
@@ -205,7 +203,6 @@ pipeline:
       temperature: 0.2
       max_iterations: 10
     config:
-      working_dir: /projects/skill_marketplace
       max_iterations: 20
       allowed_tools:
         - Search
@@ -251,7 +248,6 @@ pipeline:
     depends_on:
       - codegen
     config:
-      working_dir: /projects/skill_marketplace
       command: |
         set -e
         echo "=== API compilation ==="
@@ -309,7 +305,6 @@ pipeline:
       plan_block: plan
       context_blocks:
         - build_test
-      working_dir: /projects/skill_marketplace
       max_iterations: 10
       system_prompt_extra: |
         Working directory: /projects/skill_marketplace
@@ -342,7 +337,6 @@ pipeline:
     depends_on:
       - review
     config:
-      working_dir: /projects/skill_marketplace
       command: |
         set -e
         echo "=== Branch: $(git branch --show-current) ==="

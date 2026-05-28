@@ -114,7 +114,6 @@ pipeline:
         - task_md
         - analysis
         - clarification
-      working_dir: /projects/Personal_assistant
       max_iterations: 12
       system_prompt_extra: |
         Stack: FastAPI + Pydantic + APScheduler + SQLite + ChromaDB.
@@ -129,7 +128,6 @@ pipeline:
     depends_on:
       - plan
     config:
-      working_dir: /projects/Personal_assistant
       command: |
         set -e
         BRANCH="feature/${task_md.slug}"
@@ -180,7 +178,6 @@ pipeline:
       temperature: 0.2
       max_iterations: 12
     config:
-      working_dir: /projects/Personal_assistant
       max_iterations: 25
       allowed_tools:
         - Search
@@ -223,7 +220,6 @@ pipeline:
     depends_on:
       - codegen
     config:
-      working_dir: /projects/Personal_assistant
       command: |
         set -e
         echo "=== Python syntax check ==="
@@ -281,7 +277,6 @@ pipeline:
       plan_block: plan
       context_blocks:
         - build_test
-      working_dir: /projects/Personal_assistant
       max_iterations: 10
       system_prompt_extra: |
         Working directory: /projects/Personal_assistant
@@ -311,7 +306,6 @@ pipeline:
     depends_on:
       - review
     config:
-      working_dir: /projects/Personal_assistant
       command: |
         set -e
         echo "=== Branch: $(git branch --show-current) ==="
