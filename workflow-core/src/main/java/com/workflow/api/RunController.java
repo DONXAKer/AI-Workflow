@@ -98,6 +98,18 @@ public class RunController {
     @Autowired
     private BlockOutputRepository blockOutputRepository;
 
+    @Autowired(required = false)
+    private com.workflow.billing.BillingService billingService;
+
+    @Autowired(required = false)
+    private com.workflow.workspace.WorkspaceProvisioner workspaceProvisioner;
+
+    @Autowired(required = false)
+    private com.workflow.account.AccountRepository accountRepository;
+
+    @Autowired(required = false)
+    private com.workflow.billing.TierProperties tierProperties;
+
     @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
     @PostMapping("/runs")
     public ResponseEntity<Map<String, Object>> startRun(@RequestBody Map<String, Object> request) {
@@ -125,6 +137,43 @@ public class RunController {
                 "error", "Kill switch is active — new runs are blocked",
                 "reason", ks.getReason() != null ? ks.getReason() : "",
                 "activatedBy", ks.getActivatedBy() != null ? ks.getActivatedBy() : ""));
+        }
+
+        // Wallet pre-run gate: reject before any DB write / run-thread start when the
+        // account cannot afford a run. Platform staff and contextless requests have no
+        // accountId and skip the check.
+        Long accountId = com.workflow.account.TenantContext.get();
+        if (billingService != null && accountId != null && billingService.isWalletDepleted(accountId)) {
+            auditService.recordFailure("RUN_START", "run", "", Map.of(
+                "reason", "insufficient_balance",
+                "configPath", configPath));
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("error", "Insufficient wallet balance — top up to start a run");
+            body.put("balanceUsd", billingService.balance(accountId));
+            return ResponseEntity.status(402).body(body);
+        }
+
+        // Account-status + per-tier concurrency gates.
+        if (accountId != null && accountRepository != null) {
+            var account = accountRepository.findById(accountId).orElse(null);
+            if (account != null
+                    && account.getStatus() == com.workflow.account.AccountStatus.SUSPENDED) {
+                auditService.recordFailure("RUN_START", "run", "", Map.of(
+                    "reason", "account_suspended", "configPath", configPath));
+                return ResponseEntity.status(403).body(Map.of(
+                    "error", "Account is suspended — contact support"));
+            }
+            if (account != null && tierProperties != null) {
+                int cap = tierProperties.forName(account.getTier()).getMaxConcurrentRuns();
+                if (cap > 0) {
+                    long active = pipelineRunRepository.countByAccountIdAndStatusIn(
+                        accountId, List.of(RunStatus.RUNNING, RunStatus.PAUSED_FOR_APPROVAL));
+                    if (active >= cap) {
+                        return ResponseEntity.status(429).body(Map.of(
+                            "error", "Concurrent run limit reached for your plan (max " + cap + ")"));
+                    }
+                }
+            }
         }
 
         String entryPointId = (String) request.get("entryPointId");
@@ -180,6 +229,24 @@ public class RunController {
                 body.put("error", "Invalid pipeline config");
                 body.put("errors", validation.errors());
                 return ResponseEntity.badRequest().body(body);
+            }
+
+            // Provision an isolated per-run repo sandbox when the project is repo-backed.
+            // A clone failure aborts synchronously (HTTP 400) before any run thread starts.
+            if (workspaceProvisioner != null && projectRepository != null) {
+                String wsSlug = ProjectContext.get();
+                var project = (wsSlug != null) ? projectRepository.findBySlug(wsSlug).orElse(null) : null;
+                if (project != null && project.getRepoUrl() != null && !project.getRepoUrl().isBlank()) {
+                    try {
+                        Path ws = workspaceProvisioner.provision(runId, accountId, project);
+                        if (ws != null) namedInputs.put("_workspaceDir", ws.toString());
+                    } catch (com.workflow.workspace.WorkspaceProvisioningException e) {
+                        auditService.recordFailure("RUN_START", "run", runId.toString(), Map.of(
+                            "reason", "workspace_provisioning_failed",
+                            "configPath", configPath));
+                        return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+                    }
+                }
             }
 
             // Build userInputs map for the entry point resolver
@@ -276,14 +343,12 @@ public class RunController {
     }
 
     /**
-     * GET /api/runs
+     * GET /api/runs — paginated run list.
      *
-     * N+1 avoidance strategy:
-     *  - No filters: uses a native-SQL summary projection ({@code findAllSummary}) that fetches
-     *    only scalar columns + a subquery for blockCount.  Cost: 2 queries regardless of page size.
-     *  - Filters active: uses {@code findAll(spec, pageable)} backed by the
-     *    {@code PipelineRun.withCompletedBlocks} EntityGraph, which loads completedBlocks in a
-     *    single batch query instead of one SELECT per row.  Cost: 3 queries (count + data + batch).
+     * <p>Backed by {@code findSummaryFiltered}: a scalar projection that selects only the
+     * summary columns — never the heavy {@code *_snapshot_json} TEXT blobs — and counts
+     * blocks via a subquery. Cost: 2 queries (count + data) and a small payload, whatever
+     * the page size. Project-scoped unless {@code allProjects=true}.
      */
     @Transactional(readOnly = true)
     @GetMapping("/runs")
@@ -298,119 +363,64 @@ public class RunController {
             @RequestParam(defaultValue = "false") boolean allProjects) {
 
         size = Math.min(size, 100);
+        String projectSlug = com.workflow.project.ProjectContext.get();
 
-        // Project scoping is always used unless allProjects=true (global history view).
-        boolean hasFilters = true;
-
-        List<Map<String, Object>> content;
-        long totalElements;
-        int totalPages;
-        int pageNumber;
-        int pageSize;
-
-        if (!hasFilters) {
-            // Fast path: scalar projection, no collection joins.
-            Pageable pageable = PageRequest.of(page, size);
-            Page<PipelineRunSummary> resultPage = pipelineRunRepository.findAllSummary(pageable);
-
-            content = resultPage.getContent().stream()
-                .map(run -> {
-                    Map<String, Object> dto = new LinkedHashMap<>();
-                    dto.put("id", run.getId());
-                    dto.put("pipelineName", run.getPipelineName());
-                    dto.put("requirement", run.getRequirement());
-                    dto.put("status", run.getStatus());
-                    dto.put("currentBlock", run.getCurrentBlock());
-                    dto.put("error", run.getError());
-                    dto.put("startedAt", run.getStartedAt());
-                    dto.put("completedAt", run.getCompletedAt());
-                    dto.put("blockCount", run.getBlockCount());
-                    return dto;
-                })
-                .collect(Collectors.toList());
-
-            totalElements = resultPage.getTotalElements();
-            totalPages    = resultPage.getTotalPages();
-            pageNumber    = resultPage.getNumber();
-            pageSize      = resultPage.getSize();
-
+        // Resolve the status filter. An absent / empty / all-invalid filter means "any
+        // status" — we then pass every RunStatus name so the SQL IN clause is never empty.
+        List<String> allStatuses = Arrays.stream(RunStatus.values())
+            .map(Enum::name).collect(Collectors.toList());
+        List<String> statuses;
+        if (status == null || status.isEmpty()) {
+            statuses = allStatuses;
         } else {
-            // Filtered path: build a Specification, use EntityGraph to batch-load completedBlocks.
-            Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "startedAt"));
-
-            String currentProject = com.workflow.project.ProjectContext.get();
-            Specification<PipelineRun> spec = (root, query, cb) -> {
-                List<Predicate> predicates = new ArrayList<>();
-                if (!allProjects) {
-                    predicates.add(cb.equal(root.get("projectSlug"), currentProject));
-                }
-
-                if (status != null && !status.isEmpty()) {
-                    List<RunStatus> statuses = status.stream()
-                        .map(s -> { try { return RunStatus.valueOf(s); } catch (Exception e) { return null; } })
-                        .filter(Objects::nonNull)
-                        .collect(Collectors.toList());
-                    if (!statuses.isEmpty()) {
-                        predicates.add(root.get("status").in(statuses));
-                    }
-                }
-
-                if (pipelineName != null && !pipelineName.isBlank()) {
-                    predicates.add(cb.equal(root.get("pipelineName"), pipelineName));
-                }
-
-                if (search != null && !search.isBlank()) {
-                    predicates.add(cb.like(cb.lower(root.get("requirement")), "%" + search.toLowerCase() + "%"));
-                }
-
-                if (from != null && !from.isBlank()) {
-                    try {
-                        Instant fromInstant = LocalDate.parse(from).atStartOfDay(ZoneOffset.UTC).toInstant();
-                        predicates.add(cb.greaterThanOrEqualTo(root.get("startedAt"), fromInstant));
-                    } catch (Exception ignored) {}
-                }
-
-                if (to != null && !to.isBlank()) {
-                    try {
-                        Instant toInstant = LocalDate.parse(to).plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant();
-                        predicates.add(cb.lessThan(root.get("startedAt"), toInstant));
-                    } catch (Exception ignored) {}
-                }
-
-                return cb.and(predicates.toArray(new Predicate[0]));
-            };
-
-            Page<PipelineRun> resultPage = pipelineRunRepository.findAll(spec, pageable);
-
-            content = resultPage.getContent().stream()
-                .map(run -> {
-                    Map<String, Object> dto = new LinkedHashMap<>();
-                    dto.put("id", run.getId().toString());
-                    dto.put("pipelineName", run.getPipelineName());
-                    dto.put("requirement", run.getRequirement());
-                    dto.put("status", run.getStatus().name());
-                    dto.put("currentBlock", run.getCurrentBlock());
-                    dto.put("error", run.getError());
-                    dto.put("startedAt", run.getStartedAt());
-                    dto.put("completedAt", run.getCompletedAt());
-                    // completedBlocks is already loaded by the EntityGraph batch query
-                    dto.put("blockCount", run.getCompletedBlocks().size());
-                    return dto;
-                })
+            statuses = status.stream()
+                .filter(s -> { try { RunStatus.valueOf(s); return true; } catch (Exception e) { return false; } })
                 .collect(Collectors.toList());
-
-            totalElements = resultPage.getTotalElements();
-            totalPages    = resultPage.getTotalPages();
-            pageNumber    = resultPage.getNumber();
-            pageSize      = resultPage.getSize();
+            if (statuses.isEmpty()) statuses = allStatuses;
         }
+
+        String pipelineNameParam = (pipelineName != null && !pipelineName.isBlank()) ? pipelineName : null;
+        String searchParam = (search != null && !search.isBlank())
+            ? "%" + search.toLowerCase() + "%" : null;
+
+        Instant fromTs = null;
+        if (from != null && !from.isBlank()) {
+            try { fromTs = LocalDate.parse(from).atStartOfDay(ZoneOffset.UTC).toInstant(); }
+            catch (Exception ignored) {}
+        }
+        Instant toTs = null;
+        if (to != null && !to.isBlank()) {
+            try { toTs = LocalDate.parse(to).plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant(); }
+            catch (Exception ignored) {}
+        }
+
+        // ORDER BY started_at DESC is baked into the query — no Sort on the Pageable.
+        Pageable pageable = PageRequest.of(page, size);
+        Page<PipelineRunSummary> resultPage = pipelineRunRepository.findSummaryFiltered(
+            allProjects, projectSlug, statuses, pipelineNameParam, searchParam, fromTs, toTs, pageable);
+
+        List<Map<String, Object>> content = resultPage.getContent().stream()
+            .map(run -> {
+                Map<String, Object> dto = new LinkedHashMap<>();
+                dto.put("id", run.getId());
+                dto.put("pipelineName", run.getPipelineName());
+                dto.put("requirement", run.getRequirement());
+                dto.put("status", run.getStatus());
+                dto.put("currentBlock", run.getCurrentBlock());
+                dto.put("error", run.getError());
+                dto.put("startedAt", run.getStartedAt());
+                dto.put("completedAt", run.getCompletedAt());
+                dto.put("blockCount", run.getBlockCount());
+                return dto;
+            })
+            .collect(Collectors.toList());
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("content", content);
-        response.put("totalElements", totalElements);
-        response.put("totalPages", totalPages);
-        response.put("page", pageNumber);
-        response.put("size", pageSize);
+        response.put("totalElements", resultPage.getTotalElements());
+        response.put("totalPages", resultPage.getTotalPages());
+        response.put("page", resultPage.getNumber());
+        response.put("size", resultPage.getSize());
 
         return ResponseEntity.ok(response);
     }
@@ -480,6 +490,24 @@ public class RunController {
         }
     }
 
+    /**
+     * True when a tenant user is reading a run owned by a different account. By-primary-key
+     * lookups ({@code findById}) bypass the Hibernate {@code accountFilter}, so endpoints
+     * that fetch a run by id must check ownership explicitly. Platform staff see all.
+     */
+    private boolean isCrossAccount(PipelineRun run) {
+        if (run == null) return false;
+        if (com.workflow.account.TenantContext.isPlatformAdmin()) return false;
+        // Legacy / pre-tenancy runs carry no accountId — they predate row-level
+        // isolation and belong to no account, so they are not "cross" account.
+        // Without this guard a tenant user gets a 404 on every legacy run, even
+        // though GET /api/runs still lists them (the list query is project-scoped,
+        // not account-scoped) — the detail endpoint must stay consistent with it.
+        if (run.getAccountId() == null) return false;
+        Long ctx = com.workflow.account.TenantContext.get();
+        return ctx != null && !ctx.equals(run.getAccountId());
+    }
+
     @GetMapping("/runs/{runId}")
     public ResponseEntity<?> getRun(@PathVariable String runId) {
         try {
@@ -490,6 +518,8 @@ public class RunController {
             if (runOpt.isEmpty()) return ResponseEntity.notFound().build();
 
             PipelineRun run = runOpt.get();
+            // findWithCollectionsById is a by-PK lookup — enforce account ownership here.
+            if (isCrossAccount(run)) return ResponseEntity.notFound().build();
 
             // Build chronologically ordered events from BlockOutput timestamps.
             // Internal entries (loopback context, _loopback_*) are excluded.
@@ -1085,11 +1115,31 @@ public class RunController {
     }
 
     @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
+    /**
+     * Run cost: raw LLM spend and the customer-billed amount (raw × markup). Drives the
+     * "$ debited" line on the customer-facing SimpleRunPage.
+     */
+    @GetMapping("/runs/{runId}/cost")
+    public ResponseEntity<?> getRunCost(@PathVariable UUID runId) {
+        PipelineRun run = pipelineRunRepository.findById(runId).orElse(null);
+        if (run == null || isCrossAccount(run)) return ResponseEntity.notFound().build();
+        double raw = llmCallRepository != null ? llmCallRepository.sumCostByRunId(runId) : 0.0;
+        java.math.BigDecimal billed = billingService != null
+            ? billingService.computeCharge(raw, run.getAccountId())
+            : java.math.BigDecimal.valueOf(raw);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("rawCostUsd", raw);
+        body.put("billedCostUsd", billed);
+        return ResponseEntity.ok(body);
+    }
+
     @GetMapping("/runs/{runId}/tool-calls")
     public ResponseEntity<?> getToolCalls(@PathVariable UUID runId) {
         if (toolCallAuditRepository == null) {
             return ResponseEntity.ok(List.of());
         }
+        PipelineRun run = pipelineRunRepository.findById(runId).orElse(null);
+        if (run == null || isCrossAccount(run)) return ResponseEntity.notFound().build();
         List<ToolCallAudit> calls = toolCallAuditRepository.findByRunIdOrderByTimestampAsc(runId);
         List<Map<String, Object>> result = calls.stream().map(c -> {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -1117,6 +1167,8 @@ public class RunController {
         if (llmCallRepository == null) {
             return ResponseEntity.ok(List.of());
         }
+        PipelineRun run = pipelineRunRepository.findById(runId).orElse(null);
+        if (run == null || isCrossAccount(run)) return ResponseEntity.notFound().build();
         List<com.workflow.llm.LlmCall> calls = llmCallRepository.findByRunIdOrderByTimestampAsc(runId);
         List<Map<String, Object>> result = calls.stream().map(c -> {
             Map<String, Object> m = new LinkedHashMap<>();

@@ -338,7 +338,7 @@ public class TaskMdInputBlock implements Block {
         if (integrationConfigRepository == null) return DEFAULT_HEURISTIC_KEYWORDS;
         try {
             Optional<IntegrationConfig> cfg = integrationConfigRepository
-                .findByTypeAndIsDefaultTrue(IntegrationType.UNREAL);
+                .findFirstByTypeAndIsDefaultTrue(IntegrationType.UNREAL);
             if (cfg.isEmpty()) {
                 cfg = integrationConfigRepository.findByType(IntegrationType.UNREAL).stream().findFirst();
             }

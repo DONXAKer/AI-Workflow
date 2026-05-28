@@ -1,7 +1,9 @@
 package com.workflow.project;
 
+import com.workflow.account.TenantContext;
 import com.workflow.llm.LlmProvider;
 import jakarta.persistence.*;
+import org.hibernate.annotations.Filter;
 
 import java.time.Instant;
 
@@ -14,6 +16,7 @@ import java.time.Instant;
  */
 @Entity
 @Table(name = "project")
+@Filter(name = "accountFilter")
 public class Project {
 
     public static final String DEFAULT_SLUG = "default";
@@ -97,6 +100,31 @@ public class Project {
     @Column(name = "escalation_defaults_json", columnDefinition = "TEXT")
     private String escalationDefaultsJson;
 
+    /** Owning account (multi-tenancy). Nullable for pre-migration rows; backfilled at startup. */
+    @Column(name = "account_id")
+    private Long accountId;
+
+    /**
+     * Remote repository URL (HTTPS). When set, each run clones it into an isolated
+     * per-run sandbox via {@code WorkspaceProvisioner} instead of using {@link #workingDir}.
+     * Null for self-hosted / power-user projects that point at a local checkout.
+     */
+    @Column(name = "repo_url")
+    private String repoUrl;
+
+    /** {@code github} or {@code gitlab} — drives which integration config is auto-created. */
+    @Column(name = "repo_provider")
+    private String repoProvider;
+
+    /** Branch the per-run sandbox is checked out at; null clones the remote default branch. */
+    @Column(name = "default_branch")
+    private String defaultBranch;
+
+    /** Access token used to clone {@link #repoUrl}. Encrypted at rest. */
+    @Convert(converter = com.workflow.security.EncryptedStringConverter.class)
+    @Column(name = "repo_token", columnDefinition = "TEXT")
+    private String repoToken;
+
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -104,6 +132,10 @@ public class Project {
     void onCreate() {
         createdAt = Instant.now();
         updatedAt = Instant.now();
+        if (accountId == null) {
+            Long tenant = TenantContext.get();
+            if (tenant != null) accountId = tenant;
+        }
     }
 
     @PreUpdate
@@ -148,6 +180,16 @@ public class Project {
     }
     public String getEscalationDefaultsJson() { return escalationDefaultsJson; }
     public void setEscalationDefaultsJson(String escalationDefaultsJson) { this.escalationDefaultsJson = escalationDefaultsJson; }
+    public Long getAccountId() { return accountId; }
+    public void setAccountId(Long accountId) { this.accountId = accountId; }
+    public String getRepoUrl() { return repoUrl; }
+    public void setRepoUrl(String repoUrl) { this.repoUrl = repoUrl; }
+    public String getRepoProvider() { return repoProvider; }
+    public void setRepoProvider(String repoProvider) { this.repoProvider = repoProvider; }
+    public String getDefaultBranch() { return defaultBranch; }
+    public void setDefaultBranch(String defaultBranch) { this.defaultBranch = defaultBranch; }
+    public String getRepoToken() { return repoToken; }
+    public void setRepoToken(String repoToken) { this.repoToken = repoToken; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 }

@@ -2,11 +2,11 @@ package com.workflow.core;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
@@ -25,6 +25,9 @@ public interface PipelineRunRepository extends JpaRepository<PipelineRun, UUID>,
 
     long countByProjectSlugAndStatusIn(String projectSlug, List<RunStatus> statuses);
 
+    /** Active-run count for an account — drives the per-tier concurrent-run cap. */
+    long countByAccountIdAndStatusIn(Long accountId, List<RunStatus> statuses);
+
     long countByProjectSlug(String projectSlug);
 
     long countByStatusAndCompletedAtAfter(RunStatus status, Instant after);
@@ -41,9 +44,16 @@ public interface PipelineRunRepository extends JpaRepository<PipelineRun, UUID>,
     long countByProjectSlugAndStatusAndCompletedAtIsNullAndStartedAtAfter(String projectSlug, RunStatus status, Instant after);
 
     /**
-     * Unfiltered summary page — no collection joins, so a page of N rows costs 2 queries
-     * (count + data) instead of 2 + N*3.  blockCount is a correlated subquery.
-     * Used when no filter parameters are present.
+     * Run-list query for {@code GET /api/runs}. A scalar projection — selects only the
+     * summary columns, never the heavy TEXT blobs ({@code config_snapshot_json},
+     * {@code skills_snapshot_json}, ...) — so a page of N rows costs 2 queries (count +
+     * data) and a small payload, regardless of page size. {@code blockCount} is a
+     * correlated subquery; no collection is loaded.
+     *
+     * <p>All filters are optional. {@code statuses} must be non-empty — the caller passes
+     * every {@link RunStatus} name when the user applied no status filter, so {@code IN}
+     * is never given an empty list. Nullable params are wrapped in {@code CAST(... )} so
+     * PostgreSQL can infer their type in the {@code IS NULL} checks.
      */
     @Query(value = """
             SELECT CAST(r.id AS VARCHAR)            AS id,
@@ -57,19 +67,33 @@ public interface PipelineRunRepository extends JpaRepository<PipelineRun, UUID>,
                    (SELECT COUNT(*) FROM pipeline_run_completed_blocks cb
                     WHERE cb.run_id = r.id)         AS blockCount
             FROM pipeline_run r
+            WHERE (:allProjects = TRUE OR r.project_slug = :projectSlug)
+              AND r.status IN (:statuses)
+              AND (CAST(:pipelineName AS VARCHAR) IS NULL OR r.pipeline_name = :pipelineName)
+              AND (CAST(:search AS VARCHAR) IS NULL OR LOWER(r.requirement) LIKE :search)
+              AND (CAST(:fromTs AS TIMESTAMP) IS NULL OR r.started_at >= :fromTs)
+              AND (CAST(:toTs AS TIMESTAMP) IS NULL OR r.started_at < :toTs)
             ORDER BY r.started_at DESC
             """,
-            countQuery = "SELECT COUNT(*) FROM pipeline_run",
+            countQuery = """
+            SELECT COUNT(*) FROM pipeline_run r
+            WHERE (:allProjects = TRUE OR r.project_slug = :projectSlug)
+              AND r.status IN (:statuses)
+              AND (CAST(:pipelineName AS VARCHAR) IS NULL OR r.pipeline_name = :pipelineName)
+              AND (CAST(:search AS VARCHAR) IS NULL OR LOWER(r.requirement) LIKE :search)
+              AND (CAST(:fromTs AS TIMESTAMP) IS NULL OR r.started_at >= :fromTs)
+              AND (CAST(:toTs AS TIMESTAMP) IS NULL OR r.started_at < :toTs)
+            """,
             nativeQuery = true)
-    Page<PipelineRunSummary> findAllSummary(Pageable pageable);
-
-    /**
-     * Filtered list path — loads completedBlocks in a single batch query via EntityGraph
-     * rather than one SELECT per row.  Spring Data applies the named graph when Hibernate
-     * generates the query for this method.
-     */
-    @EntityGraph("PipelineRun.withCompletedBlocks")
-    Page<PipelineRun> findAll(Specification<PipelineRun> spec, Pageable pageable);
+    Page<PipelineRunSummary> findSummaryFiltered(
+            @Param("allProjects") boolean allProjects,
+            @Param("projectSlug") String projectSlug,
+            @Param("statuses") List<String> statuses,
+            @Param("pipelineName") String pipelineName,
+            @Param("search") String search,
+            @Param("fromTs") Instant fromTs,
+            @Param("toTs") Instant toTs,
+            Pageable pageable);
 
     /**
      * Detail endpoint: eagerly load all three collections in one fetch.

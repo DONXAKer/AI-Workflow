@@ -52,7 +52,11 @@ public class ClaudeCliProviderClient implements LlmProviderClient {
 
     private static final Logger log = LoggerFactory.getLogger(ClaudeCliProviderClient.class);
 
-    private static final int CLI_TIMEOUT_SEC = 1800;
+    // 3600s (was 1800): on the CLI route the agentic tool-use loop runs entirely
+    // inside the `claude` subprocess — the block's max_iterations does not apply,
+    // so this wall-clock cap is the only guard. A full impl_bp UE task (build the
+    // UMG tree via MCP + C++ wiring + verify) legitimately needs 30-60 min.
+    private static final int CLI_TIMEOUT_SEC = 3600;
     private static final int CLI_MAX_OUTPUT_BYTES = 1024 * 1024;
 
     private final IntegrationConfigRepository integrationConfigRepository;
@@ -60,18 +64,23 @@ public class ClaudeCliProviderClient implements LlmProviderClient {
     private final LlmCallRepository llmCallRepository;
     private final com.workflow.core.PipelineRunRepository runRepositoryForHeartbeat;
     private final com.workflow.project.ProjectRepository projectRepositoryForCwd;
+    private final com.workflow.mcp.McpServerRepository mcpServerRepository;
+    private final com.fasterxml.jackson.databind.ObjectMapper mcpJsonMapper =
+        new com.fasterxml.jackson.databind.ObjectMapper();
 
     @Autowired
     public ClaudeCliProviderClient(IntegrationConfigRepository integrationConfigRepository,
                                    ModelPresetResolver presetResolver,
                                    @Autowired(required = false) LlmCallRepository llmCallRepository,
                                    @Autowired(required = false) com.workflow.core.PipelineRunRepository runRepositoryForHeartbeat,
-                                   @Autowired(required = false) com.workflow.project.ProjectRepository projectRepositoryForCwd) {
+                                   @Autowired(required = false) com.workflow.project.ProjectRepository projectRepositoryForCwd,
+                                   @Autowired(required = false) com.workflow.mcp.McpServerRepository mcpServerRepository) {
         this.integrationConfigRepository = integrationConfigRepository;
         this.presetResolver = presetResolver;
         this.llmCallRepository = llmCallRepository;
         this.runRepositoryForHeartbeat = runRepositoryForHeartbeat;
         this.projectRepositoryForCwd = projectRepositoryForCwd;
+        this.mcpServerRepository = mcpServerRepository;
     }
 
     @Override
@@ -114,6 +123,12 @@ public class ClaudeCliProviderClient implements LlmProviderClient {
 
         List<String> argv = new ArrayList<>(List.of(getCliBin(), "-p", prompt));
         if (model != null && !model.isBlank()) { argv.add("--model"); argv.add(model); }
+
+        // MCP servers the block opted into: HTTP providers connect to MCP in-process,
+        // but the CLI route runs its tool-use loop inside `claude` — the servers must
+        // be handed to the subprocess via --mcp-config or the agent has no mcp_* tools.
+        String mcpAllowed = buildMcpConfigArgs(argv, request);
+
         // bypassPermissions is rejected when Claude CLI runs as root (security guard);
         // acceptEdits with an explicit --allowed-tools list works under root and matches
         // what the claude_code_shell block uses successfully.
@@ -128,6 +143,7 @@ public class ClaudeCliProviderClient implements LlmProviderClient {
                 .distinct()
                 .collect(java.util.stream.Collectors.joining(","));
         }
+        if (!mcpAllowed.isBlank()) allowedTools = allowedTools + "," + mcpAllowed;
         argv.addAll(List.of("--allowed-tools", allowedTools,
                             "--permission-mode", "acceptEdits"));
 
@@ -174,6 +190,53 @@ public class ClaudeCliProviderClient implements LlmProviderClient {
         }
     }
 
+    /**
+     * Adds {@code --mcp-config}/{@code --strict-mcp-config} to {@code argv} for the MCP
+     * servers the block opted into ({@code mcp_servers:} YAML), and returns the
+     * {@code --allowed-tools} fragment ({@code mcp__<server>}) that permits their tools.
+     * HTTP providers connect to MCP in-process; on the CLI route the {@code claude}
+     * subprocess must be told explicitly or the agent has no mcp_* tools.
+     */
+    private String buildMcpConfigArgs(List<String> argv, ToolUseRequest request) {
+        if (request.mcpServerNames() == null || request.mcpServerNames().isEmpty()
+                || mcpServerRepository == null) {
+            return "";
+        }
+        String slug = com.workflow.project.ProjectContext.get();
+        if (slug == null || slug.isBlank()) slug = "default";
+        java.util.List<com.workflow.mcp.McpServer> servers;
+        try {
+            servers = mcpServerRepository.findByProjectSlugAndNameIn(slug, request.mcpServerNames());
+        } catch (Exception e) {
+            log.warn("CLI tool-use: MCP server lookup failed for {}: {}",
+                request.mcpServerNames(), e.getMessage());
+            return "";
+        }
+        com.fasterxml.jackson.databind.node.ObjectNode root = mcpJsonMapper.createObjectNode();
+        com.fasterxml.jackson.databind.node.ObjectNode serversNode = root.putObject("mcpServers");
+        StringBuilder allowed = new StringBuilder();
+        int wired = 0;
+        for (com.workflow.mcp.McpServer s : servers) {
+            if (!s.isEnabled() || s.getUrl() == null || s.getUrl().isBlank()) continue;
+            com.fasterxml.jackson.databind.node.ObjectNode one = serversNode.putObject(s.getName());
+            one.put("type", "http");
+            one.put("url", s.getUrl());
+            if (s.getHeadersJson() != null && !s.getHeadersJson().isBlank()) {
+                try { one.set("headers", mcpJsonMapper.readTree(s.getHeadersJson())); }
+                catch (Exception ignore) { /* malformed headers JSON — skip auth */ }
+            }
+            if (allowed.length() > 0) allowed.append(',');
+            allowed.append("mcp__").append(s.getName());
+            wired++;
+        }
+        if (wired == 0) return "";
+        argv.add("--mcp-config");
+        argv.add(root.toString());
+        argv.add("--strict-mcp-config");
+        log.info("CLI tool-use: wired {} MCP server(s) via --mcp-config: {}", wired, allowed);
+        return allowed.toString();
+    }
+
     @Override
     public boolean canHandle(String model) {
         try {
@@ -193,7 +256,7 @@ public class ClaudeCliProviderClient implements LlmProviderClient {
             if (preferred == LlmProvider.CLAUDE_CODE_CLI) return true;
 
             boolean cliAvailable = integrationConfigRepository
-                .findByTypeAndIsDefaultTrue(IntegrationType.CLAUDE_CODE_CLI)
+                .findFirstByTypeAndIsDefaultTrue(IntegrationType.CLAUDE_CODE_CLI)
                 .isPresent();
             if (!cliAvailable) return false;
 
@@ -211,7 +274,7 @@ public class ClaudeCliProviderClient implements LlmProviderClient {
         if (envBin != null && !envBin.isBlank()) return envBin;
         try {
             return integrationConfigRepository
-                .findByTypeAndIsDefaultTrue(IntegrationType.CLAUDE_CODE_CLI)
+                .findFirstByTypeAndIsDefaultTrue(IntegrationType.CLAUDE_CODE_CLI)
                 .map(IntegrationConfig::getBaseUrl)
                 .filter(s -> s != null && !s.isBlank())
                 .orElse("claude");

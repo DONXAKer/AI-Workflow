@@ -6,6 +6,7 @@ interface AuthState {
   user: CurrentUser | null
   loading: boolean
   login: (username: string, password: string, rememberMe?: boolean) => Promise<void>
+  register: (email: string, password: string, displayName?: string) => Promise<void>
   logout: () => Promise<void>
   refresh: () => Promise<void>
 }
@@ -38,13 +39,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(me)
   }, [])
 
+  const register = useCallback(async (email: string, password: string, displayName?: string) => {
+    // Backend provisions the account and logs the user straight in (session cookie).
+    await api.register(email, password, displayName)
+    await refresh()
+  }, [refresh])
+
   const logout = useCallback(async () => {
     try { await api.logout() } catch { /* ignore — server may already have killed session */ }
     setUser(null)
   }, [])
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, refresh }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, refresh }}>
       {children}
     </AuthContext.Provider>
   )

@@ -8,6 +8,10 @@ spring:
     database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
       ddl-auto: create-drop
+  # The Liquibase baseline is generated from PostgreSQL (PG-flavoured types/indexes).
+  # Tests build their schema with Hibernate create-drop against in-memory H2 instead.
+  liquibase:
+    enabled: false
 workflow:
   knowledge:
     qdrant:

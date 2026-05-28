@@ -1160,6 +1160,7 @@ public class OrchestratorBlock implements Block {
             .budgetUsdCap(budget)
             .workingDir(workingDir)
             .completionSignal(agent.getCompletionSignal())
+            .mcpServerNames(mcpServerNames)
             .responseFormat(forceJson ? "json" : null)
             // NOTE: response_format=json_object causes Ollama models to skip tool_calls
             // entirely (they output a single JSON immediately without exploring the codebase).

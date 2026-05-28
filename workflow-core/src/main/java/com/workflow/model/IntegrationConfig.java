@@ -1,12 +1,15 @@
 package com.workflow.model;
 
+import com.workflow.account.TenantContext;
 import com.workflow.security.EncryptedStringConverter;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.*;
+import org.hibernate.annotations.Filter;
 import java.time.Instant;
 
 @Entity
 @Table(name = "integration_config")
+@Filter(name = "accountFilter")
 public class IntegrationConfig {
 
     @Id
@@ -41,6 +44,10 @@ public class IntegrationConfig {
     @Column(nullable = false)
     private String projectSlug = "default";
 
+    /** Owning account (multi-tenancy). Nullable for pre-migration rows; backfilled at startup. */
+    @Column(name = "account_id")
+    private Long accountId;
+
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -48,6 +55,10 @@ public class IntegrationConfig {
     protected void onCreate() {
         createdAt = Instant.now();
         updatedAt = Instant.now();
+        if (accountId == null) {
+            Long tenant = TenantContext.get();
+            if (tenant != null) accountId = tenant;
+        }
     }
 
     @PreUpdate
@@ -83,6 +94,9 @@ public class IntegrationConfig {
     public void setProjectSlug(String projectSlug) {
         this.projectSlug = projectSlug != null ? projectSlug : "default";
     }
+
+    public Long getAccountId() { return accountId; }
+    public void setAccountId(Long accountId) { this.accountId = accountId; }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

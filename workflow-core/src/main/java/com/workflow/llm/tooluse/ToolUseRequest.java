@@ -33,7 +33,9 @@ public record ToolUseRequest(
     String completionSignal,
     String responseFormat,
     String finalizeToolName,
-    int forceFinalizeAfter
+    int forceFinalizeAfter,
+    List<String> mcpServerNames,
+    Long accountId
 ) {
 
     public static Builder builder() {
@@ -55,6 +57,8 @@ public record ToolUseRequest(
         private String responseFormat;
         private String finalizeToolName;
         private int forceFinalizeAfter;
+        private List<String> mcpServerNames = List.of();
+        private Long accountId;
 
         public Builder model(String v) { this.model = v; return this; }
         public Builder systemPrompt(String v) { this.systemPrompt = v; return this; }
@@ -78,13 +82,22 @@ public record ToolUseRequest(
          *  the model produces structured output. 0 = never force (rely on auto + prompt). Ignored on
          *  providers without {@code tool_choice} support (Ollama). Has no effect if finalizeToolName is unset. */
         public Builder forceFinalizeAfter(int v) { this.forceFinalizeAfter = v; return this; }
+        /** MCP server names the block opted into ({@code mcp_servers:} YAML). Used by the
+         *  CLI route to pass {@code --mcp-config} to the claude subprocess; ignored by
+         *  HTTP providers (they connect to MCP servers in-process). */
+        public Builder mcpServerNames(List<String> v) { this.mcpServerNames = v == null ? List.of() : v; return this; }
+        /** Owning account — lets the tool-use loop halt the moment that account's wallet
+         *  runs dry (per-iteration check), independent of the per-loop {@code budgetUsdCap}.
+         *  Null for unbilled calls (CLI route, tests). */
+        public Builder accountId(Long v) { this.accountId = v; return this; }
 
         public ToolUseRequest build() {
             if (model == null || model.isBlank()) throw new IllegalArgumentException("model required");
             if (userMessage == null) throw new IllegalArgumentException("userMessage required");
             return new ToolUseRequest(model, systemPrompt, userMessage, tools,
                 maxTokens, temperature, maxIterations, budgetUsdCap, progressCallback, workingDir,
-                completionSignal, responseFormat, finalizeToolName, forceFinalizeAfter);
+                completionSignal, responseFormat, finalizeToolName, forceFinalizeAfter, mcpServerNames,
+                accountId);
         }
     }
 }

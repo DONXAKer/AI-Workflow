@@ -105,8 +105,30 @@ public class PipelineRunner {
     @Autowired(required = false)
     private com.workflow.knowledge.ProjectIndexService projectIndexService;
 
+    @Autowired(required = false)
+    private com.workflow.workspace.WorkspaceProvisioner workspaceProvisioner;
+
     /** Tracks virtual threads running active pipelines for cancellation */
     private final ConcurrentHashMap<UUID, Thread> runningThreads = new ConcurrentHashMap<>();
+
+    /**
+     * Tears down a run's repo sandbox once it reaches a terminal state. Skipped for
+     * PAUSED runs — a resume needs the workspace intact. Crashed / cancelled runs that
+     * never hit this path are swept later by retention.
+     */
+    private void cleanupWorkspaceIfTerminal(UUID runId) {
+        if (workspaceProvisioner == null) return;
+        try {
+            runRepository.findById(runId).ifPresent(run -> {
+                if (run.getWorkspaceDir() != null
+                        && (run.getStatus() == RunStatus.COMPLETED || run.getStatus() == RunStatus.FAILED)) {
+                    workspaceProvisioner.cleanup(run);
+                }
+            });
+        } catch (Exception e) {
+            log.warn("Workspace cleanup failed for run {}: {}", runId, e.getMessage());
+        }
+    }
 
     @PostConstruct
     public void buildRegistry() {
@@ -127,6 +149,11 @@ public class PipelineRunner {
 
     public CompletableFuture<Void> run(PipelineConfig config, String requirement, UUID runId,
                                         boolean dryRun, Map<String, Object> runInputs) {
+        // Capture caller's tenant from the POST-handler thread BEFORE we spawn the
+        // run-thread — Spring Data JPA's save() takes the merge() path for our
+        // pre-id'd PipelineRun (UUID set by RunController) so @PrePersist never
+        // fires and would never populate accountId on its own.
+        Long callerAccountId = com.workflow.account.TenantContext.get();
         PipelineRun pipelineRun = PipelineRun.builder()
             .id(runId)
             .pipelineName(config.getName())
@@ -139,6 +166,10 @@ public class PipelineRunner {
             .build();
         pipelineRun.setDryRun(dryRun);
         pipelineRun.setProjectSlug(com.workflow.project.ProjectContext.get());
+        if (callerAccountId != null) pipelineRun.setAccountId(callerAccountId);
+        if (runInputs != null && runInputs.get("_workspaceDir") instanceof String wd0 && !wd0.isBlank()) {
+            pipelineRun.setWorkspaceDir(wd0);
+        }
         if (runInputs != null && !runInputs.isEmpty()) {
             try { pipelineRun.setRunInputsJson(objectMapper.writeValueAsString(runInputs)); }
             catch (Exception e) { log.warn("Failed to serialize runInputs: {}", e.getMessage()); }
@@ -158,8 +189,10 @@ public class PipelineRunner {
 
         CompletableFuture<Void> future = new CompletableFuture<>();
         String projectSlug = pipelineRun.getProjectSlug();
+        Long accountId = pipelineRun.getAccountId();
         Thread t = Thread.startVirtualThread(() -> {
             com.workflow.project.ProjectContext.set(projectSlug);
+            com.workflow.account.TenantContext.set(accountId);
             try {
                 executeBlocks(config, pipelineRun, requirement, false);
                 future.complete(null);
@@ -167,7 +200,9 @@ public class PipelineRunner {
                 future.completeExceptionally(e);
             } finally {
                 com.workflow.project.ProjectContext.clear();
+                com.workflow.account.TenantContext.clear();
                 runningThreads.remove(runId);
+                cleanupWorkspaceIfTerminal(runId);
             }
         });
         runningThreads.put(runId, t);
@@ -191,6 +226,9 @@ public class PipelineRunner {
                                             String fromBlockId, Map<String, Map<String, Object>> injectedOutputs,
                                             UUID runId, Map<String, Object> runInputs,
                                             Map<String, Instant[]> blockTimestamps) {
+        // See run() above for why accountId has to be set explicitly here rather
+        // than relying on @PrePersist (merge-path skips lifecycle callbacks).
+        Long callerAccountId = com.workflow.account.TenantContext.get();
         PipelineRun pipelineRun = PipelineRun.builder()
             .id(runId)
             .pipelineName(config.getName())
@@ -202,6 +240,10 @@ public class PipelineRunner {
             .outputs(new ArrayList<>())
             .build();
         pipelineRun.setProjectSlug(com.workflow.project.ProjectContext.get());
+        if (callerAccountId != null) pipelineRun.setAccountId(callerAccountId);
+        if (runInputs != null && runInputs.get("_workspaceDir") instanceof String wd1 && !wd1.isBlank()) {
+            pipelineRun.setWorkspaceDir(wd1);
+        }
         if (runInputs != null && !runInputs.isEmpty()) {
             try { pipelineRun.setRunInputsJson(objectMapper.writeValueAsString(runInputs)); }
             catch (Exception e) { log.warn("Failed to serialize runInputs: {}", e.getMessage()); }
@@ -254,8 +296,10 @@ public class PipelineRunner {
 
         CompletableFuture<Void> future = new CompletableFuture<>();
         String projectSlugFrom = pipelineRun.getProjectSlug();
+        Long accountIdFrom = pipelineRun.getAccountId();
         Thread t = Thread.startVirtualThread(() -> {
             com.workflow.project.ProjectContext.set(projectSlugFrom);
+            com.workflow.account.TenantContext.set(accountIdFrom);
             try {
                 executeBlocks(config, pipelineRun, requirement, true);
                 future.complete(null);
@@ -263,7 +307,9 @@ public class PipelineRunner {
                 future.completeExceptionally(e);
             } finally {
                 com.workflow.project.ProjectContext.clear();
+                com.workflow.account.TenantContext.clear();
                 runningThreads.remove(runId);
+                cleanupWorkspaceIfTerminal(runId);
             }
         });
         runningThreads.put(runId, t);
@@ -292,15 +338,19 @@ public class PipelineRunner {
         runRepository.save(run);
 
         String projectSlugResume = run.getProjectSlug();
+        Long accountIdResume = run.getAccountId();
         Thread t = Thread.startVirtualThread(() -> {
             com.workflow.project.ProjectContext.set(projectSlugResume);
+            com.workflow.account.TenantContext.set(accountIdResume);
             try {
                 executeBlocks(config, run, run.getRequirement(), true);
             } catch (Exception e) {
                 log.error("Error resuming run {}: {}", runId, e.getMessage(), e);
             } finally {
                 com.workflow.project.ProjectContext.clear();
+                com.workflow.account.TenantContext.clear();
                 runningThreads.remove(runId);
+                cleanupWorkspaceIfTerminal(runId);
             }
         });
         runningThreads.put(runId, t);
@@ -540,7 +590,7 @@ public class PipelineRunner {
         Optional<IntegrationConfig> scoped =
             integrationConfigRepository.findByTypeAndIsDefaultTrueAndProjectSlug(type, scope);
         if (scoped.isPresent()) return scoped;
-        return integrationConfigRepository.findByTypeAndIsDefaultTrue(type);
+        return integrationConfigRepository.findFirstByTypeAndIsDefaultTrue(type);
     }
 
     /**
@@ -1031,6 +1081,7 @@ public class PipelineRunner {
 
         List<List<BlockConfig>> levels = dagLevelExecutor.computeLevels(sortedBlocks, run.getCompletedBlocks());
         String projectSlug = run.getProjectSlug();
+        Long accountId = run.getAccountId();
 
         for (List<BlockConfig> level : levels) {
             if (!dagLevelExecutor.canParallelizeLevel(level)) continue;
@@ -1058,6 +1109,7 @@ public class PipelineRunner {
                 CompletableFuture<Void> future = new CompletableFuture<>();
                 Thread.startVirtualThread(() -> {
                     com.workflow.project.ProjectContext.set(projectSlug);
+                    com.workflow.account.TenantContext.set(accountId);
                     try {
                         BlockConfig effective = bc.withMergedConfig(integrationConfigs);
                         effective.setAgent(agentProfileResolver.resolveAgent(effective, config.getDefaults()));
@@ -1092,6 +1144,7 @@ public class PipelineRunner {
                             bc.getId(), e.getMessage());
                     } finally {
                         com.workflow.project.ProjectContext.clear();
+                        com.workflow.account.TenantContext.clear();
                         future.complete(null);
                     }
                 });

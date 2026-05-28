@@ -3,6 +3,29 @@ import { currentProjectSlug } from './projectContext'
 
 const BASE = '/api'
 
+/** A customer account as seen by platform staff (GET /api/admin/accounts). */
+export interface AdminAccount {
+  id: number
+  slug: string
+  name: string
+  status: 'ACTIVE' | 'SUSPENDED' | 'CLOSED'
+  tier: string
+  balanceUsd: number
+  onboardedAt: string | null
+  createdAt: string | null
+}
+
+/** One immutable wallet-ledger row (top-up or LLM-usage debit). */
+export interface LedgerEntry {
+  id: number
+  type: 'TOPUP' | 'DEBIT' | 'REFUND' | 'ADJUSTMENT'
+  amountUsd: number
+  balanceAfterUsd: number
+  runId: string | null
+  description: string | null
+  createdAt: string
+}
+
 /** Reads the XSRF-TOKEN cookie set by Spring Security's CookieCsrfTokenRepository. */
 function readCsrfToken(): string | null {
   const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/)
@@ -71,6 +94,56 @@ export const api = {
   me: (): Promise<CurrentUser> =>
     request<CurrentUser>(`${BASE}/auth/me`),
 
+  register: (email: string, password: string, displayName?: string): Promise<CurrentUser> =>
+    request<CurrentUser>(
+      `${BASE}/auth/register`,
+      { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ email, password, displayName }) }
+    ),
+
+  // Billing — customer wallet
+  getWallet: (): Promise<{ accountId: number | null; balanceUsd: number }> =>
+    request<{ accountId: number | null; balanceUsd: number }>(`${BASE}/billing/wallet`),
+
+  getLedger: (limit = 50): Promise<LedgerEntry[]> =>
+    request<LedgerEntry[]>(`${BASE}/billing/ledger?limit=${limit}`),
+
+  // Connect a GitHub/GitLab repository as a new project
+  connectRepo: (body: {
+    repoUrl: string
+    accessToken: string
+    displayName?: string
+    defaultBranch?: string
+  }): Promise<{ slug: string; displayName: string; repoProvider: string }> =>
+    request<{ slug: string; displayName: string; repoProvider: string }>(
+      `${BASE}/projects/connect`,
+      { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body) }),
+
+  // Billing — self-serve top-up via the payment provider
+  startCheckout: (amountUsd: number): Promise<{ checkoutUrl: string }> =>
+    request<{ checkoutUrl: string }>(`${BASE}/billing/checkout`,
+      { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ amountUsd }) }),
+
+  // Platform-admin — account console
+  getAdminAccounts: (): Promise<AdminAccount[]> =>
+    request<AdminAccount[]>(`${BASE}/admin/accounts`),
+
+  suspendAccount: (id: number): Promise<{ id: number; status: string }> =>
+    request<{ id: number; status: string }>(`${BASE}/admin/accounts/${id}/suspend`, { method: 'POST' }),
+
+  activateAccount: (id: number): Promise<{ id: number; status: string }> =>
+    request<{ id: number; status: string }>(`${BASE}/admin/accounts/${id}/activate`, { method: 'POST' }),
+
+  // Account — onboarding state
+  getAccount: (): Promise<{
+    id: number; slug: string; name: string; status: string;
+    tier: string; onboardedAt: string | null
+  }> =>
+    request<{ id: number; slug: string; name: string; status: string;
+      tier: string; onboardedAt: string | null }>(`${BASE}/account`),
+
+  markOnboarded: (): Promise<{ onboardedAt: string }> =>
+    request<{ onboardedAt: string }>(`${BASE}/account/onboarded`, { method: 'POST' }),
+
   // Runs
   startRun: (body: {
     configPath: string
@@ -104,6 +177,9 @@ export const api = {
 
   getRun: (runId: string): Promise<PipelineRun> =>
     request<PipelineRun>(`${BASE}/runs/${runId}`),
+
+  getRunCost: (runId: string): Promise<{ rawCostUsd: number; billedCostUsd: number }> =>
+    request<{ rawCostUsd: number; billedCostUsd: number }>(`${BASE}/runs/${runId}/cost`),
 
   getRunToolCalls: (runId: string): Promise<ToolCallEntry[]> =>
     request<ToolCallEntry[]>(`${BASE}/runs/${runId}/tool-calls`),

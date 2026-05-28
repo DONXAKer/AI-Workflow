@@ -32,6 +32,9 @@ public class RetentionScheduler {
     @Autowired
     private PipelineRunRepository runRepository;
 
+    @Autowired(required = false)
+    private com.workflow.workspace.WorkspaceProvisioner workspaceProvisioner;
+
     @Value("${workflow.retention.completed-days:90}")
     private int completedRetentionDays;
 
@@ -66,5 +69,21 @@ public class RetentionScheduler {
     private boolean touchedProd(PipelineRun run) {
         return run.getCompletedBlocks().contains("deploy_prod")
             || run.getCompletedBlocks().contains("verify_prod");
+    }
+
+    /**
+     * Hourly: delete per-run sandbox directories whose run is no longer active. Normal
+     * completion cleans the sandbox on the runner's terminal path; this sweep catches
+     * orphans from crashed / cancelled runs and runs purged by {@link #purgeOldRuns()}.
+     */
+    @Scheduled(cron = "0 30 * * * *", zone = "UTC")
+    public void sweepOrphanWorkspaces() {
+        if (workspaceProvisioner == null) return;
+        int removed = workspaceProvisioner.sweepOrphans(runId -> {
+            PipelineRun r = runRepository.findById(runId).orElse(null);
+            return r != null && (r.getStatus() == RunStatus.RUNNING
+                || r.getStatus() == RunStatus.PAUSED_FOR_APPROVAL);
+        });
+        if (removed > 0) log.info("Workspace sweep removed {} orphan sandbox dir(s)", removed);
     }
 }

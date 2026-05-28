@@ -59,7 +59,7 @@ public class AITunnelProviderClient extends OpenAICompatibleProviderClient {
         String baseUrl = "https://api.aitunnel.ru/v1";
         String apiKey = null;
         Optional<IntegrationConfig> cfg = integrationConfigRepository
-            .findByTypeAndIsDefaultTrue(IntegrationType.AITUNNEL);
+            .findFirstByTypeAndIsDefaultTrue(IntegrationType.AITUNNEL);
         if (cfg.isPresent()) {
             IntegrationConfig c = cfg.get();
             if (c.getBaseUrl() != null && !c.getBaseUrl().isBlank()) baseUrl = c.getBaseUrl();

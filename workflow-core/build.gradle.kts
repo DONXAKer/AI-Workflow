@@ -41,6 +41,16 @@ dependencies {
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
     implementation("org.yaml:snakeyaml")
+    // JGit — clones each run's repo into an isolated per-run sandbox (WorkspaceProvisioner).
+    // In-process credentials (no token leaking to `ps`), no dependency on a `git` binary.
+    implementation("org.eclipse.jgit:org.eclipse.jgit:6.10.0.202406032230-r")
+    // Liquibase — versioned, reviewable schema migrations (db/changelog/). Owns the SaaS
+    // Phase 1 delta; runs before Hibernate on startup. Version managed by the Spring Boot BOM.
+    implementation("org.liquibase:liquibase-core")
+    // Stripe — self-serve wallet top-ups (Phase 2): hosted Checkout + signed webhooks.
+    implementation("com.stripe:stripe-java:25.7.0")
+    // Transactional email — account verification (Phase 2). JavaMailSender; SMTP optional.
+    implementation("org.springframework.boot:spring-boot-starter-mail")
     // Lombok removed; using plain POJOs/records instead
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     implementation("com.github.ben-manes.caffeine:caffeine")

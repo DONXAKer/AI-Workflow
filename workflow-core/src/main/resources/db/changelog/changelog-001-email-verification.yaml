@@ -1,0 +1,19 @@
+# SaaS Phase 2 — email verification.
+# Adds the single-use verification token column to app_user. Guarded preConditions keep
+# the changeSet safe on a DB where ddl-auto already added the column.
+databaseChangeLog:
+
+  - changeSet:
+      id: 001-app-user-verification-token
+      author: saas-phase2
+      preConditions:
+        - onFail: MARK_RAN
+        - onError: MARK_RAN
+        - tableExists: { tableName: app_user }
+        - not:
+            - columnExists: { tableName: app_user, columnName: verification_token }
+      changes:
+        - addColumn:
+            tableName: app_user
+            columns:
+              - column: { name: verification_token, type: VARCHAR(255) }

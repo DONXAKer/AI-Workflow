@@ -30,6 +30,26 @@ public class User {
     @Column(nullable = false)
     private boolean enabled = true;
 
+    /**
+     * Owning account (multi-tenancy). Nullable for pre-migration rows — backfilled to the
+     * legacy account at startup by {@code AccountBackfillInitializer}. Set explicitly by
+     * {@code RegistrationService} for self-registered users.
+     */
+    @Column(name = "account_id")
+    private Long accountId;
+
+    /**
+     * True once the customer confirmed their email. Boxed + nullable so {@code ddl-auto:
+     * update} can add the column to a populated table; getter defaults to true. Phase 1
+     * closed beta leaves invited users verified; Phase 2 adds the real verification flow.
+     */
+    @Column(name = "email_verified")
+    private Boolean emailVerified;
+
+    /** Single-use email-verification token; null once verified or never issued. */
+    @Column(name = "verification_token")
+    private String verificationToken;
+
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -64,6 +84,15 @@ public class User {
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
+
+    public Long getAccountId() { return accountId; }
+    public void setAccountId(Long accountId) { this.accountId = accountId; }
+
+    public boolean isEmailVerified() { return emailVerified == null || emailVerified; }
+    public void setEmailVerified(boolean emailVerified) { this.emailVerified = emailVerified; }
+
+    public String getVerificationToken() { return verificationToken; }
+    public void setVerificationToken(String verificationToken) { this.verificationToken = verificationToken; }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

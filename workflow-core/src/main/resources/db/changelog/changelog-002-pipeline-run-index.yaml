@@ -1,0 +1,23 @@
+# Performance — index for the GET /api/runs list query.
+# The endpoint runs `WHERE project_slug = ? ... ORDER BY started_at DESC LIMIT/OFFSET`;
+# without this composite index it does a full scan + sort of pipeline_run on every page.
+# preConditions keep the changeSet safe where ddl-auto already created the index.
+databaseChangeLog:
+
+  - changeSet:
+      id: 002-pipeline-run-project-started-index
+      author: perf
+      preConditions:
+        - onFail: MARK_RAN
+        - onError: MARK_RAN
+        - not:
+            - indexExists:
+                indexName: idx_pipeline_run_project_started
+                tableName: pipeline_run
+      changes:
+        - createIndex:
+            tableName: pipeline_run
+            indexName: idx_pipeline_run_project_started
+            columns:
+              - column: { name: project_slug }
+              - column: { name: started_at }

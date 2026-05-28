@@ -152,9 +152,13 @@ public class ShellExecBlock implements Block {
     }
 
     private Path resolveWorkingDir(Map<String, Object> cfg, Map<String, Object> input, PipelineRun run) {
-        Object raw = cfg.get("working_dir");
         String resolved = null;
-        if (raw != null && !raw.toString().isBlank()) {
+        // Highest priority: per-run repo sandbox cloned by WorkspaceProvisioner.
+        if (run != null && run.getWorkspaceDir() != null && !run.getWorkspaceDir().isBlank()) {
+            resolved = run.getWorkspaceDir();
+        }
+        Object raw = cfg.get("working_dir");
+        if (resolved == null && raw != null && !raw.toString().isBlank()) {
             resolved = stringInterpolator != null
                 ? stringInterpolator.interpolate(raw.toString(), run, input)
                 : raw.toString();
