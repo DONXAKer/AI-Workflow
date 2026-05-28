@@ -141,7 +141,6 @@ pipeline:
         - task_md
         - analysis
         - clarification
-      working_dir: /Users/home/Code/AI-Workflow
       max_iterations: 12
       system_prompt_extra: |
         Backend: workflow-core/ (Gradle Kotlin DSL, Flyway migrations in workflow-core/src/main/resources/db/migration/)
@@ -159,7 +158,6 @@ pipeline:
     depends_on:
       - plan
     config:
-      working_dir: /Users/home/Code/AI-Workflow
       command: |
         set -e
         BRANCH="feature/${task_md.feat_id}-${task_md.slug}"
@@ -199,7 +197,6 @@ pipeline:
       temperature: 0.2
       max_iterations: 10
     config:
-      working_dir: /Users/home/Code/AI-Workflow
       max_iterations: 20
       allowed_tools:
         - Read
@@ -244,7 +241,6 @@ pipeline:
     depends_on:
       - codegen
     config:
-      working_dir: /Users/home/Code/AI-Workflow
       command: |
         set -e
         cd /Users/home/Code/AI-Workflow
@@ -317,7 +313,6 @@ pipeline:
       plan_block: plan
       context_blocks:
         - build_test
-      working_dir: /Users/home/Code/AI-Workflow
       max_iterations: 10
       system_prompt_extra: |
         Working directory: /Users/home/Code/AI-Workflow
@@ -350,7 +345,6 @@ pipeline:
     depends_on:
       - review
     config:
-      working_dir: /Users/home/Code/AI-Workflow
       command: |
         set -e
         echo "=== Branch: $(git branch --show-current) ==="
