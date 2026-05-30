@@ -80,6 +80,15 @@ public class PipelineRun {
     @Column(columnDefinition = "TEXT")
     private String loopHistoryJson = "[]";
 
+    /**
+     * Global count of remediation iterations across this run — every local loopback AND every
+     * escalation cloud-retry increments it. Bounded by {@code EscalationProperties.maxTotalIterations}
+     * to stop the multiplicative blow-up where independent per-loop and per-step counters would
+     * otherwise allow ≈8 full chain re-runs for one failing block.
+     */
+    @Column(name = "total_remediation_iterations", nullable = false)
+    private int totalRemediationIterations = 0;
+
     /** Set when the run enters PAUSED_FOR_APPROVAL; cleared on resume. */
     private Instant pausedAt;
 
@@ -182,6 +191,15 @@ public class PipelineRun {
         public Builder autoApprove(Set<String> autoApprove) { run.autoApprove = autoApprove; return this; }
         public Builder outputs(List<BlockOutput> outputs) { run.outputs = outputs; return this; }
         public PipelineRun build() { return run; }
+    }
+
+    public int getTotalRemediationIterations() { return totalRemediationIterations; }
+    public void setTotalRemediationIterations(int totalRemediationIterations) {
+        this.totalRemediationIterations = totalRemediationIterations;
+    }
+    /** Increments and returns the new global remediation-iteration count. */
+    public int incrementTotalRemediationIterations() {
+        return ++this.totalRemediationIterations;
     }
 
     public Map<String, Integer> getLoopIterations() { return loopIterations; }

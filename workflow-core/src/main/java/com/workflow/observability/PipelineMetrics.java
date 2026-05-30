@@ -29,6 +29,9 @@ public class PipelineMetrics {
     private final ConcurrentMap<String, Counter> integrationErrorCounters = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Counter> llmTokensCounters = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Timer> stageTimers = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Counter> loopbackCounters = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Counter> noProgressCounters = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Counter> escalationStepCounters = new ConcurrentHashMap<>();
 
     /**
      * Per-resolution timer of approval wait time. Tag {@code status} ∈
@@ -103,6 +106,36 @@ public class PipelineMetrics {
                 .tag("model", k)
                 .register(registry)
         ).increment(tokens);
+    }
+
+    /**
+     * Loop-control & remediation observability (PR-5). Previously these mechanisms were
+     * invisible in metrics — operators couldn't see token waste from repeated loopbacks,
+     * how often the no-progress detector fired, or whether escalation kicked in.
+     */
+    public void recordLoopbackIteration(String fromBlock, String toBlock) {
+        loopbackCounters.computeIfAbsent(fromBlock + "->" + toBlock,
+            k -> Counter.builder("workflow_loopback_iterations_total")
+                .tag("from", fromBlock != null ? fromBlock : "?")
+                .tag("to", toBlock != null ? toBlock : "?")
+                .register(registry)
+        ).increment();
+    }
+
+    public void recordNoProgressDetection(String block) {
+        noProgressCounters.computeIfAbsent(block != null ? block : "?",
+            k -> Counter.builder("workflow_no_progress_detections_total")
+                .tag("block", k)
+                .register(registry)
+        ).increment();
+    }
+
+    public void recordEscalationStep(String tier) {
+        escalationStepCounters.computeIfAbsent(tier != null ? tier : "?",
+            k -> Counter.builder("workflow_escalation_steps_total")
+                .tag("tier", k)
+                .register(registry)
+        ).increment();
     }
 
     private Counter runCounter(String status) {

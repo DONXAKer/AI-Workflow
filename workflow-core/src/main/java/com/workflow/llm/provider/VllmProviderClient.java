@@ -98,13 +98,19 @@ public class VllmProviderClient implements LlmProviderClient {
 
     @Override
     public String complete(String model, String system, String user, int maxTokens, double temperature) {
+        return complete(model, system, user, maxTokens, temperature, null);
+    }
+
+    @Override
+    public String complete(String model, String system, String user, int maxTokens,
+                           double temperature, String responseFormat) {
         String resolved = resolveVllmModel(model);
         ArrayNode messages = objectMapper.createArrayNode();
         if (system != null && !system.isBlank()) {
             messages.addObject().put("role", "system").put("content", system);
         }
         messages.addObject().put("role", "user").put("content", user);
-        return chat(resolved, messages, maxTokens, temperature);
+        return chat(resolved, messages, maxTokens, temperature, responseFormat);
     }
 
     @Override
@@ -120,10 +126,11 @@ public class VllmProviderClient implements LlmProviderClient {
             m.put("role", msg.getOrDefault("role", "user"));
             m.put("content", msg.getOrDefault("content", ""));
         }
-        return chat(resolved, arr, maxTokens, temperature);
+        return chat(resolved, arr, maxTokens, temperature, null);
     }
 
-    private String chat(String model, ArrayNode messages, int maxTokens, double temperature) {
+    private String chat(String model, ArrayNode messages, int maxTokens, double temperature,
+                        String responseFormat) {
         WebClient client = buildWebClient();
         double effTemp = resolveTemperature(temperature);
         int effMaxTokens = Math.min(maxTokens > 0 ? maxTokens : VLLM_MAX_TOKENS_CAP, VLLM_MAX_TOKENS_CAP);
@@ -137,6 +144,9 @@ public class VllmProviderClient implements LlmProviderClient {
         // (documented under "Extra Parameters" in vLLM OpenAI server docs).
         requestBody.put("top_k", VLLM_DEFAULT_TOP_K);
         requestBody.put("repetition_penalty", VLLM_DEFAULT_REPETITION_PENALTY);
+        if ("json".equalsIgnoreCase(responseFormat)) {
+            requestBody.putObject("response_format").put("type", "json_object");
+        }
         requestBody.set("messages", messages);
 
         log.info("Calling vLLM model: {} (maxTokens={}, temperature={}, msgs={})",

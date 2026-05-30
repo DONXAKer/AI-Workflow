@@ -113,13 +113,19 @@ public class OllamaProviderClient implements LlmProviderClient {
 
     @Override
     public String complete(String model, String system, String user, int maxTokens, double temperature) {
+        return complete(model, system, user, maxTokens, temperature, null);
+    }
+
+    @Override
+    public String complete(String model, String system, String user, int maxTokens,
+                           double temperature, String responseFormat) {
         String resolved = resolveOllamaModel(model);
         ArrayNode messages = objectMapper.createArrayNode();
         if (system != null && !system.isBlank()) {
             messages.addObject().put("role", "system").put("content", system);
         }
         messages.addObject().put("role", "user").put("content", injectNoThink(user, resolved));
-        return chat(resolved, messages, maxTokens, temperature);
+        return chat(resolved, messages, maxTokens, temperature, responseFormat);
     }
 
     @Override
@@ -135,15 +141,19 @@ public class OllamaProviderClient implements LlmProviderClient {
             m.put("role", msg.getOrDefault("role", "user"));
             m.put("content", msg.getOrDefault("content", ""));
         }
-        return chat(resolved, arr, maxTokens, temperature);
+        return chat(resolved, arr, maxTokens, temperature, null);
     }
+
 
     /**
      * Multi-turn chat completion via Ollama native {@code /api/chat}. All
      * generation params live under {@code options}; response shape has
-     * {@code message} at root.
+     * {@code message} at root. When {@code responseFormat=="json"}, Ollama's native
+     * {@code format:"json"} is set, constraining decoding to a valid JSON object —
+     * the single most effective reliability lever for small local models.
      */
-    private String chat(String model, ArrayNode messages, int maxTokens, double temperature) {
+    private String chat(String model, ArrayNode messages, int maxTokens, double temperature,
+                        String responseFormat) {
         WebClient client = buildWebClient();
 
         ObjectNode requestBody = objectMapper.createObjectNode();
@@ -154,6 +164,7 @@ public class OllamaProviderClient implements LlmProviderClient {
         options.put("temperature", temperature);
         options.put("num_ctx", OLLAMA_NUM_CTX);
         if (isQwen3Model(model)) requestBody.put("think", false);
+        if ("json".equalsIgnoreCase(responseFormat)) requestBody.put("format", "json");
         requestBody.set("messages", messages);
 
         log.info("Calling Ollama model: {} (num_predict={}, temperature={}, msgs={})",

@@ -41,6 +41,19 @@ public class LlmClient {
         return router.route(model).complete(model, system, user, maxTokens, temperature);
     }
 
+    /**
+     * Single-shot completion with a structured-output hint. Pass {@code responseFormat="json"}
+     * to force JSON-object output on providers that support it (OpenRouter/AITunnel/AllTokens
+     * via {@code response_format}, Ollama via {@code format:"json"}, vLLM via
+     * {@code response_format:json_object}). The Claude CLI ignores the hint and falls back to
+     * prompt-driven JSON. Used by the single-shot analysis/codegen/verify blocks to stay
+     * robust on weak local models. The tool-use path is unaffected.
+     */
+    public String complete(String model, String system, String user, int maxTokens,
+                           double temperature, String responseFormat) {
+        return router.route(model).complete(model, system, user, maxTokens, temperature, responseFormat);
+    }
+
     /** Multi-turn completion accepting a full chat-message history. Used by the
      *  orchestrator continuation-call path. */
     public String completeWithMessages(String model, List<Map<String, String>> messages,

@@ -30,6 +30,22 @@ public interface LlmProviderClient {
     /** Single-shot completion: system + user message, no tool-use. */
     String complete(String model, String system, String user, int maxTokens, double temperature);
 
+    /**
+     * Single-shot completion with an optional structured-output hint. When
+     * {@code responseFormat} is {@code "json"} the provider forces JSON-object output
+     * (OpenAI {@code response_format:{type:json_object}}, Ollama {@code format:"json"}) —
+     * dramatically improving reliability on weak local models that otherwise return prose.
+     *
+     * <p>Default implementation ignores the hint and delegates to the 5-arg form, so
+     * providers that don't support a JSON mode (e.g. the Claude CLI) keep working unchanged.
+     * Only used by the single-shot (no-tool) blocks; the tool-use path keeps its own
+     * {@code ToolUseRequest.responseFormat} handling untouched.
+     */
+    default String complete(String model, String system, String user, int maxTokens,
+                            double temperature, String responseFormat) {
+        return complete(model, system, user, maxTokens, temperature);
+    }
+
     /** Multi-turn completion accepting a full chat-message history. Used by the
      *  orchestrator continuation-call path which feeds back a previous assistant
      *  turn and asks the model to continue from where it stopped. Each map must

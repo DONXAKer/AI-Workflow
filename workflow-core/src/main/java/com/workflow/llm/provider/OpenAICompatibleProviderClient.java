@@ -114,12 +114,18 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
 
     @Override
     public String complete(String model, String system, String user, int maxTokens, double temperature) {
+        return complete(model, system, user, maxTokens, temperature, null);
+    }
+
+    @Override
+    public String complete(String model, String system, String user, int maxTokens,
+                           double temperature, String responseFormat) {
         ArrayNode messages = objectMapper.createArrayNode();
         if (system != null && !system.isBlank()) {
             messages.addObject().put("role", "system").put("content", system);
         }
         messages.addObject().put("role", "user").put("content", user);
-        return chat(model, messages, maxTokens, temperature);
+        return chat(model, messages, maxTokens, temperature, responseFormat);
     }
 
     @Override
@@ -134,18 +140,34 @@ abstract class OpenAICompatibleProviderClient implements LlmProviderClient {
             m.put("role", msg.getOrDefault("role", "user"));
             m.put("content", msg.getOrDefault("content", ""));
         }
-        return chat(model, arr, maxTokens, temperature);
+        return chat(model, arr, maxTokens, temperature, null);
     }
 
-    private String chat(String model, ArrayNode messages, int maxTokens, double temperature) {
-        String resolvedModel = resolveModel(model);
-        WebClient client = buildWebClient();
-
-        ObjectNode requestBody = objectMapper.createObjectNode();
+    /**
+     * Builds the OpenAI {@code /chat/completions} request body. Package-private + static so
+     * the JSON-mode envelope can be unit-tested without standing up an HTTP server.
+     */
+    static ObjectNode buildChatBody(ObjectMapper om, String resolvedModel, ArrayNode messages,
+                                    int maxTokens, double temperature, String responseFormat) {
+        ObjectNode requestBody = om.createObjectNode();
         requestBody.put("model", resolvedModel);
         requestBody.put("max_tokens", maxTokens);
         requestBody.put("temperature", temperature);
         requestBody.set("messages", messages);
+        // OpenAI-compatible structured-output: forces a valid JSON object response.
+        if ("json".equalsIgnoreCase(responseFormat)) {
+            requestBody.putObject("response_format").put("type", "json_object");
+        }
+        return requestBody;
+    }
+
+    private String chat(String model, ArrayNode messages, int maxTokens, double temperature,
+                        String responseFormat) {
+        String resolvedModel = resolveModel(model);
+        WebClient client = buildWebClient();
+
+        ObjectNode requestBody = buildChatBody(objectMapper, resolvedModel, messages,
+            maxTokens, temperature, responseFormat);
 
         logger().info("Calling {} model: {} (maxTokens={}, temperature={}, msgs={})",
             providerType(), resolvedModel, maxTokens, temperature, messages.size());

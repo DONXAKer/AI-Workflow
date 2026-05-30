@@ -183,12 +183,16 @@ public class VerifyBlock implements Block {
                     - Use vague issue descriptions like "could be improved" without specifics""";
                 String yamlVerifyPrompt = config.getAgent() != null ? config.getAgent().getSystemPrompt() : null;
                 String verifySystemPrompt = AgentConfig.buildSystemPrompt(verifyHeader, yamlVerifyPrompt, verifyFooter);
+                // responseFormat=json forces structured output on providers that support it;
+                // JsonExtractor adds prose-unwrap / fence-strip / lenient fallbacks. The
+                // surrounding catch keeps this fail-safe — a parse failure sets llmPassed=false
+                // (never a silent PASS).
                 String llmResponse = llmClient.complete(model,
                     verifySystemPrompt,
-                    llmPrompt, 1024, 0.3);
+                    llmPrompt, 1024, 0.3, "json");
 
-                Map<String, Object> llmResult = objectMapper.readValue(llmResponse,
-                    new TypeReference<Map<String, Object>>() {});
+                Map<String, Object> llmResult =
+                    com.workflow.llm.JsonExtractor.extractObject(llmResponse, "score", objectMapper);
 
                 Object scoreVal = llmResult.get("score");
                 if (scoreVal instanceof Number) {

@@ -46,6 +46,18 @@ public class EscalationProperties {
      */
     private double noProgressThreshold = 0.8;
 
+    /**
+     * Global upper bound on the total number of remediation iterations per run — the sum of
+     * local verify/CI loopback iterations AND escalation cloud-step retries. The per-loop
+     * {@code max_iterations} and the per-step cloud {@code maxIterations} are independent
+     * counters, so without this envelope a single failing block could trigger
+     * (local_max + cloud_max) full chain re-runs (≈8 with stock defaults), each burning tokens.
+     * When the global count reaches this cap, both {@code handleLoopback} and escalation stop.
+     * Default 6 is generous enough that no healthy pipeline hits it; lower it to tighten the
+     * cost ceiling. Set ≤ 0 to disable the global cap (legacy behaviour).
+     */
+    private int maxTotalIterations = 6;
+
     public List<StepDefinition> getDefaults() { return defaults; }
     public void setDefaults(List<StepDefinition> defaults) {
         this.defaults = defaults != null ? defaults : new ArrayList<>();
@@ -57,6 +69,11 @@ public class EscalationProperties {
     public double getNoProgressThreshold() { return noProgressThreshold; }
     public void setNoProgressThreshold(double noProgressThreshold) {
         this.noProgressThreshold = noProgressThreshold;
+    }
+
+    public int getMaxTotalIterations() { return maxTotalIterations; }
+    public void setMaxTotalIterations(int maxTotalIterations) {
+        this.maxTotalIterations = maxTotalIterations;
     }
 
     /**

@@ -286,37 +286,14 @@ public class AnalysisBlock implements Block {
         String effectiveSystemPrompt = AgentConfig.buildSystemPrompt(
             SYSTEM_PROMPT_HEADER, yamlPrompt, SYSTEM_PROMPT_FOOTER);
 
-        String response = llmClient.complete(model, effectiveSystemPrompt, userMessage, maxTokens, temperature);
+        // responseFormat=json forces structured output where the provider supports it; the
+        // shared JsonExtractor then handles fence-strip / prose-unwrap / lenient control chars.
+        String response = llmClient.complete(model, effectiveSystemPrompt, userMessage,
+            maxTokens, temperature, "json");
 
         Map<String, Object> result;
         try {
-            String json = response.strip();
-            // Strip markdown code fences: ```json ... ``` or ``` ... ```
-            if (json.startsWith("```")) {
-                int start = json.indexOf('\n');
-                int end   = json.lastIndexOf("```");
-                if (start > 0 && end > start) json = json.substring(start + 1, end).strip();
-            }
-            // Fix invalid JSON escapes produced by some models (e.g. \` is not valid JSON)
-            json = json.replace("\\`", "`");
-            try {
-                result = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
-            } catch (Exception parseEx) {
-                // Two common failure modes:
-                // 1. Raw control chars (newlines, tabs) inside JSON strings — Gemini does this.
-                // 2. LLM wraps JSON in prose ("Вот анализ:\n{...}\nГотово") — Sonnet sometimes does this.
-                // Strategy: extract the outermost {...} substring (covers case 2), then try lenient
-                // parser that allows unescaped control chars (covers case 1).
-                String candidate = json;
-                int firstBrace = json.indexOf('{');
-                int lastBrace = json.lastIndexOf('}');
-                if (firstBrace >= 0 && lastBrace > firstBrace) {
-                    candidate = json.substring(firstBrace, lastBrace + 1);
-                }
-                com.fasterxml.jackson.core.JsonFactory lf = new com.fasterxml.jackson.core.JsonFactory();
-                lf.configure(com.fasterxml.jackson.core.json.JsonReadFeature.ALLOW_UNESCAPED_CONTROL_CHARS.mappedFeature(), true);
-                result = new ObjectMapper(lf).readValue(candidate, new TypeReference<Map<String, Object>>() {});
-            }
+            result = com.workflow.llm.JsonExtractor.extractObject(response, "summary", objectMapper);
         } catch (Exception e) {
             log.error("Failed to parse analysis JSON: {}", e.getMessage());
             throw new RuntimeException("Failed to parse analysis LLM response as JSON: " + e.getMessage(), e);

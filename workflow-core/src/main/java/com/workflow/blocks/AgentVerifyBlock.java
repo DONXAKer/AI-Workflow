@@ -452,42 +452,14 @@ public class AgentVerifyBlock implements Block {
         return sb.toString();
     }
 
-    @SuppressWarnings("unchecked")
+    /**
+     * Parses the agent's final JSON. The model often embeds {@code { }} inside evidence
+     * strings (code snippets), so the robust extraction (key-anchored depth-match + lenient
+     * fallbacks) lives in the shared {@link com.workflow.llm.JsonExtractor}, anchored on
+     * {@code "verification_results"}.
+     */
     private Map<String, Object> parseFinalJson(String text) throws Exception {
-        if (text == null) throw new IllegalStateException("empty agent response");
-        String trimmed = text.strip();
-        // Primary: locate the root JSON object that owns "verification_results".
-        // The model often embeds { } inside evidence strings (code snippets), so
-        // simple lastIndexOf('{') picks the wrong brace. Instead find the key first,
-        // then walk back to the enclosing '{' and match its closing '}'.
-        int keyIdx = trimmed.indexOf("\"verification_results\"");
-        if (keyIdx >= 0) {
-            int openBrace = trimmed.lastIndexOf('{', keyIdx);
-            if (openBrace >= 0) {
-                int depth = 0;
-                for (int i = openBrace; i < trimmed.length(); i++) {
-                    char c = trimmed.charAt(i);
-                    if (c == '{') depth++;
-                    else if (c == '}' && --depth == 0) {
-                        String slice = trimmed.substring(openBrace, i + 1);
-                        try {
-                            return objectMapper.readValue(slice, new TypeReference<Map<String, Object>>() {});
-                        } catch (Exception ignore) { break; }
-                    }
-                }
-            }
-        }
-        // Fallback: last { … } pair.
-        int lastBrace = trimmed.lastIndexOf('{');
-        int lastClose = trimmed.lastIndexOf('}');
-        if (lastBrace >= 0 && lastClose > lastBrace) {
-            String slice = trimmed.substring(lastBrace, lastClose + 1);
-            try {
-                return objectMapper.readValue(slice, new TypeReference<Map<String, Object>>() {});
-            } catch (Exception ignore) { /* fall through */ }
-        }
-        // Last resort: whole text.
-        return objectMapper.readValue(trimmed, new TypeReference<Map<String, Object>>() {});
+        return com.workflow.llm.JsonExtractor.extractObject(text, "verification_results", objectMapper);
     }
 
     private Path resolveWorkingDir(Map<String, Object> cfg, Map<String, Object> input, PipelineRun run) {

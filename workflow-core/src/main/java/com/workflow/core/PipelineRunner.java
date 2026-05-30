@@ -21,6 +21,7 @@ import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,6 +29,12 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -110,6 +117,16 @@ public class PipelineRunner {
 
     /** Tracks virtual threads running active pipelines for cancellation */
     private final ConcurrentHashMap<UUID, Thread> runningThreads = new ConcurrentHashMap<>();
+
+    /**
+     * Opt-in (default OFF) enforcement of {@code block.timeout_seconds} on the block's own
+     * execution, not just the approval gate. Gated behind a property for one release because
+     * cancelling a running block interrupts a worker thread that may hold an MCP/CLI subprocess
+     * or an in-flight HTTP call — blocks must honour interruption for this to be clean.
+     * Flip {@code workflow.runtime.block-timeout-enabled=true} once validated in staging.
+     */
+    @Value("${workflow.runtime.block-timeout-enabled:false}")
+    private boolean blockTimeoutEnabled;
 
     /**
      * Tears down a run's repo sandbox once it reaches a terminal state. Skipped for
@@ -777,16 +794,32 @@ public class PipelineRunner {
             }
             try {
                 String[] parts = ref.substring(2).split("\\.", 2);
-                if (parts.length < 2) continue;
+                if (parts.length < 2) {
+                    log.warn("inject_context ref '{}' (key '{}') is malformed (expected $.block.field) — skipping",
+                        ref, key);
+                    continue;
+                }
                 String blockId = parts[0];
                 String field = parts[1];
                 Optional<BlockOutput> outputOpt = run.getOutputs().stream()
                     .filter(o -> o.getBlockId().equals(blockId)).reduce((a, b) -> b);
-                if (outputOpt.isEmpty()) continue;
+                if (outputOpt.isEmpty()) {
+                    // Lenient by design: a missing loopback-feedback field must not crash the run.
+                    // Surface it as a WARN so operators can spot a typo'd ref (config-time
+                    // validation catches most; this is the runtime backstop).
+                    log.warn("inject_context ref '{}' (key '{}'): no output for block '{}' yet — skipping",
+                        ref, key, blockId);
+                    continue;
+                }
                 Map<String, Object> blockOutput = objectMapper.readValue(
                     outputOpt.get().getOutputJson(), new TypeReference<Map<String, Object>>() {});
                 Object val = blockOutput.get(field);
-                if (val != null) resolved.put(key, val);
+                if (val != null) {
+                    resolved.put(key, val);
+                } else {
+                    log.warn("inject_context ref '{}' (key '{}'): field '{}' absent in block '{}' output — skipping",
+                        ref, key, field, blockId);
+                }
             } catch (Exception e) {
                 log.warn("Failed to resolve inject_context ref '{}': {}", ref, e.getMessage());
             }
@@ -847,11 +880,23 @@ public class PipelineRunner {
                 log.warn("Loopback '{}' detected no-progress (jaccard ≥ {}, iteration {}), short-circuiting to escalation",
                         loopKey, threshold, iterations + 1);
                 appendNoProgressHistoryEntry(run, fromBlockId, targetId, iterations + 1, issues, threshold);
+                if (metrics != null) metrics.recordNoProgressDetection(fromBlockId);
                 return -1;
             }
         }
 
+        // Global remediation envelope: bounds local loopback + escalation cloud-retry combined,
+        // so a single failing block can't multiply into ≈8 chain re-runs. The escalation
+        // cloud-retry re-enters this method, so the check here covers both paths.
+        int maxTotal = escalationProperties != null ? escalationProperties.getMaxTotalIterations() : 0;
+        if (maxTotal > 0 && run.getTotalRemediationIterations() >= maxTotal) {
+            log.warn("Loopback '{}' hit global remediation cap ({} iterations), stopping", loopKey, maxTotal);
+            return -1;
+        }
+
         run.getLoopIterations().put(loopKey, iterations + 1);
+        run.incrementTotalRemediationIterations();
+        if (metrics != null) metrics.recordLoopbackIteration(fromBlockId, targetId);
 
         // Find target index
         int targetIndex = -1;
@@ -888,7 +933,7 @@ public class PipelineRunner {
             entry.put("iteration", iterations + 1);
             entry.put("issues", issues);
             history.add(entry);
-            run.setLoopHistoryJson(objectMapper.writeValueAsString(history));
+            run.setLoopHistoryJson(objectMapper.writeValueAsString(capHistory(history)));
         } catch (Exception e) {
             log.warn("Failed to update loop history: {}", e.getMessage());
         }
@@ -918,10 +963,22 @@ public class PipelineRunner {
             entry.put("detected_no_progress", true);
             entry.put("threshold", threshold);
             history.add(entry);
-            run.setLoopHistoryJson(objectMapper.writeValueAsString(history));
+            run.setLoopHistoryJson(objectMapper.writeValueAsString(capHistory(history)));
         } catch (Exception e) {
             log.warn("Failed to append no-progress history entry: {}", e.getMessage());
         }
+    }
+
+    /**
+     * Caps {@code loop_history_json} to the most recent {@link #LOOP_HISTORY_MAX} entries so it
+     * can't grow unbounded on pathological runs. The no-progress detector only inspects recent
+     * iterations (per-loop counts are tiny vs. the cap), so trimming the head is safe.
+     */
+    private static final int LOOP_HISTORY_MAX = 50;
+
+    private List<Map<String, Object>> capHistory(List<Map<String, Object>> history) {
+        if (history.size() <= LOOP_HISTORY_MAX) return history;
+        return new ArrayList<>(history.subList(history.size() - LOOP_HISTORY_MAX, history.size()));
     }
 
     /**
@@ -954,6 +1011,7 @@ public class PipelineRunner {
                 run, failingBlockId, targetId, ladder, failureContext);
 
         if (decision instanceof EscalationDecision.RetryWithCloud) {
+            if (metrics != null) metrics.recordEscalationStep("cloud");
             // Allow exactly one more retry under the cloud tier — set counter to maxIter-1
             // so handleLoopback permits one iteration and then stops.
             // Resetting to 0 here was the bug: it allowed a full maxIter extra cycle.
@@ -971,6 +1029,7 @@ public class PipelineRunner {
         }
 
         if (decision instanceof EscalationDecision.PauseForHuman pause) {
+            if (metrics != null) metrics.recordEscalationStep("human");
             // Save current (failed) output for the gate UI before pausing.
             saveBlockOutput(run, failingBlockId, currentOutput, blockInputs, blockStart, Instant.now());
             run.setStatus(RunStatus.PAUSED_FOR_APPROVAL);
@@ -1761,13 +1820,13 @@ public class PipelineRunner {
                                               PipelineRun run) throws Exception {
         com.workflow.config.RetryConfig retry = effectiveConfig.getRetry();
         if (retry == null || retry.getMaxAttempts() <= 1) {
-            return block.run(inputs, effectiveConfig, run);
+            return runBlock(block, inputs, effectiveConfig, run);
         }
         long backoff = retry.getBackoffMs();
         Exception last = null;
         for (int attempt = 1; attempt <= retry.getMaxAttempts(); attempt++) {
             try {
-                return block.run(inputs, effectiveConfig, run);
+                return runBlock(block, inputs, effectiveConfig, run);
             } catch (InterruptedException ie) {
                 throw ie;
             } catch (Exception e) {
@@ -1780,6 +1839,65 @@ public class PipelineRunner {
             }
         }
         throw last != null ? last : new RuntimeException("Retry exhausted with no exception captured");
+    }
+
+    /**
+     * Executes a single block attempt, optionally bounded by {@code block.timeout_seconds}.
+     * When the runtime block-timeout is disabled (default) or no positive timeout is set, runs
+     * inline on the caller thread — zero behavioural change. When enabled, runs on a daemon
+     * worker with the caller's {@link com.workflow.project.ProjectContext} /
+     * {@link com.workflow.account.TenantContext} / {@link com.workflow.llm.LlmCallContext}
+     * propagated, and a {@link TimeoutException}-derived failure (retryable like any other) on
+     * overrun. {@link InterruptedException} thrown by the block is unwrapped and re-propagated
+     * so cancellation still short-circuits the retry loop.
+     */
+    private Map<String, Object> runBlock(Block block, Map<String, Object> inputs,
+                                         com.workflow.config.BlockConfig effectiveConfig,
+                                         PipelineRun run) throws Exception {
+        Integer timeout = effectiveConfig.getTimeoutSeconds();
+        if (!blockTimeoutEnabled || timeout == null || timeout <= 0) {
+            return block.run(inputs, effectiveConfig, run);
+        }
+
+        // Capture caller-thread context so the worker sees the same run/project/tenant/provider.
+        String projectSlug = com.workflow.project.ProjectContext.get();
+        Long accountId = com.workflow.account.TenantContext.get();
+        com.workflow.llm.LlmCallContext.Context llmCtx =
+            com.workflow.llm.LlmCallContext.current().orElse(null);
+
+        ExecutorService exec = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "block-timeout-" + effectiveConfig.getId());
+            t.setDaemon(true);
+            return t;
+        });
+        Future<Map<String, Object>> future = exec.submit(() -> {
+            com.workflow.project.ProjectContext.set(projectSlug);
+            com.workflow.account.TenantContext.set(accountId);
+            if (llmCtx != null) {
+                com.workflow.llm.LlmCallContext.set(llmCtx.runId(), llmCtx.blockId(), llmCtx.preferredProvider());
+            }
+            try {
+                return block.run(inputs, effectiveConfig, run);
+            } finally {
+                com.workflow.llm.LlmCallContext.clear();
+                com.workflow.project.ProjectContext.clear();
+                com.workflow.account.TenantContext.clear();
+            }
+        });
+        try {
+            return future.get(timeout, TimeUnit.SECONDS);
+        } catch (TimeoutException te) {
+            future.cancel(true);  // interrupt the worker; blocks honouring interruption stop here
+            throw new RuntimeException("Block '" + effectiveConfig.getId() + "' timed out after "
+                + timeout + "s", te);
+        } catch (ExecutionException ee) {
+            Throwable cause = ee.getCause();
+            if (cause instanceof InterruptedException ie) throw ie;
+            if (cause instanceof Exception ex) throw ex;
+            throw new RuntimeException(cause != null ? cause : ee);
+        } finally {
+            exec.shutdownNow();
+        }
     }
 
     private void broadcastApprovalNotification(PipelineRun run, String blockId, String description) {

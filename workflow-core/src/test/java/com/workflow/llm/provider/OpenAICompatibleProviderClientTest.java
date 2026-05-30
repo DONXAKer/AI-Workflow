@@ -1,5 +1,8 @@
 package com.workflow.llm.provider;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.netty.handler.timeout.ReadTimeoutException;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
@@ -93,6 +96,32 @@ class OpenAICompatibleProviderClientTest {
             new RuntimeException("Connection prematurely closed BEFORE response")));
         assertTrue(OpenAICompatibleProviderClient.isRetriableToolUseError(
             new RuntimeException("Connection prematurely closed DURING response")));
+    }
+
+    // ── PR-3: response_format JSON-mode envelope ──────────────────────────────
+
+    @Test
+    void buildChatBody_jsonResponseFormat_setsResponseFormatObject() {
+        ObjectMapper om = new ObjectMapper();
+        ArrayNode messages = om.createArrayNode();
+        messages.addObject().put("role", "user").put("content", "hi");
+        ObjectNode body = OpenAICompatibleProviderClient.buildChatBody(
+            om, "z-ai/glm-4.6", messages, 1024, 0.3, "json");
+        assertTrue(body.has("response_format"), "json hint must add response_format");
+        assertEquals("json_object", body.path("response_format").path("type").asText());
+    }
+
+    @Test
+    void buildChatBody_noResponseFormat_omitsEnvelope() {
+        ObjectMapper om = new ObjectMapper();
+        ArrayNode messages = om.createArrayNode();
+        messages.addObject().put("role", "user").put("content", "hi");
+        ObjectNode body = OpenAICompatibleProviderClient.buildChatBody(
+            om, "z-ai/glm-4.6", messages, 1024, 0.3, null);
+        assertFalse(body.has("response_format"), "no hint → no response_format (backwards-compat)");
+        // Core fields still present.
+        assertEquals("z-ai/glm-4.6", body.path("model").asText());
+        assertEquals(1024, body.path("max_tokens").asInt());
     }
 
     @Test

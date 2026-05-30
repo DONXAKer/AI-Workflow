@@ -1,0 +1,25 @@
+# PR-5 (hardening) — global remediation-iteration counter on pipeline_run.
+# Bounds local loopback + escalation cloud-retry combined (EscalationProperties.maxTotalIterations).
+# preConditions keep the changeSet safe where ddl-auto:update already added the column.
+databaseChangeLog:
+
+  - changeSet:
+      id: 003-pipeline-run-total-remediation-iterations
+      author: hardening
+      preConditions:
+        - onFail: MARK_RAN
+        - onError: MARK_RAN
+        - not:
+            - columnExists:
+                tableName: pipeline_run
+                columnName: total_remediation_iterations
+      changes:
+        - addColumn:
+            tableName: pipeline_run
+            columns:
+              - column:
+                  name: total_remediation_iterations
+                  type: INT
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false

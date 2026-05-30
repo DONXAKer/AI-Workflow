@@ -6,7 +6,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Resolves a preset name (e.g. {@code fast}, {@code smart}, {@code cheap}) to a concrete
@@ -94,6 +96,28 @@ public class ModelPresetResolver {
 
     @Value("#{${workflow.model-presets:{:}}}")
     private Map<String, String> overrides = new HashMap<>();
+
+    /**
+     * Union of every known tier/preset key across all four routing maps
+     * (OpenRouter {@link #DEFAULTS}, {@link #CLI_DEFAULTS}, {@link #VLLM_DEFAULTS},
+     * {@link #OLLAMA_DEFAULTS}) plus any {@code workflow.model-presets.*} overrides.
+     *
+     * <p>Used by {@code PipelineConfigValidator} to fail-fast on a misspelled
+     * {@code agent.tier} (e.g. {@code "ultra_smart"}) at config time instead of
+     * silently passing it through {@link #resolve(String)} as a raw model id and
+     * crashing later with a provider API error. A tier is considered valid if it
+     * resolves on <em>any</em> route — the active provider is pinned per-project /
+     * per-run, so route-specific membership can't be checked at validation time.
+     */
+    public Set<String> knownTierKeys() {
+        Set<String> keys = new HashSet<>();
+        keys.addAll(DEFAULTS.keySet());
+        keys.addAll(CLI_DEFAULTS.keySet());
+        keys.addAll(VLLM_DEFAULTS.keySet());
+        keys.addAll(OLLAMA_DEFAULTS.keySet());
+        if (overrides != null) keys.addAll(overrides.keySet());
+        return keys;
+    }
 
     public String resolve(String presetOrModel) {
         if (presetOrModel == null || presetOrModel.isBlank()) return DEFAULTS.get("smart");

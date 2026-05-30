@@ -713,4 +713,268 @@ class PipelineConfigValidatorTest {
         assertFalse(codes(r).contains(PipelineConfigValidator.WEAK_LLM_CHECK_PROMPT),
             () -> "disabled llm_check must skip prompt validation, got: " + r.errors());
     }
+
+    // ── PR-1: agent.tier / temperature / maxTokens ────────────────────────────
+
+    /**
+     * Validator wired with a real {@link com.workflow.llm.ModelPresetResolver} (default presets,
+     * no overrides) and an empty {@link com.workflow.skills.SkillRegistry} so the tier/skills
+     * checks become active.
+     */
+    private PipelineConfigValidator validatorWithResolver() throws Exception {
+        BlockRegistry registry = new BlockRegistry();
+        List<Block> stubs = new ArrayList<>();
+        for (String name : List.of("analysis", "verify", "code_generation", "agent_with_tools")) {
+            stubs.add(stubBlock(name));
+        }
+        ReflectionTestUtils.setField(registry, "allBlocks", stubs);
+        Method init = BlockRegistry.class.getDeclaredMethod("init");
+        init.setAccessible(true);
+        init.invoke(registry);
+        com.workflow.llm.ModelPresetResolver resolver = new com.workflow.llm.ModelPresetResolver();
+        com.workflow.skills.SkillRegistry skills =
+            new com.workflow.skills.SkillRegistry(List.of(stubSkill("read_file"), stubSkill("search_code")));
+        return new PipelineConfigValidator(registry, resolver, skills);
+    }
+
+    private static com.workflow.skills.Skill stubSkill(String name) {
+        return new com.workflow.skills.Skill() {
+            @Override public String getName() { return name; }
+            @Override public String getDescription() { return name; }
+            @Override public com.fasterxml.jackson.databind.node.ObjectNode getInputSchema() { return null; }
+            @Override public Object execute(Map<String, Object> params) { return null; }
+        };
+    }
+
+    private static BlockConfig blockWithAgent(String id, String type, AgentConfig agent) {
+        BlockConfig b = block(id, type);
+        b.setAgent(agent);
+        return b;
+    }
+
+    @Test
+    void unknownTier_emitsWarn() throws Exception {
+        PipelineConfigValidator v = validatorWithResolver();
+        AgentConfig a = new AgentConfig();
+        a.setTier("ultra_smart");                 // not a known preset
+        ValidationResult r = v.validate(pipeline(blockWithAgent("a", "analysis", a)));
+        assertTrue(codes(r).contains(PipelineConfigValidator.UNKNOWN_TIER),
+            () -> "expected UNKNOWN_TIER, got: " + r.errors());
+        assertTrue(r.valid(), "UNKNOWN_TIER is WARN, must not block");
+    }
+
+    @Test
+    void knownTier_noWarning() throws Exception {
+        PipelineConfigValidator v = validatorWithResolver();
+        for (String tier : List.of("smart", "flash", "fast", "reasoning", "cheap")) {
+            AgentConfig a = new AgentConfig();
+            a.setTier(tier);
+            ValidationResult r = v.validate(pipeline(blockWithAgent("a", "analysis", a)));
+            assertFalse(codes(r).contains(PipelineConfigValidator.UNKNOWN_TIER),
+                () -> "tier '" + tier + "' must be recognized, got: " + r.errors());
+        }
+    }
+
+    @Test
+    void fullModelId_passesThrough_noTierWarning() throws Exception {
+        PipelineConfigValidator v = validatorWithResolver();
+        AgentConfig a = new AgentConfig();
+        a.setModel("z-ai/glm-4.6");               // explicit model id — tier check skipped
+        ValidationResult r = v.validate(pipeline(blockWithAgent("a", "analysis", a)));
+        assertFalse(codes(r).contains(PipelineConfigValidator.UNKNOWN_TIER),
+            () -> "explicit model id must not warn, got: " + r.errors());
+    }
+
+    @Test
+    void temperatureOutOfRange_emitsError() {
+        AgentConfig a = new AgentConfig();
+        a.setTemperature(1.5 + 1.0);              // 2.5 > MAX_TEMPERATURE
+        ValidationResult r = validator.validate(pipeline(blockWithAgent("a", "analysis", a)));
+        assertTrue(codes(r).contains(PipelineConfigValidator.TEMPERATURE_OUT_OF_RANGE),
+            () -> "expected TEMPERATURE_OUT_OF_RANGE, got: " + r.errors());
+        assertFalse(r.valid(), "out-of-range temperature must block");
+    }
+
+    @Test
+    void temperatureInRange_ok() {
+        AgentConfig a = new AgentConfig();
+        a.setTemperature(0.3);
+        ValidationResult r = validator.validate(pipeline(blockWithAgent("a", "analysis", a)));
+        assertFalse(codes(r).contains(PipelineConfigValidator.TEMPERATURE_OUT_OF_RANGE),
+            () -> "0.3 is valid, got: " + r.errors());
+    }
+
+    @Test
+    void maxTokensZero_emitsError() {
+        AgentConfig a = new AgentConfig();
+        a.setMaxTokens(0);
+        ValidationResult r = validator.validate(pipeline(blockWithAgent("a", "analysis", a)));
+        assertTrue(codes(r).contains(PipelineConfigValidator.MAX_TOKENS_INVALID),
+            () -> "expected MAX_TOKENS_INVALID, got: " + r.errors());
+    }
+
+    // ── PR-1: retry ───────────────────────────────────────────────────────────
+
+    private static BlockConfig blockWithRetry(int maxAttempts, long backoff, long maxBackoff) {
+        BlockConfig b = block("a", "analysis");
+        RetryConfig retry = new RetryConfig();
+        retry.setMaxAttempts(maxAttempts);
+        retry.setBackoffMs(backoff);
+        retry.setMaxBackoffMs(maxBackoff);
+        b.setRetry(retry);
+        return b;
+    }
+
+    @Test
+    void retryZeroAttempts_emitsError() {
+        ValidationResult r = validator.validate(pipeline(blockWithRetry(0, 1000, 30000)));
+        assertTrue(codes(r).contains(PipelineConfigValidator.RETRY_INVALID),
+            () -> "max_attempts=0 must error, got: " + r.errors());
+    }
+
+    @Test
+    void retryBackoffExceedsMax_emitsError() {
+        ValidationResult r = validator.validate(pipeline(blockWithRetry(3, 50000, 30000)));
+        assertTrue(codes(r).contains(PipelineConfigValidator.RETRY_INVALID),
+            () -> "backoff > max_backoff must error, got: " + r.errors());
+    }
+
+    @Test
+    void retryDefaults_ok() {
+        BlockConfig b = block("a", "analysis");
+        b.setRetry(new RetryConfig());            // 3 / 1000 / 30000 — all valid
+        ValidationResult r = validator.validate(pipeline(b));
+        assertFalse(codes(r).contains(PipelineConfigValidator.RETRY_INVALID),
+            () -> "default retry must be valid, got: " + r.errors());
+    }
+
+    // ── PR-1: timeout ─────────────────────────────────────────────────────────
+
+    @Test
+    void timeoutZero_emitsError() {
+        BlockConfig b = block("a", "analysis");
+        b.setTimeoutSeconds(0);
+        ValidationResult r = validator.validate(pipeline(b));
+        assertTrue(codes(r).contains(PipelineConfigValidator.TIMEOUT_INVALID),
+            () -> "timeout_seconds=0 must error, got: " + r.errors());
+    }
+
+    // ── PR-1: gate / condition expression syntax ──────────────────────────────
+
+    @Test
+    void unbalancedBracketsInCondition_emitsWarn() {
+        BlockConfig analysis = block("analysis", "analysis");
+        BlockConfig impl = block("impl", "code_generation");
+        impl.setDependsOn(new ArrayList<>(List.of("analysis")));
+        impl.setCondition("($.analysis.estimated_complexity == 'low'");  // missing ')'
+        ValidationResult r = validator.validate(pipeline(analysis, impl));
+        assertTrue(codes(r).contains(PipelineConfigValidator.GATE_EXPR_SYNTAX),
+            () -> "unbalanced brackets must warn, got: " + r.errors());
+        assertTrue(r.valid(), "GATE_EXPR_SYNTAX is WARN");
+    }
+
+    @Test
+    void malformedOperatorInCondition_emitsWarn() {
+        BlockConfig analysis = block("analysis", "analysis");
+        BlockConfig impl = block("impl", "code_generation");
+        impl.setDependsOn(new ArrayList<>(List.of("analysis")));
+        impl.setCondition("$.analysis.estimated_complexity >>> 'low'");
+        ValidationResult r = validator.validate(pipeline(analysis, impl));
+        assertTrue(codes(r).contains(PipelineConfigValidator.GATE_EXPR_SYNTAX),
+            () -> "malformed operator must warn, got: " + r.errors());
+    }
+
+    @Test
+    void wellFormedCondition_noSyntaxWarn() {
+        BlockConfig analysis = block("analysis", "analysis");
+        BlockConfig impl = block("impl", "code_generation");
+        impl.setDependsOn(new ArrayList<>(List.of("analysis")));
+        impl.setCondition("$.analysis.estimated_complexity != 'low' && $.analysis.score >= 7");
+        ValidationResult r = validator.validate(pipeline(analysis, impl));
+        assertFalse(codes(r).contains(PipelineConfigValidator.GATE_EXPR_SYNTAX),
+            () -> "valid condition must not warn, got: " + r.errors());
+    }
+
+    // ── PR-1: verify.checks rule + llm_check.minScore ─────────────────────────
+
+    @Test
+    void unknownVerifyRule_emitsWarn() {
+        BlockConfig b = block("v", "verify");
+        VerifyConfig vc = new VerifyConfig();
+        FieldCheckConfig check = new FieldCheckConfig();
+        check.setField("summary");
+        check.setRule("max_length_unicode");      // not a known rule
+        vc.setChecks(new ArrayList<>(List.of(check)));
+        b.setVerify(vc);
+        ValidationResult r = validator.validate(pipeline(b));
+        assertTrue(codes(r).contains(PipelineConfigValidator.VERIFY_CHECK_UNKNOWN_RULE),
+            () -> "unknown rule must warn, got: " + r.errors());
+    }
+
+    @Test
+    void knownVerifyRule_noWarn() {
+        BlockConfig b = block("v", "verify");
+        VerifyConfig vc = new VerifyConfig();
+        FieldCheckConfig check = new FieldCheckConfig();
+        check.setField("affected_components");
+        check.setRule("min_items");
+        check.setValue(1);
+        vc.setChecks(new ArrayList<>(List.of(check)));
+        b.setVerify(vc);
+        ValidationResult r = validator.validate(pipeline(b));
+        assertFalse(codes(r).contains(PipelineConfigValidator.VERIFY_CHECK_UNKNOWN_RULE),
+            () -> "known rule must not warn, got: " + r.errors());
+    }
+
+    @Test
+    void minScoreOutOfRange_emitsError() {
+        BlockConfig b = verifyWithLlmPrompt("v",
+            "Ты reviewer, оцени по security/тестам/DoD по шкале 0-10 максимально строго и обоснованно.");
+        b.getVerify().getLlmCheck().setMinScore(15);   // > 10
+        ValidationResult r = validator.validate(pipeline(b));
+        assertTrue(codes(r).contains(PipelineConfigValidator.LLM_CHECK_SCORE_RANGE),
+            () -> "minScore=15 must error, got: " + r.errors());
+    }
+
+    // ── PR-1: skills ──────────────────────────────────────────────────────────
+
+    @Test
+    void unknownSkill_emitsWarn() throws Exception {
+        PipelineConfigValidator v = validatorWithResolver();
+        BlockConfig b = block("a", "agent_with_tools");
+        b.setSkills(new ArrayList<>(List.of("read_file", "quantum_analysis")));
+        ValidationResult r = v.validate(pipeline(b));
+        assertTrue(codes(r).contains(PipelineConfigValidator.SKILL_UNKNOWN),
+            () -> "unknown skill must warn, got: " + r.errors());
+        assertTrue(r.valid(), "SKILL_UNKNOWN is WARN");
+    }
+
+    @Test
+    void knownSkills_noWarn() throws Exception {
+        PipelineConfigValidator v = validatorWithResolver();
+        BlockConfig b = block("a", "agent_with_tools");
+        b.setSkills(new ArrayList<>(List.of("read_file", "search_code")));
+        ValidationResult r = v.validate(pipeline(b));
+        assertFalse(codes(r).contains(PipelineConfigValidator.SKILL_UNKNOWN),
+            () -> "registered skills must not warn, got: " + r.errors());
+    }
+
+    // ── PR-1: entry_points inject ─────────────────────────────────────────────
+
+    @Test
+    void unknownInjectSource_emitsWarn() {
+        BlockConfig analysis = block("analysis", "analysis");
+        PipelineConfig cfg = pipeline(analysis);
+        EntryPointConfig ep = new EntryPointConfig();
+        ReflectionTestUtils.setField(ep, "id", "tasks_exist");
+        ReflectionTestUtils.setField(ep, "fromBlock", "analysis");
+        EntryPointInjection inj = new EntryPointInjection();
+        ReflectionTestUtils.setField(inj, "blockId", "analysis");
+        ReflectionTestUtils.setField(inj, "source", "telepathy");   // not a valid source
+        ReflectionTestUtils.setField(ep, "inject", new ArrayList<>(List.of(inj)));
+        cfg.setEntryPoints(new ArrayList<>(List.of(ep)));
+        ValidationResult r = validator.validate(cfg);
+        assertTrue(codes(r).contains(PipelineConfigValidator.ENTRY_INJECT_SOURCE_UNKNOWN),
+            () -> "unknown inject source must warn, got: " + r.errors());
+    }
 }

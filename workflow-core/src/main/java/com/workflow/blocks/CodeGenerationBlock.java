@@ -230,6 +230,8 @@ public class CodeGenerationBlock implements Block {
         String branchName = "feature/generated";
         String commitMessage = "feat: generated changes";
         int tasksGenerated = 0;
+        int parseFailures = 0;
+        List<String> failedTasks = new ArrayList<>();
 
         for (Map<String, Object> task : tasks) {
             String taskSummary = (String) task.getOrDefault("summary", "");
@@ -277,17 +279,28 @@ public class CodeGenerationBlock implements Block {
 
             String llmResponse;
             try {
-                llmResponse = llmClient.complete(model, effectiveSystemPrompt, userMessage, maxTokens, temperature);
+                // responseFormat=json forces structured output on providers that support it
+                // (Ollama/vLLM/OpenRouter) — weak local models otherwise return prose here.
+                llmResponse = llmClient.complete(model, effectiveSystemPrompt, userMessage,
+                    maxTokens, temperature, "json");
             } catch (Exception e) {
                 log.error("LLM call failed for task '{}': {}", taskSummary, e.getMessage());
+                parseFailures++;
+                failedTasks.add(taskSummary);
                 continue;
             }
 
             Map<String, Object> parsed;
             try {
-                parsed = objectMapper.readValue(llmResponse, new TypeReference<Map<String, Object>>() {});
+                // Robust extraction (fence-strip, prose-unwrap, lenient) instead of a bare
+                // readValue that used to silently drop the whole task on any deviation.
+                parsed = com.workflow.llm.JsonExtractor.extractObject(llmResponse, "changes", objectMapper);
             } catch (Exception e) {
+                // Surface the loss instead of swallowing it: a parse failure is now visible in
+                // the block output (parse_failures / failed_tasks) so verify/operator can react.
                 log.error("Failed to parse code generation JSON for task '{}': {}", taskSummary, e.getMessage());
+                parseFailures++;
+                failedTasks.add(taskSummary);
                 continue;
             }
 
@@ -338,6 +351,8 @@ public class CodeGenerationBlock implements Block {
         result.put("test_changes", new ArrayList<>(mergedTestChanges.values()));
         result.put("commit_message", commitMessage);
         result.put("tasks_generated", tasksGenerated);
+        result.put("parse_failures", parseFailures);
+        result.put("failed_tasks", failedTasks);
         result.put("youtrack_issues", youtrackIssues);
         return result;
     }
