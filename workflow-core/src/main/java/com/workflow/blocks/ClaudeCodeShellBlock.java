@@ -7,6 +7,9 @@ import com.workflow.llm.LlmCall;
 import com.workflow.llm.LlmCallContext;
 import com.workflow.llm.LlmCallRepository;
 import com.workflow.llm.LlmProvider;
+import com.workflow.preflight.PreflightContext;
+import com.workflow.preflight.PreflightRequirements;
+import com.workflow.preflight.Requirement;
 import com.workflow.project.Project;
 import com.workflow.project.ProjectContext;
 import com.workflow.project.ProjectRepository;
@@ -71,6 +74,13 @@ public class ClaudeCodeShellBlock implements Block {
 
     @Override public String getDescription() {
         return "Вызывает локальный Claude Code CLI (claude -p) с MCP-конфигом и списком разрешённых инструментов. Используется для Layer 3 сценариев (MCP-driven Blueprint), которые не проходят через OpenRouter.";
+    }
+
+    @Override
+    public List<Requirement> preflightRequirements(BlockConfig config, PreflightContext context) {
+        return List.of(
+            PreflightRequirements.workingDir(config),
+            new Requirement.Provider(LlmProvider.CLAUDE_CODE_CLI));
     }
 
     @Override

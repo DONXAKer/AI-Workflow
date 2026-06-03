@@ -32,6 +32,8 @@ public class PipelineMetrics {
     private final ConcurrentMap<String, Counter> loopbackCounters = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Counter> noProgressCounters = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Counter> escalationStepCounters = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Counter> preflightBlockCounters = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Counter> preflightWarnCounters = new ConcurrentHashMap<>();
 
     /**
      * Per-resolution timer of approval wait time. Tag {@code status} ∈
@@ -134,6 +136,27 @@ public class PipelineMetrics {
         escalationStepCounters.computeIfAbsent(tier != null ? tier : "?",
             k -> Counter.builder("workflow_escalation_steps_total")
                 .tag("tier", k)
+                .register(registry)
+        ).increment();
+    }
+
+    /**
+     * Pre-run diagnostics gate (com.workflow.preflight). A "block" is a hard-fail that prevented a
+     * run from starting; a "warning" is an advisory (reachability/inconclusive/conditional) that did
+     * not block. Tag {@code requirement} ∈ {WORKING_DIR, BINARY, PROVIDER, INTEGRATION, GIT_REPO}.
+     */
+    public void recordPreflightBlock(String requirement) {
+        preflightBlockCounters.computeIfAbsent(requirement != null ? requirement : "?",
+            k -> Counter.builder("workflow_preflight_blocks_total")
+                .tag("requirement", k)
+                .register(registry)
+        ).increment();
+    }
+
+    public void recordPreflightWarning(String requirement) {
+        preflightWarnCounters.computeIfAbsent(requirement != null ? requirement : "?",
+            k -> Counter.builder("workflow_preflight_warnings_total")
+                .tag("requirement", k)
                 .register(registry)
         ).increment();
     }

@@ -6,7 +6,12 @@ import com.workflow.config.PipelineConfigLoader;
 import com.workflow.config.PipelineConfigValidator;
 import com.workflow.config.PipelineConfigWriter;
 import com.workflow.config.ValidationResult;
+import com.workflow.config.ValidationError;
+import com.workflow.config.Severity;
 import com.workflow.core.*;
+import com.workflow.llm.LlmProvider;
+import com.workflow.preflight.PreflightContext;
+import com.workflow.preflight.RunDiagnostics;
 import com.workflow.core.EntryPointResolver.DetectionResult;
 import com.workflow.project.ProjectContext;
 import com.workflow.tools.ToolCallAudit;
@@ -109,6 +114,17 @@ public class RunController {
 
     @Autowired(required = false)
     private com.workflow.billing.TierProperties tierProperties;
+
+    @Autowired
+    private RunDiagnostics runDiagnostics;
+
+    /**
+     * Master switch for the pre-run environment diagnostics gate. Default ON — this is a
+     * protective gate, not an experimental feature; the flag exists only as an emergency
+     * kill-switch. When false, runs start without the readiness check (legacy behaviour).
+     */
+    @Value("${workflow.preflight-diagnostics.enabled:true}")
+    private boolean preflightDiagnosticsEnabled;
 
     @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
     @PostMapping("/runs")
@@ -255,7 +271,9 @@ public class RunController {
             if (branchName != null)    userInputs.put("branchName", branchName);
             if (mrIidRaw != null)      userInputs.put("mrIid", mrIidRaw);
 
-            // Resolve named entry point if provided
+            // Resolve the effective from-block + injections UP FRONT (without kicking off the run)
+            // so the pre-run diagnostics gate can scope its checks to the blocks that will run.
+            Map<String, Map<String, Object>> resolvedInjections = null;
             if (entryPointId != null && !entryPointId.isBlank() && (fromBlock == null || fromBlock.isBlank())) {
                 var ep = config.getEntryPoints().stream()
                     .filter(e -> e.getId().equals(entryPointId))
@@ -271,14 +289,52 @@ public class RunController {
                     entryPointResolver.resolveInjections(ep, userInputs, config);
                 // Explicit injectedOutputs from request override resolved ones
                 resolved.putAll(explicitInjections);
+                resolvedInjections = resolved;
 
                 log.info("Entry point '{}' resolved: fromBlock={}, injections={}", entryPointId, fromBlock, resolved.keySet());
-                pipelineRunner.runFrom(config, requirement, fromBlock, resolved, runId, namedInputs);
             } else if (fromBlock != null && !fromBlock.isBlank()) {
                 @SuppressWarnings("unchecked")
                 Map<String, Map<String, Object>> injectedOutputs =
                     (Map<String, Map<String, Object>>) request.get("injectedOutputs");
-                pipelineRunner.runFrom(config, requirement, fromBlock, injectedOutputs, runId, namedInputs);
+                resolvedInjections = injectedOutputs;
+            }
+
+            // Pre-run environment diagnostics gate: verify the run can actually execute (working
+            // dir exists+writable, binaries on PATH, LLM provider reachable, integration tokens
+            // present, git repo) BEFORE a run is created. A hard failure aborts with HTTP 422 and a
+            // precise error list; warnings (reachability / conditional-block prerequisites) do not
+            // block and ride along in the success response. dryRun is gated too — it exists to
+            // check "will this run". Fail-open: a diagnostic bug must never block a legitimate run.
+            List<ValidationError> preflightWarnings = List.of();
+            if (preflightDiagnosticsEnabled) {
+                try {
+                    PreflightContext pfCtx = new PreflightContext(
+                        resolveEffectiveWorkingDir(namedInputs),
+                        resolveRunProvider(namedInputs),
+                        ProjectContext.get(),
+                        config.getIntegrations());
+                    ValidationResult diag = runDiagnostics.diagnose(config, fromBlock, pfCtx);
+                    if (!diag.valid()) {
+                        auditService.recordFailure("PREFLIGHT", "run", runId.toString(), Map.of(
+                            "reason", "environment_not_ready",
+                            "configPath", configPath,
+                            "failedRequirements", diag.errors().stream()
+                                .filter(e -> e.severity() == Severity.ERROR)
+                                .map(ValidationError::code).collect(Collectors.toList())));
+                        Map<String, Object> body = new LinkedHashMap<>();
+                        body.put("error", "Environment not ready");
+                        body.put("errors", diag.errors());
+                        return ResponseEntity.status(422).body(body);
+                    }
+                    preflightWarnings = diag.errors(); // valid() == true → only WARN/INFO remain
+                } catch (Exception e) {
+                    log.warn("Pre-run diagnostics errored — proceeding without gate: {}", e.getMessage(), e);
+                }
+            }
+
+            // Kick off (entry-point and explicit-from-block both resolved fromBlock above).
+            if (fromBlock != null && !fromBlock.isBlank()) {
+                pipelineRunner.runFrom(config, requirement, fromBlock, resolvedInjections, runId, namedInputs);
             } else {
                 pipelineRunner.run(config, requirement, runId, dryRun, namedInputs);
             }
@@ -295,6 +351,9 @@ public class RunController {
             response.put("runId", runId.toString());
             response.put("id", runId.toString());
             response.put("status", "RUNNING");
+            if (!preflightWarnings.isEmpty()) {
+                response.put("warnings", preflightWarnings);
+            }
 
             auditService.record("RUN_START", "run", runId.toString(), Map.of(
                 "configPath", configPath,
@@ -309,6 +368,36 @@ public class RunController {
         } catch (Exception e) {
             log.error("Failed to start run: {}", e.getMessage(), e);
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Effective working directory for the pre-run diagnostics gate: the provisioned per-run
+     * workspace ({@code _workspaceDir}, set during repo-backed clone) wins, else the project's
+     * configured {@code workingDir}. {@code null} when the project has none — the gate then
+     * reports it only if a reachable block actually needs the filesystem.
+     */
+    private String resolveEffectiveWorkingDir(Map<String, Object> namedInputs) {
+        Object ws = namedInputs.get("_workspaceDir");
+        if (ws instanceof String s && !s.isBlank()) return s;
+        String slug = ProjectContext.get();
+        if (slug != null && !slug.isBlank() && projectRepository != null) {
+            return projectRepository.findBySlug(slug)
+                .map(com.workflow.project.Project::getWorkingDir)
+                .filter(d -> d != null && !d.isBlank())
+                .orElse(null);
+        }
+        return null;
+    }
+
+    /** Run-level provider for diagnostics — mirrors how PipelineRunner resolves it from run inputs. */
+    private LlmProvider resolveRunProvider(Map<String, Object> namedInputs) {
+        Object p = namedInputs.get("provider");
+        if (p == null) return null;
+        try {
+            return LlmProvider.valueOf(p.toString().trim().toUpperCase());
+        } catch (Exception e) {
+            return null;
         }
     }
 

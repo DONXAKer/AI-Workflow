@@ -3,6 +3,9 @@ package com.workflow.blocks;
 import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
 import com.workflow.integrations.GitHubClient;
+import com.workflow.model.IntegrationType;
+import com.workflow.preflight.PreflightContext;
+import com.workflow.preflight.Requirement;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -23,6 +26,11 @@ public class GitHubActionsBlock implements Block {
     @Override
     public String getDescription() {
         return "Отслеживает запуски GitHub Actions на ветке PR, ждёт завершения всех workflow и сообщает результаты.";
+    }
+
+    @Override
+    public List<Requirement> preflightRequirements(BlockConfig config, PreflightContext context) {
+        return List.of(new Requirement.Integration(IntegrationType.GITHUB));
     }
 
     @Override

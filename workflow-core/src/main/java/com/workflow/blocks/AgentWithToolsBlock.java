@@ -10,6 +10,9 @@ import com.workflow.llm.LlmClient;
 import com.workflow.llm.tooluse.ToolDefinition;
 import com.workflow.llm.tooluse.ToolUseRequest;
 import com.workflow.llm.tooluse.ToolUseResponse;
+import com.workflow.preflight.PreflightContext;
+import com.workflow.preflight.PreflightRequirements;
+import com.workflow.preflight.Requirement;
 import com.workflow.project.Project;
 import com.workflow.project.ProjectClaudeMd;
 import com.workflow.project.ProjectContext;
@@ -206,6 +209,11 @@ public class AgentWithToolsBlock implements Block {
             ),
             100
         );
+    }
+
+    @Override
+    public List<Requirement> preflightRequirements(BlockConfig config, PreflightContext context) {
+        return List.of(PreflightRequirements.workingDir(config));
     }
 
     @Override

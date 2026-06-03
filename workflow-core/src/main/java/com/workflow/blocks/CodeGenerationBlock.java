@@ -7,6 +7,9 @@ import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
 import com.workflow.knowledge.KnowledgeBase;
 import com.workflow.llm.LlmClient;
+import com.workflow.preflight.PreflightContext;
+import com.workflow.preflight.PreflightRequirements;
+import com.workflow.preflight.Requirement;
 import com.workflow.project.ProjectClaudeMd;
 import com.workflow.project.ProjectContext;
 import com.workflow.project.ProjectRepository;
@@ -152,6 +155,11 @@ public class CodeGenerationBlock implements Block {
             ),
             100
         );
+    }
+
+    @Override
+    public List<Requirement> preflightRequirements(BlockConfig config, PreflightContext context) {
+        return List.of(PreflightRequirements.workingDir(config));
     }
 
     @Override

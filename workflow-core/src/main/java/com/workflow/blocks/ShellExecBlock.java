@@ -3,6 +3,10 @@ package com.workflow.blocks;
 import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
 import com.workflow.core.expr.StringInterpolator;
+import com.workflow.preflight.PreflightContext;
+import com.workflow.preflight.PreflightRequirements;
+import com.workflow.preflight.Requirement;
+import com.workflow.preflight.ShellCommandBinary;
 import com.workflow.project.Project;
 import com.workflow.project.ProjectContext;
 import com.workflow.project.ProjectRepository;
@@ -84,6 +88,15 @@ public class ShellExecBlock implements Block {
             false,
             Map.of()
         );
+    }
+
+    @Override
+    public List<Requirement> preflightRequirements(BlockConfig config, PreflightContext context) {
+        List<Requirement> reqs = new java.util.ArrayList<>();
+        reqs.add(PreflightRequirements.workingDir(config));
+        String bin = ShellCommandBinary.firstBinary(PreflightRequirements.literalString(config, "command"));
+        if (bin != null) reqs.add(new Requirement.Binary(bin));
+        return reqs;
     }
 
     @Override

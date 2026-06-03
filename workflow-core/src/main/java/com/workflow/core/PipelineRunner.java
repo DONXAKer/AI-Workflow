@@ -66,6 +66,9 @@ public class PipelineRunner {
     private IntegrationConfigRepository integrationConfigRepository;
 
     @Autowired
+    private com.workflow.integrations.IntegrationResolver integrationResolver;
+
+    @Autowired
     private ObjectMapper objectMapper;
 
     @Autowired(required = false)
@@ -420,6 +423,16 @@ public class PipelineRunner {
 
     /** Returns IDs of all blocks that appear strictly before {@code fromBlockId} in topological order. */
     public java.util.Set<String> getBlockIdsBefore(PipelineConfig config, String fromBlockId) {
+        return blockIdsBefore(config, fromBlockId);
+    }
+
+    /**
+     * Static variant of {@link #getBlockIdsBefore} — IDs strictly before {@code fromBlockId} in
+     * topological order. Exposed statically so collaborators that only need the reachable-set
+     * computation (e.g. {@link com.workflow.preflight.RunDiagnostics}) don't have to depend on the
+     * heavyweight {@code PipelineRunner} bean.
+     */
+    public static java.util.Set<String> blockIdsBefore(PipelineConfig config, String fromBlockId) {
         java.util.Set<String> result = new java.util.LinkedHashSet<>();
         if (fromBlockId == null) return result;
         for (BlockConfig bc : topologicalSortValidated(config.getPipeline())) {
@@ -597,17 +610,9 @@ public class PipelineRunner {
     }
 
     private Optional<IntegrationConfig> resolveIntegration(String configName, IntegrationType type) {
-        String scope = com.workflow.project.ProjectContext.get();
-        if (configName != null && !configName.isBlank()) {
-            Optional<IntegrationConfig> scoped = integrationConfigRepository.findByNameAndProjectSlug(configName, scope);
-            if (scoped.isPresent()) return scoped;
-            // Fall back to cross-project lookup for legacy configs without a project slug set.
-            return integrationConfigRepository.findByName(configName);
-        }
-        Optional<IntegrationConfig> scoped =
-            integrationConfigRepository.findByTypeAndIsDefaultTrueAndProjectSlug(type, scope);
-        if (scoped.isPresent()) return scoped;
-        return integrationConfigRepository.findFirstByTypeAndIsDefaultTrue(type);
+        // Delegates to the shared resolver so the pre-run diagnostic
+        // (com.workflow.preflight) and the runtime read the identical cascade.
+        return integrationResolver.resolve(configName, type);
     }
 
     /**

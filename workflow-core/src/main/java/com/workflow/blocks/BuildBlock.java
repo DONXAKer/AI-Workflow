@@ -4,6 +4,10 @@ import com.workflow.config.BlockConfig;
 import com.workflow.core.PipelineRun;
 import com.workflow.core.ShellCommandRunner;
 import com.workflow.core.expr.StringInterpolator;
+import com.workflow.preflight.PreflightContext;
+import com.workflow.preflight.PreflightRequirements;
+import com.workflow.preflight.Requirement;
+import com.workflow.preflight.ShellCommandBinary;
 import com.workflow.project.Project;
 import com.workflow.project.ProjectContext;
 import com.workflow.project.ProjectRepository;
@@ -17,7 +21,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -44,6 +50,15 @@ public class BuildBlock implements Block {
     public String getDescription() {
         return "Собирает артефакт. Если задан 'command' — выполняет shell-команду в workingDir "
             + "и парсит artifact_id из stdout (строка вида `artifact_id=...`). Без command — synthetic version.";
+    }
+
+    @Override
+    public List<Requirement> preflightRequirements(BlockConfig config, PreflightContext context) {
+        List<Requirement> reqs = new ArrayList<>();
+        reqs.add(PreflightRequirements.workingDir(config));
+        String bin = ShellCommandBinary.firstBinary(PreflightRequirements.literalString(config, "command"));
+        if (bin != null) reqs.add(new Requirement.Binary(bin));
+        return reqs;
     }
 
     @Override

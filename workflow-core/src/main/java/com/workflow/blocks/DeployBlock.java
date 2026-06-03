@@ -6,6 +6,10 @@ import com.workflow.core.ShellCommandRunner;
 import com.workflow.core.expr.StringInterpolator;
 import com.workflow.model.DeploymentHistory;
 import com.workflow.model.DeploymentHistoryRepository;
+import com.workflow.preflight.PreflightContext;
+import com.workflow.preflight.PreflightRequirements;
+import com.workflow.preflight.Requirement;
+import com.workflow.preflight.ShellCommandBinary;
 import com.workflow.project.Project;
 import com.workflow.project.ProjectContext;
 import com.workflow.project.ProjectRepository;
@@ -19,7 +23,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -43,6 +49,15 @@ public class DeployBlock implements Block {
     public String getDescription() {
         return "Разворачивает артефакт в окружение (test/staging/prod). Если задан 'command' — выполняет deploy-команду "
             + "в workingDir (kubectl apply / docker-compose up / argocd app sync); без command — placeholder result.";
+    }
+
+    @Override
+    public List<Requirement> preflightRequirements(BlockConfig config, PreflightContext context) {
+        List<Requirement> reqs = new ArrayList<>();
+        reqs.add(PreflightRequirements.workingDir(config));
+        String bin = ShellCommandBinary.firstBinary(PreflightRequirements.literalString(config, "command"));
+        if (bin != null) reqs.add(new Requirement.Binary(bin));
+        return reqs;
     }
 
     @Override
