@@ -18,7 +18,7 @@ function AiReviewOutput({ out }: { out: Record<string, unknown> }) {
   const allIssues = issues.length > 0 ? issues : blockers
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 min-w-0">
       {/* Verdict header */}
       <div className={clsx(
         'flex items-center gap-2 px-3 py-2 rounded-lg border',

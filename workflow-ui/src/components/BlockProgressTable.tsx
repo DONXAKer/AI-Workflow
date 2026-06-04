@@ -763,10 +763,10 @@ function BlockExpandedDetail({ block, calls, llmCalls, runId, spec }: {
   }, [block.blockId, runId])
 
   return (
-    <div className="border-t border-slate-800 bg-slate-950/40">
+    <div className="border-t border-slate-800 bg-slate-950/40 overflow-hidden">
       {/* 1. Output — first */}
       {hasOutput && (
-        <section className="px-5 py-4">
+        <section className="px-5 py-4 min-w-0 overflow-hidden">
           <h4 className="text-[10px] uppercase tracking-wide text-slate-400 font-medium mb-2">Результат</h4>
           {spec?.renderOutput
             ? spec.renderOutput(block.output!)
@@ -781,7 +781,7 @@ function BlockExpandedDetail({ block, calls, llmCalls, runId, spec }: {
         if (visibleKeys.length === 0) return null
         const word = visibleKeys.length === 1 ? 'поле' : visibleKeys.length < 5 ? 'поля' : 'полей'
         return (
-          <section className="px-5 py-3 border-t border-slate-800/60">
+          <section className="px-5 py-3 border-t border-slate-800/60 min-w-0 overflow-hidden">
             <button type="button" onClick={() => setInputOpen(v => !v)}
               className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-slate-500 hover:text-slate-300 font-medium transition-colors">
               {inputOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
