@@ -27,6 +27,7 @@ export interface BlockViewSpec {
 
 import { spec as verifyAcceptanceSpec } from './verify_acceptance'
 import { spec as reviewImplSpec } from './review_impl'
+import { spec as aiReviewSpec } from './ai_review'
 import { spec as implServerSpec } from './impl_server'
 import { spec as taskMdSpec } from './task_md'
 import { spec as analysisSpec } from './analysis'
@@ -87,6 +88,9 @@ const REGISTRY: Record<string, BlockViewSpec> = {
 
   // Agent verify
   verify_acceptance: verifyAcceptanceSpec,
+
+  // AI code review
+  ai_review: aiReviewSpec,
 }
 
 /**
@@ -108,7 +112,19 @@ const TYPE_REGISTRY: Record<string, BlockViewSpec> = {
   verify: verifyBlockSpec,
   agent_with_tools: implServerSpec,
   agent_verify: verifyAcceptanceSpec,
-  orchestrator: planBlockSpec, // plan-mode default; review-mode pipelines should override per-id
+  ai_review: aiReviewSpec,
+  // orchestrator is polymorphic: plan-mode outputs "goal"; review-mode outputs "passed"/"action".
+  // Dispatch at render time so ad-hoc block IDs (not in REGISTRY) still get the right view.
+  orchestrator: {
+    summary: (out) => {
+      if (typeof out.goal === 'string' && out.goal) return planBlockSpec.summary!(out)
+      return reviewImplSpec.summary!(out)
+    },
+    renderOutput: (out) =>
+      typeof out.goal === 'string' && out.goal
+        ? planBlockSpec.renderOutput ? planBlockSpec.renderOutput(out) : null
+        : reviewImplSpec.renderOutput!(out),
+  },
 }
 
 export function getBlockView(blockId: string, blockType?: string): BlockViewSpec | undefined {

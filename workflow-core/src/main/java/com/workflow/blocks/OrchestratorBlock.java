@@ -1028,9 +1028,11 @@ public class OrchestratorBlock implements Block {
             .put("description", "Brief summary of what was accomplished (1-2 sentences).");
         com.fasterxml.jackson.databind.node.ObjectNode action = props.putObject("action");
         action.put("type", "string");
-        action.putArray("enum").add("retry").add("escalate");
+        action.putArray("enum").add("continue").add("retry").add("escalate");
         action.put("description",
-            "Always 'retry' by default. Use 'escalate' ONLY for architectural conflicts the implementor "
+            "Use 'continue' when all checklist items pass — the framework treats this as PASSED and finalizes the run. "
+                + "Use 'retry' when there is a fixable functional issue (implementor can address in the next iteration). "
+                + "Use 'escalate' ONLY for architectural conflicts the implementor "
                 + "literally cannot resolve without spec changes (e.g. requirements contradict the plan).");
 
         schema.putArray("required").add("checklist_status").add("regressions").add("carry_forward").add("action");
