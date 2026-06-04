@@ -583,6 +583,9 @@ export default function SettingsTab() {
             disabled={reindexJob?.state === 'running' || !indexStats?.qdrant_enabled}
             onClick={async () => {
               if (!slug) return
+              // Optimistic update: flip to "running" before the POST resolves so the
+              // spinner and polling effect start immediately — no "nothing happened" gap.
+              setReindexJob({ state: 'running', processed: 0, total: 0, current_file: '' })
               try {
                 const job = await api.reindexProject(slug)
                 setReindexJob(job)
