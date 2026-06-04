@@ -4,7 +4,6 @@ import com.workflow.blocks.Block;
 import com.workflow.config.BlockConfig;
 import com.workflow.config.PipelineConfig;
 import com.workflow.config.Severity;
-import com.workflow.config.ValidationResult;
 import com.workflow.core.BlockRegistry;
 import com.workflow.core.PipelineRun;
 import com.workflow.integrations.IntegrationResolver;
@@ -81,11 +80,11 @@ class RunDiagnosticsTest {
     void hardFail_fromUnconditionalBlock_blocksRun() {
         registry.map.put("b1", fakeBlock("b1", List.of(new Requirement.Binary(FAKE_BINARY))));
 
-        ValidationResult result = diagnostics()
+        var result = diagnostics()
                 .diagnose(pipeline(block("step1", "b1", null)), null, noProviderCtx());
 
-        assertThat(result.valid()).isFalse();
-        assertThat(result.errors())
+        assertThat(result.ready()).isFalse();
+        assertThat(result.findings())
                 .anyMatch(e -> e.code().equals("PREFLIGHT_BINARY_MISSING") && e.severity() == Severity.ERROR);
     }
 
@@ -93,11 +92,11 @@ class RunDiagnosticsTest {
     void hardFail_fromConditionalBlock_downgradedToWarn() {
         registry.map.put("b1", fakeBlock("b1", List.of(new Requirement.Binary(FAKE_BINARY))));
 
-        ValidationResult result = diagnostics()
+        var result = diagnostics()
                 .diagnose(pipeline(block("step1", "b1", "$.x.y == true")), null, noProviderCtx());
 
-        assertThat(result.valid()).isTrue(); // WARN does not block
-        assertThat(result.errors())
+        assertThat(result.ready()).isTrue(); // WARN does not block
+        assertThat(result.findings())
                 .anyMatch(e -> e.code().equals("PREFLIGHT_BINARY_MISSING") && e.severity() == Severity.WARN);
     }
 
@@ -106,16 +105,16 @@ class RunDiagnosticsTest {
         registry.map.put("b1", fakeBlock("b1", List.of(new Requirement.Binary(FAKE_BINARY))));
         registry.map.put("b2", fakeBlock("b2", List.of(new Requirement.Binary(FAKE_BINARY))));
 
-        ValidationResult result = diagnostics().diagnose(
+        var result = diagnostics().diagnose(
                 pipeline(block("cond", "b1", "$.x == 1"), block("hard", "b2", null)),
                 null, noProviderCtx());
 
-        assertThat(result.valid()).isFalse();
-        long binaryFindings = result.errors().stream()
+        assertThat(result.ready()).isFalse();
+        long binaryFindings = result.findings().stream()
                 .filter(e -> e.code().equals("PREFLIGHT_BINARY_MISSING"))
                 .count();
         assertThat(binaryFindings).isEqualTo(1); // deduped to a single check
-        assertThat(result.errors()).allMatch(e -> e.severity() == Severity.ERROR);
+        assertThat(result.findings()).allMatch(e -> e.severity() == Severity.ERROR);
     }
 
     @Test
@@ -123,11 +122,11 @@ class RunDiagnosticsTest {
         resolver.providerConfigured = true;
         registry.map.put("b1", fakeBlock("b1", List.of(new Requirement.Provider(LlmProvider.OPENROUTER))));
 
-        ValidationResult result = diagnostics((url, t) -> new ReachabilityProbe.Result(false, "timeout"))
+        var result = diagnostics((url, t) -> new ReachabilityProbe.Result(false, "timeout"))
                 .diagnose(pipeline(block("step1", "b1", null)), null, noProviderCtx());
 
-        assertThat(result.valid()).isTrue();
-        assertThat(result.errors())
+        assertThat(result.ready()).isTrue();
+        assertThat(result.findings())
                 .anyMatch(e -> e.code().equals("PREFLIGHT_PROVIDER_UNREACHABLE") && e.severity() == Severity.WARN);
     }
 
@@ -137,10 +136,10 @@ class RunDiagnosticsTest {
         disabled.setEnabled(false);
         registry.map.put("b1", fakeBlock("b1", List.of(new Requirement.Binary(FAKE_BINARY))));
 
-        ValidationResult result = diagnostics().diagnose(pipeline(disabled), null, noProviderCtx());
+        var result = diagnostics().diagnose(pipeline(disabled), null, noProviderCtx());
 
-        assertThat(result.valid()).isTrue();
-        assertThat(result.errors()).isEmpty();
+        assertThat(result.ready()).isTrue();
+        assertThat(result.findings()).isEmpty();
     }
 
     @Test
@@ -148,17 +147,17 @@ class RunDiagnosticsTest {
         resolver.providerConfigured = false;
         PreflightContext ctx = new PreflightContext(null, LlmProvider.OPENROUTER, "default", null);
 
-        ValidationResult result = diagnostics().diagnose(pipeline(), null, ctx);
+        var result = diagnostics().diagnose(pipeline(), null, ctx);
 
-        assertThat(result.valid()).isFalse();
-        assertThat(result.errors())
+        assertThat(result.ready()).isFalse();
+        assertThat(result.findings())
                 .anyMatch(e -> e.code().equals("PREFLIGHT_PROVIDER_MISSING") && e.severity() == Severity.ERROR);
     }
 
     @Test
     void emptyRequirements_isOk() {
-        ValidationResult result = diagnostics().diagnose(pipeline(), null, noProviderCtx());
-        assertThat(result.valid()).isTrue();
-        assertThat(result.errors()).isEmpty();
+        var result = diagnostics().diagnose(pipeline(), null, noProviderCtx());
+        assertThat(result.ready()).isTrue();
+        assertThat(result.findings()).isEmpty();
     }
 }
