@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { FilePlus, FileText, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
 import clsx from 'clsx'
 import type { BlockViewSpec } from './index'
 
@@ -61,9 +62,19 @@ function ImplServerOutput({ out }: { out: Record<string, unknown> }) {
             <span className="text-slate-600 normal-case ml-1">({finalText.length} симв.)</span>
           </button>
           {textOpen && (
-            <pre className="mt-1 text-[11px] text-slate-300 bg-slate-950/60 border border-slate-800/60 rounded px-3 py-2 whitespace-pre-wrap break-words leading-relaxed max-h-96 overflow-auto">
-              {finalText}
-            </pre>
+            <div className="mt-1 px-3 py-2 bg-slate-950/60 border border-slate-800/60 rounded max-h-96 overflow-auto
+              prose prose-invert prose-sm max-w-none text-slate-200 leading-relaxed
+              [&_h1]:text-sm [&_h1]:font-semibold [&_h1]:mt-2 [&_h1]:mb-1
+              [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1
+              [&_h3]:text-xs [&_h3]:font-medium [&_h3]:mt-1.5 [&_h3]:mb-0.5
+              [&_ul]:my-1 [&_ul]:pl-4 [&_li]:my-0.5 [&_ol]:my-1 [&_ol]:pl-4
+              [&_p]:my-1 [&_p]:text-[11px]
+              [&_code]:bg-slate-800 [&_code]:px-1 [&_code]:rounded [&_code]:text-[10px] [&_code]:text-amber-200
+              [&_pre]:bg-slate-900 [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-[10px] [&_pre]:overflow-auto [&_pre]:whitespace-pre-wrap
+              [&_strong]:text-white [&_em]:text-slate-300
+              [&_blockquote]:border-l-2 [&_blockquote]:border-slate-600 [&_blockquote]:pl-3 [&_blockquote]:text-slate-400">
+              <ReactMarkdown>{finalText}</ReactMarkdown>
+            </div>
           )}
         </div>
       )}
