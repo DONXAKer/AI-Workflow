@@ -73,7 +73,7 @@ public class AllTokensProviderClient extends OpenAICompatibleProviderClient {
                 IntegrationType.ALLTOKENS, slug)
             : Optional.empty();
         if (cfg.isEmpty()) {
-            cfg = integrationConfigRepository.findFirstByTypeAndIsDefaultTrue(IntegrationType.ALLTOKENS);
+            cfg = integrationConfigRepository.findByTypeAndIsDefaultTrueAndProjectSlug(IntegrationType.ALLTOKENS, "default");
         }
         if (cfg.isPresent()) {
             IntegrationConfig c = cfg.get();
