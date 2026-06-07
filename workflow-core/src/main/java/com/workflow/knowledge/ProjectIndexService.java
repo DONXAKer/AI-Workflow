@@ -94,12 +94,27 @@ public class ProjectIndexService {
         }
         JobStatus start = JobStatus.running(0, 0, "", Instant.now());
         jobs.put(projectSlug, start);
-        runReindexFullInBackground(projectSlug, workingDir);
+        // Run off the request thread via a virtual thread so POST /reindex returns immediately
+        // with the initial "running" snapshot. @Async was previously here but was bypassed by
+        // Spring's proxy (self-invocation from the same bean), causing the entire reindex to run
+        // synchronously on the HTTP thread — the UI got no spinner/progress and only showed the
+        // new file count after a manual page reload. Tenant/project scope is propagated explicitly.
+        Long tenantId = com.workflow.account.TenantContext.get();
+        String scopeSlug = com.workflow.project.ProjectContext.get();
+        Thread.startVirtualThread(() -> {
+            if (tenantId != null) com.workflow.account.TenantContext.set(tenantId);
+            if (scopeSlug != null) com.workflow.project.ProjectContext.set(scopeSlug);
+            try {
+                runReindexFullInBackground(projectSlug, workingDir);
+            } finally {
+                com.workflow.project.ProjectContext.clear();
+                com.workflow.account.TenantContext.clear();
+            }
+        });
         return start;
     }
 
-    @Async
-    public void runReindexFullInBackground(String projectSlug, Path workingDir) {
+    void runReindexFullInBackground(String projectSlug, Path workingDir) {
         long startedAt = System.currentTimeMillis();
         try {
             // Progress callback per file: stamp jobs map so the polling UI sees it.
