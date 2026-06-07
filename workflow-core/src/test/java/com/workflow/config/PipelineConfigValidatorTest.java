@@ -562,9 +562,9 @@ class PipelineConfigValidatorTest {
         ValidationResult r = v.validate(pipeline(analysis, impl));
         assertTrue(codes(r).contains(PipelineConfigValidator.REF_UNKNOWN_FIELD),
             () -> "expected REF_UNKNOWN_FIELD, got: " + r.errors());
-        // WARN-only — must NOT make result invalid.
-        assertTrue(r.valid(),
-            () -> "REF_UNKNOWN_FIELD is WARN, result must stay valid: " + r.errors());
+        // Now ERROR — a typo'd field reference must block the run.
+        assertFalse(r.valid(),
+            () -> "REF_UNKNOWN_FIELD is ERROR, result must be invalid: " + r.errors());
     }
 
     @Test

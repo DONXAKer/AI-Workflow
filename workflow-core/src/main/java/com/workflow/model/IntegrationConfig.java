@@ -76,7 +76,9 @@ public class IntegrationConfig {
     public void setDisplayName(String displayName) { this.displayName = displayName; }
     public String getBaseUrl() { return baseUrl; }
     public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+    @com.fasterxml.jackson.annotation.JsonIgnore
     public String getToken() { return token; }
+    @com.fasterxml.jackson.annotation.JsonProperty("token")
     public void setToken(String token) { this.token = token; }
     public String getProject() { return project; }
     public void setProject(String project) { this.project = project; }

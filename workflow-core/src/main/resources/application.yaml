@@ -105,10 +105,20 @@ workflow:
     # and is opt-in until cross-cutting concerns are validated per-block. Operator can
     # still call DagLevelExecutor.computeLevels() for DAG visualization while the flag is off.
     enabled: false
+  runtime:
+    # When true, block.timeout_seconds is enforced for block execution (not just approval gates).
+    # A hung LLM call or shell command is interrupted and treated as a retryable failure.
+    # Blocks without timeout_seconds set are unaffected. Default true — the implementation is
+    # well-tested; set to false only as an emergency kill-switch.
+    block-timeout-enabled: true
   encryption:
     # 32 bytes (AES-256), Base64-encoded. Override via WORKFLOW_ENCRYPTION_KEY in prod.
     # When absent, a development key is used with a loud warning at startup.
     key: ${WORKFLOW_ENCRYPTION_KEY:}
+    # Set to true (via WORKFLOW_ENCRYPTION_REQUIRE_KEY=true) in non-dev environments to
+    # fail fast at startup if the key is not configured instead of silently using the
+    # shared development key. Prevents accidental key-less production deployments.
+    require-key: ${WORKFLOW_ENCRYPTION_REQUIRE_KEY:false}
   security:
     remember-me:
       # Secret used to sign the TokenBasedRememberMeServices cookie. MUST be overridden via
@@ -137,6 +147,11 @@ workflow:
     # nomic-embed-text:v1.5 supports 2048 tokens (~6000 chars). 50 lines ≈ 400-600 tokens.
     chunk-lines: 50
     chunk-overlap: 10
+    # Minimum cosine similarity score for knowledge-base search results. Hits below this
+    # threshold are discarded server-side (Qdrant score_threshold). Lower values return
+    # more results but increase noise in LLM prompts; 0.5 is a reasonable starting point
+    # for code with nomic-embed-text. Set to 0.0 to disable filtering (legacy behaviour).
+    similarity-threshold: 0.5
 
 logging:
   level:

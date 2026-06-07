@@ -111,16 +111,51 @@ public class QdrantClient {
         }
     }
 
-    /** Returns the top-K most similar points to {@code queryVector}. */
+    /**
+     * Returns the top-K most similar points to {@code queryVector}, optionally filtered
+     * by a minimum cosine similarity score. Use the two-argument overload when no threshold
+     * is needed (score_threshold defaults to 0.0, matching all results).
+     */
     public List<SearchResult> search(String collection, float[] queryVector, int limit) {
-        if (!isEnabled()) return List.of();
-        try {
-            ObjectNode body = mapper.createObjectNode();
-            ArrayNode vec = body.putArray("vector");
-            for (float f : queryVector) vec.add(f);
-            body.put("limit", Math.max(1, Math.min(limit, 50)));
-            body.put("with_payload", true);
+        return search(collection, queryVector, limit, 0.0);
+    }
 
+    /**
+     * Returns the top-K most similar points whose score is ≥ {@code minScore}. Qdrant's
+     * native {@code score_threshold} filter runs server-side, so it never bloats the
+     * network response with low-confidence noise before we can discard it.
+     *
+     * @param minScore cosine similarity floor in [0.0, 1.0]; 0.0 = no filtering.
+     */
+    public List<SearchResult> search(String collection, float[] queryVector, int limit, double minScore) {
+        if (!isEnabled()) return List.of();
+        int attempt = 0;
+        while (true) {
+            try {
+                return doSearch(collection, queryVector, limit, minScore);
+            } catch (Exception e) {
+                attempt++;
+                if (attempt >= 3) {
+                    log.warn("Qdrant search({}) failed after {} attempts: {}", collection, attempt, e.getMessage());
+                    return List.of();
+                }
+                try { Thread.sleep(500L * attempt); } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return List.of();
+                }
+            }
+        }
+    }
+
+    private List<SearchResult> doSearch(String collection, float[] queryVector, int limit, double minScore) {
+        ObjectNode body = mapper.createObjectNode();
+        ArrayNode vec = body.putArray("vector");
+        for (float f : queryVector) vec.add(f);
+        body.put("limit", Math.max(1, Math.min(limit, 50)));
+        body.put("with_payload", true);
+        if (minScore > 0.0) body.put("score_threshold", minScore);
+
+        try {
             String resp = client.post()
                 .uri("/collections/{name}/points/search", collection)
                 .bodyValue(body)
@@ -140,8 +175,7 @@ public class QdrantClient {
             }
             return out;
         } catch (Exception e) {
-            log.warn("Qdrant search({}) failed: {}", collection, e.getMessage());
-            return List.of();
+            throw new RuntimeException("Qdrant search failed: " + e.getMessage(), e);
         }
     }
 

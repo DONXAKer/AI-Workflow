@@ -178,7 +178,10 @@ public class GitHubActionsBlock implements Block {
     }
 
     private String calculateOverallStatus(List<Map<String, Object>> runs) {
-        if (runs.isEmpty()) return "no_runs";
+        // Treat an empty run list as a hard failure — it means either the workflow was never
+        // triggered or timed out waiting. Returning "no_runs" previously allowed pipelines
+        // to continue silently as if CI passed, which hid hung or missing workflows.
+        if (runs.isEmpty()) return "failure";
 
         boolean allSuccess = true;
         boolean anyFailure = false;

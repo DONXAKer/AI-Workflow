@@ -1003,7 +1003,7 @@ public class PipelineConfigValidator {
     }
 
     /**
-     * Emits {@link #REF_UNKNOWN_FIELD} (severity {@link Severity#WARN}) when {@code tail}
+     * Emits {@link #REF_UNKNOWN_FIELD} (severity {@link Severity#ERROR}) when {@code tail}
      * starts with a field name not present in the referenced block's declared
      * {@code outputs}. Silently skips when:
      * <ul>
@@ -1040,7 +1040,7 @@ public class PipelineConfigValidator {
                 "Reference '" + formatRef(ref, usedPattern) + "' points at field '"
                     + firstSegment + "' which is not declared in block '" + head
                     + "' (" + blockType + ") outputs. Known outputs: " + knownNames,
-                location, referrerId, Severity.WARN));
+                location, referrerId, Severity.ERROR));
         }
     }
 
