@@ -117,13 +117,6 @@ export default function TechStackEditor({ projectSlug, initialTechStack, onTechS
     setHasChanges(true)
   }
 
-  const handleEditTech = (index: number, field: 'name' | 'version', value: string) => {
-    const updated = [...techStack]
-    updated[index] = { ...updated[index], [field]: value.trim() || undefined }
-    setTechStack(updated)
-    setHasChanges(true)
-  }
-
   const toggleExpanded = (name: string) => {
     const set = new Set(expandedItems)
     if (set.has(name)) {

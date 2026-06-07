@@ -589,6 +589,8 @@ export interface ProjectInfo {
   defaultTrackerProvider?: string | null
   /** Relative path inside workingDir for task .md files. Defaults to "tasks/active". */
   tasksDir?: string | null
+  /** JSON array of detected/manual tech stack items [{name, version?, category?}]. */
+  techStackJson?: string | null
   createdAt: string
   updatedAt: string
 }
