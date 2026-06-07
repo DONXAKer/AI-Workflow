@@ -121,6 +121,9 @@ public class PipelineRunner {
     @Autowired(required = false)
     private com.workflow.workspace.WorkspaceProvisioner workspaceProvisioner;
 
+    @Autowired(required = false)
+    private com.workflow.project.ProjectStackScanner projectStackScanner;
+
     /** Tracks virtual threads running active pipelines for cancellation */
     private final ConcurrentHashMap<UUID, Thread> runningThreads = new ConcurrentHashMap<>();
 
@@ -202,6 +205,9 @@ public class PipelineRunner {
                 log.info("Auto-approve-all enabled for run {}", runId);
             }
         }
+        // Auto-detect tech stack if empty
+        autoDetectTechStackIfNeeded(pipelineRun.getProjectSlug());
+        
         techStackPromptEnricher.enrich(config, pipelineRun.getProjectSlug());
         captureConfigSnapshot(pipelineRun, config);
         runRepository.save(pipelineRun);
@@ -2133,6 +2139,51 @@ public class PipelineRunner {
             run.getOutputs().add(blockOutput);
         } catch (Exception e) {
             log.error("Failed to save output for block {}: {}", blockId, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Автоматически сканирует стек технологий проекта если он еще не определен.
+     * Вызывается перед запуском pipeline для обеспечения наличия данных о стеке.
+     */
+    private void autoDetectTechStackIfNeeded(String projectSlug) {
+        if (projectStackScanner == null || projectRepository == null) {
+            log.debug("ProjectStackScanner or ProjectRepository not available, skipping auto-detection");
+            return;
+        }
+
+        try {
+            com.workflow.project.Project project = projectRepository.findBySlug(projectSlug).orElse(null);
+            if (project == null) {
+                log.debug("Project not found for slug: {}, skipping auto-detection", projectSlug);
+                return;
+            }
+
+            String existingTechStack = project.getTechStackJson();
+            if (existingTechStack != null && !existingTechStack.trim().isEmpty() && !"[]".equals(existingTechStack.trim())) {
+                log.debug("Project {} already has tech stack defined, skipping auto-detection", projectSlug);
+                return;
+            }
+
+            String workingDir = project.getWorkingDir();
+            if (workingDir == null || workingDir.trim().isEmpty()) {
+                log.debug("Project {} has no working directory configured, skipping auto-detection", projectSlug);
+                return;
+            }
+
+            log.info("Auto-detecting tech stack for project: {}", projectSlug);
+            String detectedStack = projectStackScanner.scanProject(workingDir);
+            
+            if (detectedStack != null && !detectedStack.trim().isEmpty() && !"[]".equals(detectedStack.trim())) {
+                project.setTechStackJson(detectedStack);
+                projectRepository.save(project);
+                log.info("Auto-detected and saved tech stack for project {}: {}", projectSlug, detectedStack);
+            } else {
+                log.debug("No technologies detected for project: {}", projectSlug);
+            }
+
+        } catch (Exception e) {
+            log.warn("Failed to auto-detect tech stack for project {}: {}", projectSlug, e.getMessage());
         }
     }
 }
