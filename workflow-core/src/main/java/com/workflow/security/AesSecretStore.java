@@ -42,6 +42,15 @@ public class AesSecretStore implements SecretStore {
     @Value("${workflow.encryption.key:}")
     private String configuredKeyBase64;
 
+    /**
+     * When {@code true}, startup fails hard if {@code workflow.encryption.key} is absent instead
+     * of silently using the shared dev key. Set {@code WORKFLOW_ENCRYPTION_REQUIRE_KEY=true} (or
+     * {@code workflow.encryption.require-key: true} in application.yaml) in every non-dev
+     * environment to prevent accidental key-less deployments.
+     */
+    @Value("${workflow.encryption.require-key:false}")
+    private boolean requireKey;
+
     private SecretKey secretKey;
     private final SecureRandom random = new SecureRandom();
 
@@ -49,8 +58,14 @@ public class AesSecretStore implements SecretStore {
     void init() {
         byte[] keyBytes;
         if (configuredKeyBase64 == null || configuredKeyBase64.isBlank()) {
+            if (requireKey) {
+                throw new IllegalStateException(
+                    "workflow.encryption.key is not configured and workflow.encryption.require-key=true. "
+                        + "Set WORKFLOW_ENCRYPTION_KEY to a 32-byte Base64-encoded AES-256 key.");
+            }
             log.warn("!!! workflow.encryption.key is not set. Falling back to a DEVELOPMENT key. "
-                + "This is UNSAFE for production — set WORKFLOW_ENCRYPTION_KEY to a 32-byte base64-encoded key.");
+                + "This is UNSAFE for production — set WORKFLOW_ENCRYPTION_KEY and "
+                + "workflow.encryption.require-key=true to enforce key presence at startup.");
             keyBytes = Base64.getDecoder().decode(DEV_KEY_BASE64);
         } else {
             try {

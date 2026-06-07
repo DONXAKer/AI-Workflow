@@ -42,6 +42,7 @@ public final class DenyList {
     );
 
     private static final List<String> BASH_DENY_SUBSTRINGS = List.of(
+        // Destructive git / fs
         "git push --force",
         "git push -f",
         "git reset --hard",
@@ -50,8 +51,25 @@ public final class DenyList {
         "rm -r -f",
         "rm -f -r",
         "chmod -R",
+        // Pipe-to-shell execution (normalized form: spaces around |)
         "| sh",
-        "| bash"
+        "| bash",
+        "| zsh",
+        "| dash",
+        "| ash",
+        // Inline script execution via interpreter -e/-c flags
+        "python -c",
+        "python2 -c",
+        "python3 -c",
+        "perl -e",
+        "ruby -e",
+        "node -e",
+        "nodejs -e",
+        // Base64-decode-and-pipe shell one-liners
+        "base64 -d",
+        "base64 --decode",
+        // Eval execution — catches `eval $(...)` and `eval "..."`
+        "eval "
     );
 
     public static void assertWriteAllowed(Path target) {

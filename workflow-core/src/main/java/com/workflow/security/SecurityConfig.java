@@ -87,6 +87,10 @@ public class SecurityConfig {
         return new RememberMeAuthenticationProvider(key);
     }
 
+    /** H2 console is only enabled in dev environments via spring.h2.console.enabled=true. */
+    @Value("${spring.h2.console.enabled:false}")
+    private boolean h2ConsoleEnabled;
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http,
                                            AuthenticationManager authenticationManager,
@@ -97,33 +101,42 @@ public class SecurityConfig {
         requestHandler.setCsrfRequestAttributeName(null);  // always populate the deferred token
 
         http
-            .csrf(csrf -> csrf
-                .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
-                .csrfTokenRequestHandler(requestHandler)
-                .ignoringRequestMatchers(
-                    "/api/auth/login",
-                    "/api/auth/register",
-                    "/api/auth/logout",
-                    "/ws/**",
-                    "/api/webhooks/**",
-                    "/h2-console/**"))
-            .headers(h -> h.frameOptions(f -> f.sameOrigin()))  // H2 console
+            .csrf(csrf -> {
+                var ignoring = csrf
+                    .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+                    .csrfTokenRequestHandler(requestHandler)
+                    .ignoringRequestMatchers(
+                        "/api/auth/login",
+                        "/api/auth/register",
+                        "/api/auth/logout",
+                        "/ws/**",
+                        "/api/webhooks/**");
+                // Only exempt H2 console from CSRF when it's actually enabled.
+                if (h2ConsoleEnabled) ignoring.ignoringRequestMatchers("/h2-console/**");
+            })
+            .headers(h -> {
+                if (h2ConsoleEnabled) h.frameOptions(f -> f.sameOrigin());  // H2 console needs frames
+            })
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers(
+            .authorizeHttpRequests(auth -> {
+                // Base open paths — always accessible without authentication.
+                auth.requestMatchers(
                     "/api/auth/login",
                     "/api/auth/register",
                     "/api/auth/verify-email",
                     "/api/auth/logout",
                     "/ws/**",
                     "/api/webhooks/**",
-                    "/h2-console/**",
                     "/actuator/health",
                     "/actuator/info",
-                    "/actuator/prometheus").permitAll()
-                .requestMatchers("/api/**").authenticated()
-                .anyRequest().permitAll()  // static assets, SPA index
-            )
+                    "/actuator/prometheus").permitAll();
+                // H2 console only accessible when explicitly enabled (dev only).
+                if (h2ConsoleEnabled) {
+                    auth.requestMatchers("/h2-console/**").permitAll();
+                }
+                auth.requestMatchers("/api/**").authenticated()
+                    .anyRequest().permitAll();  // static assets, SPA index
+            })
             .exceptionHandling(e -> e.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
             .formLogin(form -> form.disable())
             .httpBasic(basic -> basic.disable())

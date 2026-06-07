@@ -122,7 +122,14 @@ public class GitLabCIBlock implements Block {
         log.info("Waiting for GitLab CI pipeline {} (MR #{}, timeout={}s)", pipelineId, mrIid, timeoutSeconds);
 
         // Wait for pipeline to finish
-        String finalStatus = gitLabClient.waitForPipeline(pipelineId, timeoutSeconds);
+        String rawStatus = gitLabClient.waitForPipeline(pipelineId, timeoutSeconds);
+        // Treat a "timeout" return from the poller as a hard failure so downstream
+        // on_failure loopbacks and status checks see a concrete failure rather than an
+        // ambiguous "timeout" string that most pipelines don't handle explicitly.
+        String finalStatus = "timeout".equalsIgnoreCase(rawStatus) ? "failed" : rawStatus;
+        if (!"failed".equals(finalStatus) && !rawStatus.equals(finalStatus)) {
+            log.warn("GitLab CI pipeline {} timed out — treating as failed", pipelineId);
+        }
 
         // Get pipeline details for stage summary
         Map<String, Object> pipelineDetails = gitLabClient.getPipelineStatus(pipelineId);

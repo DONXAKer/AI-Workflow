@@ -31,6 +31,9 @@ public class QdrantKnowledgeBase implements KnowledgeBase {
     private final QdrantClient qdrant;
     private final OllamaEmbedder embedder;
 
+    @org.springframework.beans.factory.annotation.Value("${workflow.knowledge.similarity-threshold:0.5}")
+    private double similarityThreshold;
+
     @Autowired
     public QdrantKnowledgeBase(QdrantClient qdrant, OllamaEmbedder embedder) {
         this.qdrant = qdrant;
@@ -52,7 +55,7 @@ public class QdrantKnowledgeBase implements KnowledgeBase {
         }
 
         String collection = collectionName(projectSlug);
-        List<QdrantClient.SearchResult> raw = qdrant.search(collection, vector, nResults);
+        List<QdrantClient.SearchResult> raw = qdrant.search(collection, vector, nResults, similarityThreshold);
         List<KnowledgeHit> out = new ArrayList<>(raw.size());
         for (QdrantClient.SearchResult r : raw) {
             JsonNode p = r.payload();

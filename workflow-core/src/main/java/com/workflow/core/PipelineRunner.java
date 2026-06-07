@@ -80,6 +80,9 @@ public class PipelineRunner {
     @Autowired(required = false)
     private com.workflow.notifications.NotificationChannelRegistry notificationChannelRegistry;
 
+    @Autowired(required = false)
+    private com.workflow.notifications.NotificationRateLimiter notificationRateLimiter;
+
     @Autowired
     private AgentProfileResolver agentProfileResolver;
 
@@ -684,8 +687,14 @@ public class PipelineRunner {
                 "^\\$\\.([\\w]+)\\.([\\w]+)(\\s*\\|\\s*length)?\\s*(==|!=|>=|<=|>|<)\\s*(.+)$");
             Matcher m = pattern.matcher(expr.trim());
             if (!m.matches()) {
-                log.warn("Condition expression not parseable: {}", expr);
-                return true;
+                // Unparseable condition: throw so the block is failed with a clear message
+                // rather than silently treating the guard as "always pass". A malformed
+                // condition (e.g. missing spaces around the operator) would otherwise disable
+                // the check entirely without any operator-visible signal.
+                throw new IllegalArgumentException(
+                    "Condition expression could not be parsed: '" + expr + "'. "
+                    + "Expected format: $.blockId.field [| length] OP value  "
+                    + "(OP is ==, !=, >, <, >=, <=; string values may be quoted)");
             }
 
             String blockId = m.group(1);
@@ -742,6 +751,9 @@ public class PipelineRunner {
                     default -> true;
                 };
             }
+        } catch (IllegalArgumentException e) {
+            // Syntax error — re-throw so the block fails visibly instead of running unconditionally.
+            throw e;
         } catch (Exception e) {
             log.warn("Error evaluating condition '{}': {}", expr, e.getMessage());
             return true;
@@ -1764,6 +1776,7 @@ public class PipelineRunner {
         runRepository.save(run);
         if (wsHandler != null) wsHandler.sendRunComplete(run.getId(), "FAILED");
         if (metrics != null) metrics.recordRunComplete("failed");
+        broadcastFailureNotification(run, run.getCurrentBlock(), error);
     }
 
     private void markFailed(PipelineRun run, String summary, Throwable cause) {
@@ -1774,6 +1787,51 @@ public class PipelineRunner {
         runRepository.save(run);
         if (wsHandler != null) wsHandler.sendRunComplete(run.getId(), "FAILED");
         if (metrics != null) metrics.recordRunComplete("failed");
+        broadcastFailureNotification(run, run.getCurrentBlock(), summary);
+    }
+
+    private void broadcastFailureNotification(PipelineRun run, String blockId, String errorSummary) {
+        if (notificationChannelRegistry == null) return;
+        if (notificationRateLimiter != null
+                && !notificationRateLimiter.shouldSend(
+                        run.getId() != null ? run.getId().toString() : null, blockId)) {
+            return;
+        }
+        try {
+            String truncated = errorSummary != null && errorSummary.length() > 300
+                    ? errorSummary.substring(0, 300) + "…" : errorSummary;
+            String runLink = "http://localhost:5120/runs/" + run.getId();
+            String body = (blockId != null ? "Block **" + blockId + "** failed.\n" : "")
+                + (truncated != null ? truncated + "\n" : "")
+                + "Run: " + run.getId();
+            var msg = new com.workflow.notifications.NotificationMessage(
+                com.workflow.notifications.NotificationMessage.Severity.HIGH,
+                "Pipeline failed — " + (run.getRequirement() != null
+                    ? run.getRequirement().substring(0, Math.min(60, run.getRequirement().length()))
+                    : run.getId()),
+                body, runLink,
+                java.util.Map.of("runId", run.getId() != null ? run.getId().toString() : "",
+                                 "blockId", blockId != null ? blockId : "")
+            );
+            if (notificationChannelRegistry.supports("ui")) {
+                notificationChannelRegistry.get("ui").send(msg, java.util.Map.of());
+            }
+            String slackWebhook = System.getenv("SLACK_WEBHOOK_URL");
+            if (slackWebhook != null && !slackWebhook.isBlank()
+                    && notificationChannelRegistry.supports("slack")) {
+                notificationChannelRegistry.get("slack").send(msg, java.util.Map.of("webhookUrl", slackWebhook));
+            }
+            String tgToken = System.getenv("TELEGRAM_BOT_TOKEN");
+            String tgChatId = System.getenv("TELEGRAM_CHAT_ID");
+            if (tgToken != null && !tgToken.isBlank() && tgChatId != null && !tgChatId.isBlank()
+                    && notificationChannelRegistry.supports("telegram")) {
+                notificationChannelRegistry.get("telegram").send(msg,
+                    java.util.Map.of("botToken", tgToken, "chatId", tgChatId));
+            }
+        } catch (Exception e) {
+            log.warn("Failed to broadcast failure notification for run={} block={}: {}",
+                run.getId(), blockId, e.getMessage());
+        }
     }
 
     /**
