@@ -305,7 +305,9 @@ public class RunController {
             // precise error list; warnings (reachability / conditional-block prerequisites) do not
             // block and ride along in the success response. dryRun is gated too — it exists to
             // check "will this run". Fail-open: a diagnostic bug must never block a legitimate run.
-            List<ValidationError> preflightWarnings = List.of();
+            // preflightSummary rides along on the success response so the caller gets a POSITIVE
+            // confirmation the gate ran and approved the run (vs. silence == "did it even run?").
+            Map<String, Object> preflightSummary = Map.of("enabled", false);
             if (preflightDiagnosticsEnabled) {
                 try {
                     PreflightContext pfCtx = new PreflightContext(
@@ -313,22 +315,38 @@ public class RunController {
                         resolveRunProvider(namedInputs),
                         ProjectContext.get(),
                         config.getIntegrations());
-                    ValidationResult diag = runDiagnostics.diagnose(config, fromBlock, pfCtx);
-                    if (!diag.valid()) {
+                    RunDiagnostics.PreflightReport report = runDiagnostics.diagnose(config, fromBlock, pfCtx);
+                    if (!report.ready()) {
                         auditService.recordFailure("PREFLIGHT", "run", runId.toString(), Map.of(
                             "reason", "environment_not_ready",
                             "configPath", configPath,
-                            "failedRequirements", diag.errors().stream()
+                            "checksRun", report.checksRun(),
+                            "failedRequirements", report.findings().stream()
                                 .filter(e -> e.severity() == Severity.ERROR)
                                 .map(ValidationError::code).collect(Collectors.toList())));
                         Map<String, Object> body = new LinkedHashMap<>();
                         body.put("error", "Environment not ready");
-                        body.put("errors", diag.errors());
+                        body.put("errors", report.findings());
+                        body.put("checksRun", report.checksRun());
                         return ResponseEntity.status(422).body(body);
                     }
-                    preflightWarnings = diag.errors(); // valid() == true → only WARN/INFO remain
+                    // Passed — record a positive audit entry and a summary for the response.
+                    List<ValidationError> warns = report.warnings();
+                    auditService.record("PREFLIGHT_PASSED", "run", runId.toString(), Map.of(
+                        "configPath", configPath,
+                        "checksRun", report.checksRun(),
+                        "warnings", warns.size()));
+                    Map<String, Object> s = new LinkedHashMap<>();
+                    s.put("enabled", true);
+                    s.put("passed", true);
+                    s.put("checks", report.checksRun());
+                    s.put("warnings", warns);
+                    preflightSummary = s;
+                    log.info("Preflight passed for run {} — {} checks, {} warning(s)",
+                        runId, report.checksRun(), warns.size());
                 } catch (Exception e) {
                     log.warn("Pre-run diagnostics errored — proceeding without gate: {}", e.getMessage(), e);
+                    preflightSummary = Map.of("enabled", true, "passed", true, "error", "diagnostics_skipped");
                 }
             }
 
@@ -351,9 +369,7 @@ public class RunController {
             response.put("runId", runId.toString());
             response.put("id", runId.toString());
             response.put("status", "RUNNING");
-            if (!preflightWarnings.isEmpty()) {
-                response.put("warnings", preflightWarnings);
-            }
+            response.put("preflight", preflightSummary);
 
             auditService.record("RUN_START", "run", runId.toString(), Map.of(
                 "configPath", configPath,

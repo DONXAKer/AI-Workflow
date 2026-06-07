@@ -4,7 +4,6 @@ import com.workflow.blocks.Block;
 import com.workflow.config.BlockConfig;
 import com.workflow.config.PipelineConfig;
 import com.workflow.config.ValidationError;
-import com.workflow.config.ValidationResult;
 import com.workflow.core.BlockRegistry;
 import com.workflow.core.PipelineRunner;
 import org.slf4j.Logger;
@@ -58,30 +57,48 @@ public class RunDiagnostics {
     private record Gathered(Requirement req, boolean conditional) {}
 
     /**
+     * Outcome of the gate. Carries a positive signal (how many checks ran, did it pass) so the
+     * caller can confirm the gate actually executed and approved the run — not just stayed silent.
+     *
+     * @param ready     {@code true} iff no hard failures (run may start)
+     * @param checksRun number of distinct requirements verified (after dedup)
+     * @param findings  all surfaced {@link ValidationError}s — ERRORs (when not ready) and WARNs
+     */
+    public record PreflightReport(boolean ready, int checksRun, List<ValidationError> findings) {
+        /** WARN/INFO findings only (errors excluded) — what rides along on a successful start. */
+        public List<ValidationError> warnings() {
+            return findings.stream()
+                    .filter(e -> e.severity() != com.workflow.config.Severity.ERROR)
+                    .toList();
+        }
+    }
+
+    /**
      * Run the gate.
      *
      * @param config    the loaded pipeline
      * @param fromBlock entry-point block id ({@code null} = run from the start)
      * @param ctx       run-start environment snapshot
      */
-    public ValidationResult diagnose(PipelineConfig config, String fromBlock, PreflightContext ctx) {
+    public PreflightReport diagnose(PipelineConfig config, String fromBlock, PreflightContext ctx) {
         Map<String, Gathered> deduped = gather(config, fromBlock, ctx);
-        if (deduped.isEmpty()) return ValidationResult.ok();
+        if (deduped.isEmpty()) return new PreflightReport(true, 0, List.of());
 
         List<Gathered> reqs = new ArrayList<>(deduped.values());
         List<CheckResult> results = runChecks(reqs, ctx);
 
-        List<ValidationError> errors = new ArrayList<>();
+        List<ValidationError> findings = new ArrayList<>();
         for (int i = 0; i < results.size(); i++) {
             CheckResult result = results.get(i);
             boolean conditional = reqs.get(i).conditional();
             ValidationError err = toError(result, conditional);
             if (err != null) {
-                errors.add(err);
+                findings.add(err);
                 record(err);
             }
         }
-        return ValidationResult.of(errors);
+        boolean ready = findings.stream().noneMatch(e -> e.severity() == com.workflow.config.Severity.ERROR);
+        return new PreflightReport(ready, reqs.size(), List.copyOf(findings));
     }
 
     /** Collect, tag and dedupe requirements from the reachable, enabled blocks plus the run-level base. */
