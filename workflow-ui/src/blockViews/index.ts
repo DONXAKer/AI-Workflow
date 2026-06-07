@@ -28,6 +28,7 @@ export interface BlockViewSpec {
 import { spec as verifyAcceptanceSpec } from './verify_acceptance'
 import { spec as reviewImplSpec } from './review_impl'
 import { spec as implServerSpec } from './impl_server'
+import { spec as codeGenerationSpec } from './code_generation'
 import { spec as taskMdSpec } from './task_md'
 import { spec as analysisSpec } from './analysis'
 import { spec as shellExecSpec } from './shell_exec'
@@ -87,6 +88,9 @@ const REGISTRY: Record<string, BlockViewSpec> = {
 
   // Agent verify
   verify_acceptance: verifyAcceptanceSpec,
+
+  // Code generation
+  codegen: codeGenerationSpec,
 }
 
 /**
@@ -108,6 +112,7 @@ const TYPE_REGISTRY: Record<string, BlockViewSpec> = {
   verify: verifyBlockSpec,
   agent_with_tools: implServerSpec,
   agent_verify: verifyAcceptanceSpec,
+  code_generation: codeGenerationSpec,
   orchestrator: planBlockSpec, // plan-mode default; review-mode pipelines should override per-id
 }
 
