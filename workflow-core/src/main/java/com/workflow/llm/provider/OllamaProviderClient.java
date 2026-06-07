@@ -474,7 +474,7 @@ public class OllamaProviderClient implements LlmProviderClient {
     private WebClient buildWebClient() {
         String baseUrl = "http://localhost:11434";
         Optional<IntegrationConfig> ollamaConfig =
-            integrationConfigRepository.findFirstByTypeAndIsDefaultTrue(IntegrationType.OLLAMA);
+            integrationConfigRepository.findByTypeAndIsDefaultTrueAndProjectSlug(IntegrationType.OLLAMA, "default");
         if (ollamaConfig.isPresent()) {
             IntegrationConfig cfg = ollamaConfig.get();
             if (cfg.getBaseUrl() != null && !cfg.getBaseUrl().isBlank()) {
@@ -508,7 +508,7 @@ public class OllamaProviderClient implements LlmProviderClient {
 
     private boolean isReasoningDisabled() {
         Optional<IntegrationConfig> cfg =
-            integrationConfigRepository.findFirstByTypeAndIsDefaultTrue(IntegrationType.OLLAMA);
+            integrationConfigRepository.findByTypeAndIsDefaultTrueAndProjectSlug(IntegrationType.OLLAMA, "default");
         if (cfg.isEmpty()) return false;
         String extra = cfg.get().getExtraConfigJson();
         if (extra == null || extra.isBlank()) return false;

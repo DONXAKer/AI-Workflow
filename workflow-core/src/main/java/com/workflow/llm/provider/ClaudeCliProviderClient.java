@@ -256,7 +256,7 @@ public class ClaudeCliProviderClient implements LlmProviderClient {
             if (preferred == LlmProvider.CLAUDE_CODE_CLI) return true;
 
             boolean cliAvailable = integrationConfigRepository
-                .findFirstByTypeAndIsDefaultTrue(IntegrationType.CLAUDE_CODE_CLI)
+                .findByTypeAndIsDefaultTrueAndProjectSlug(IntegrationType.CLAUDE_CODE_CLI, "default")
                 .isPresent();
             if (!cliAvailable) return false;
 
@@ -274,7 +274,7 @@ public class ClaudeCliProviderClient implements LlmProviderClient {
         if (envBin != null && !envBin.isBlank()) return envBin;
         try {
             return integrationConfigRepository
-                .findFirstByTypeAndIsDefaultTrue(IntegrationType.CLAUDE_CODE_CLI)
+                .findByTypeAndIsDefaultTrueAndProjectSlug(IntegrationType.CLAUDE_CODE_CLI, "default")
                 .map(IntegrationConfig::getBaseUrl)
                 .filter(s -> s != null && !s.isBlank())
                 .orElse("claude");

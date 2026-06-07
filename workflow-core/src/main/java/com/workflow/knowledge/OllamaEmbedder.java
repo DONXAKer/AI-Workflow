@@ -122,7 +122,7 @@ public class OllamaEmbedder {
     private WebClient buildClient() {
         String baseUrl = "http://localhost:11434";
         Optional<IntegrationConfig> ollamaConfig =
-            integrationRepo.findFirstByTypeAndIsDefaultTrue(IntegrationType.OLLAMA);
+            integrationRepo.findByTypeAndIsDefaultTrueAndProjectSlug(IntegrationType.OLLAMA, "default");
         if (ollamaConfig.isPresent()) {
             String url = ollamaConfig.get().getBaseUrl();
             if (url != null && !url.isBlank()) {
