@@ -28,7 +28,7 @@ function ReviewOutput({ out }: { out: Record<string, unknown> }) {
   const degradedReason = typeof out.degraded_reason === 'string' ? out.degraded_reason : ''
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 min-w-0">
       <div className={clsx(
         'flex items-center gap-2 px-3 py-2 rounded-lg border',
         passed ? 'bg-green-950/30 border-green-800/50' : 'bg-amber-950/30 border-amber-800/50',

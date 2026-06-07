@@ -27,6 +27,7 @@ export interface BlockViewSpec {
 
 import { spec as verifyAcceptanceSpec } from './verify_acceptance'
 import { spec as reviewImplSpec } from './review_impl'
+import { spec as aiReviewSpec } from './ai_review'
 import { spec as implServerSpec } from './impl_server'
 import { spec as codeGenerationSpec } from './code_generation'
 import { spec as taskMdSpec } from './task_md'
@@ -91,6 +92,9 @@ const REGISTRY: Record<string, BlockViewSpec> = {
 
   // Code generation
   codegen: codeGenerationSpec,
+
+  // AI code review
+  ai_review: aiReviewSpec,
 }
 
 /**
@@ -113,7 +117,17 @@ const TYPE_REGISTRY: Record<string, BlockViewSpec> = {
   agent_with_tools: implServerSpec,
   agent_verify: verifyAcceptanceSpec,
   code_generation: codeGenerationSpec,
-  orchestrator: planBlockSpec, // plan-mode default; review-mode pipelines should override per-id
+  ai_review: aiReviewSpec,
+  orchestrator: {
+    summary: (out) => {
+      if (typeof out.goal === 'string' && out.goal) return planBlockSpec.summary!(out)
+      return reviewImplSpec.summary!(out)
+    },
+    renderOutput: (out) =>
+      typeof out.goal === 'string' && out.goal
+        ? planBlockSpec.renderOutput ? planBlockSpec.renderOutput(out) : null
+        : reviewImplSpec.renderOutput!(out),
+  },
 }
 
 export function getBlockView(blockId: string, blockType?: string): BlockViewSpec | undefined {
