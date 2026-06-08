@@ -11,7 +11,7 @@ export const spec: BlockViewSpec = {
   },
   fields: [
     { key: 'estimated_complexity', label: 'Сложность', kind: 'string' },
-    { key: 'technical_approach', label: 'Технический подход', kind: 'multiline', emphasis: true },
+    { key: 'technical_approach', label: 'Технический подход', kind: 'markdown', emphasis: true },
     { key: 'affected_components', label: 'Затронутые компоненты', kind: 'list' },
     { key: 'acceptance_checklist', label: 'Acceptance checklist', kind: 'objList', emphasis: true },
     { key: 'needs_clarification', label: 'Требует уточнений', kind: 'bool' },

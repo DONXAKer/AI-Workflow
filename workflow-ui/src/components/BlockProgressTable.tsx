@@ -451,6 +451,43 @@ function SmartTruncatedPre({ text }: { text: string }) {
   )
 }
 
+const MD_PROSE = `prose prose-invert prose-sm max-w-none text-slate-200 leading-relaxed
+  [&_h1]:text-sm [&_h1]:font-semibold [&_h1]:mt-2 [&_h1]:mb-1
+  [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1
+  [&_h3]:text-xs [&_h3]:font-medium [&_h3]:mt-1.5 [&_h3]:mb-0.5
+  [&_ul]:my-1 [&_ul]:pl-4 [&_li]:my-0.5 [&_ol]:my-1 [&_ol]:pl-4
+  [&_p]:my-1 [&_p]:text-[11px]
+  [&_code]:bg-slate-800 [&_code]:px-1 [&_code]:rounded [&_code]:text-[10px] [&_code]:text-amber-200
+  [&_pre]:bg-slate-900 [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-[10px] [&_pre]:overflow-auto [&_pre]:whitespace-pre-wrap
+  [&_strong]:text-white [&_em]:text-slate-300
+  [&_blockquote]:border-l-2 [&_blockquote]:border-slate-600 [&_blockquote]:pl-3 [&_blockquote]:text-slate-400`
+
+function SmartTruncatedMarkdown({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const lines = text.split('\n')
+  const needsTruncate = lines.length > TRUNCATE_LINE_LIMIT || text.length > TRUNCATE_BYTE_LIMIT
+  const visible = (!needsTruncate || expanded) ? text : lines.slice(0, HEAD_LINES).join('\n') + '\n\n…'
+  return (
+    <div data-full-text={text}>
+      <div className={MD_PROSE}>
+        <ReactMarkdown>{visible}</ReactMarkdown>
+      </div>
+      {needsTruncate && !expanded && (
+        <button type="button" onClick={() => setExpanded(true)}
+          className="mt-1 text-[10px] text-blue-400 hover:text-blue-300 transition-colors">
+          Показать все {lines.length} строк ({(text.length / 1024).toFixed(1)} KB)
+        </button>
+      )}
+      {needsTruncate && expanded && (
+        <button type="button" onClick={() => setExpanded(false)}
+          className="mt-1 text-[10px] text-slate-500 hover:text-blue-400 transition-colors">
+          Свернуть
+        </button>
+      )}
+    </div>
+  )
+}
+
 function FieldValue({ value, kind }: { value: unknown; kind: FieldSpec['kind'] }) {
   if (value === null || value === undefined || value === '') return <span className="text-slate-600">—</span>
   if (kind === 'bool') {
@@ -460,6 +497,11 @@ function FieldValue({ value, kind }: { value: unknown; kind: FieldSpec['kind'] }
   }
   if (kind === 'number') return <span className="font-mono text-slate-300 text-sm">{String(value)}</span>
   if (kind === 'string') return <span className="text-slate-200 text-sm">{String(value)}</span>
+  if (kind === 'markdown') {
+    const text = String(value).trim()
+    if (!text) return <span className="text-slate-600">—</span>
+    return <SmartTruncatedMarkdown text={text} />
+  }
   if (kind === 'multiline') {
     const text = String(value).trim()
     if (!text) return <span className="text-slate-600">—</span>

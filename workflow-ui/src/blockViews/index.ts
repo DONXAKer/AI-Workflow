@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 export interface FieldSpec {
   key: string
   label: string
-  kind: 'string' | 'multiline' | 'list' | 'objList' | 'bool' | 'number'
+  kind: 'string' | 'multiline' | 'markdown' | 'list' | 'objList' | 'bool' | 'number'
   emphasis?: boolean
 }
 

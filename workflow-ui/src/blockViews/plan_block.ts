@@ -10,13 +10,13 @@ export const spec: BlockViewSpec = {
     return { label: 'план' }
   },
   fields: [
-    { key: 'goal', label: 'Цель', kind: 'multiline', emphasis: true },
-    { key: 'approach', label: 'Подход', kind: 'multiline' },
+    { key: 'goal', label: 'Цель', kind: 'markdown', emphasis: true },
+    { key: 'approach', label: 'Подход', kind: 'markdown' },
     // files_to_touch / tools_to_use are newline-/comma-separated STRINGS per
     // orchestrator schema, not arrays. Using kind:list rendered them as "—"
     // because FieldValue treats non-array values as empty for list-kind.
     { key: 'files_to_touch', label: 'Файлы', kind: 'multiline' },
     { key: 'tools_to_use', label: 'Инструменты', kind: 'multiline' },
-    { key: 'definition_of_done', label: 'Definition of Done', kind: 'multiline' },
+    { key: 'definition_of_done', label: 'Definition of Done', kind: 'markdown' },
   ],
 }

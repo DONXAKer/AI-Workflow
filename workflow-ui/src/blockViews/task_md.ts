@@ -16,9 +16,9 @@ export const spec: BlockViewSpec = {
     { key: 'slug', label: 'Slug', kind: 'string' },
     { key: 'complexity', label: 'Сложность', kind: 'string' },
     { key: 'needs_clarification', label: 'Требует уточнений', kind: 'bool' },
-    { key: 'as_is', label: 'Как сейчас', kind: 'multiline' },
-    { key: 'to_be', label: 'Как надо', kind: 'multiline' },
-    { key: 'out_of_scope', label: 'Вне scope', kind: 'multiline' },
-    { key: 'acceptance', label: 'Критерии приёмки', kind: 'multiline' },
+    { key: 'as_is', label: 'Как сейчас', kind: 'markdown' },
+    { key: 'to_be', label: 'Как надо', kind: 'markdown' },
+    { key: 'out_of_scope', label: 'Вне scope', kind: 'markdown' },
+    { key: 'acceptance', label: 'Критерии приёмки', kind: 'markdown' },
   ],
 }

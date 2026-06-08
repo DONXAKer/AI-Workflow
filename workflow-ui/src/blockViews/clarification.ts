@@ -8,8 +8,8 @@ export const spec: BlockViewSpec = {
     return { label: `${count} уточнений`, warn: true }
   },
   fields: [
-    { key: 'refined_requirement', label: 'Уточнённое требование', kind: 'multiline', emphasis: true },
-    { key: 'approved_approach', label: 'Согласованный подход', kind: 'multiline' },
+    { key: 'refined_requirement', label: 'Уточнённое требование', kind: 'markdown', emphasis: true },
+    { key: 'approved_approach', label: 'Согласованный подход', kind: 'markdown' },
     { key: 'clarifications', label: 'Вопросы и ответы', kind: 'objList' },
   ],
 }
