@@ -90,9 +90,6 @@ const REGISTRY: Record<string, BlockViewSpec> = {
   // Agent verify
   verify_acceptance: verifyAcceptanceSpec,
 
-  // Code generation
-  codegen: codeGenerationSpec,
-
   // AI code review
   ai_review: aiReviewSpec,
 }
@@ -123,9 +120,12 @@ const TYPE_REGISTRY: Record<string, BlockViewSpec> = {
       if (typeof out.goal === 'string' && out.goal) return planBlockSpec.summary!(out)
       return reviewImplSpec.summary!(out)
     },
+    // Plan mode: renderOutput returns null → BlockProgressTable falls back to StructuredOutput
+    // with fields from this spec. Review mode: use reviewImplSpec custom renderer.
+    fields: planBlockSpec.fields,
     renderOutput: (out) =>
       typeof out.goal === 'string' && out.goal
-        ? planBlockSpec.renderOutput ? planBlockSpec.renderOutput(out) : null
+        ? null
         : reviewImplSpec.renderOutput!(out),
   },
 }

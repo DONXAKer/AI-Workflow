@@ -768,9 +768,10 @@ function BlockExpandedDetail({ block, calls, llmCalls, runId, spec }: {
       {hasOutput && (
         <section className="px-5 py-4 min-w-0 overflow-hidden">
           <h4 className="text-[10px] uppercase tracking-wide text-slate-400 font-medium mb-2">Результат</h4>
-          {spec?.renderOutput
-            ? spec.renderOutput(block.output!)
-            : <StructuredOutput output={block.output!} specFields={spec?.fields} />}
+          {(() => {
+            const custom = spec?.renderOutput ? spec.renderOutput(block.output!) : null
+            return custom ?? <StructuredOutput output={block.output!} specFields={spec?.fields} />
+          })()}
         </section>
       )}
 
