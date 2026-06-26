@@ -3,6 +3,7 @@ package com.workflow.api;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.workflow.core.PipelineRunRepository;
 import com.workflow.core.RunStatus;
+import com.workflow.knowledge.ImportGraphService;
 import com.workflow.knowledge.ProjectIndexService;
 import com.workflow.knowledge.ProjectIndexer;
 import com.workflow.model.IntegrationConfig;
@@ -43,6 +44,9 @@ public class ProjectController {
 
     @Autowired(required = false)
     private ProjectIndexService indexService;
+
+    @Autowired(required = false)
+    private ImportGraphService importGraphService;
 
     @Autowired(required = false)
     private PreflightCacheService preflightCacheService;
@@ -261,6 +265,29 @@ public class ProjectController {
         return ResponseEntity.ok(Map.of(
             "file_count", s.fileCount(),
             "qdrant_enabled", s.qdrantEnabled()));
+    }
+
+    /**
+     * Rebuilds the file-level import graph for the project (synchronous — small/medium
+     * repos finish in well under a second). Independent of Qdrant. Returns edge/file counts.
+     */
+    @PreAuthorize("hasAnyRole('OPERATOR', 'RELEASE_MANAGER', 'ADMIN')")
+    @PostMapping("/{slug}/graph/rebuild")
+    public ResponseEntity<Map<String, Object>> graphRebuild(@PathVariable String slug) {
+        if (repository.findBySlug(slug).isEmpty()) return ResponseEntity.notFound().build();
+        if (importGraphService == null) {
+            return ResponseEntity.status(503).body(Map.of("error", "import graph service unavailable"));
+        }
+        ImportGraphService.RebuildResult r = importGraphService.rebuild(slug);
+        return ResponseEntity.ok(Map.of("files_scanned", r.filesScanned(), "edges", r.edges()));
+    }
+
+    /** Edge count for the project's import graph (0 when not built / unavailable). */
+    @GetMapping("/{slug}/graph/stats")
+    public ResponseEntity<Map<String, Object>> graphStats(@PathVariable String slug) {
+        if (repository.findBySlug(slug).isEmpty()) return ResponseEntity.notFound().build();
+        long edges = importGraphService == null ? 0 : importGraphService.edgeCount(slug);
+        return ResponseEntity.ok(Map.of("edges", edges));
     }
 
     /**
