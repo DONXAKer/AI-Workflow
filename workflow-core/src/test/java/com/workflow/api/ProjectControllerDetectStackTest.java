@@ -69,7 +69,7 @@ class ProjectControllerDetectStackTest {
         mockMvc.perform(post("/api/projects/test-project/detect-stack")
                 .contentType(MediaType.APPLICATION_JSON).with(csrf()))
                 .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON).with(csrf()))
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.techStack").value(detectedStack))
                 .andExpect(jsonPath("$.workingDir").value("/test/path"));
@@ -216,7 +216,7 @@ class ProjectControllerDetectStackTest {
         mockMvc.perform(post("/api/projects/typescript-project/detect-stack")
                 .contentType(MediaType.APPLICATION_JSON).with(csrf()))
                 .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON).with(csrf()))
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.techStack").value(detectedStack))
                 .andExpect(jsonPath("$.workingDir").value("/test/typescript-path"));
@@ -239,7 +239,7 @@ class ProjectControllerDetectStackTest {
         mockMvc.perform(post("/api/projects/empty-project/detect-stack")
                 .contentType(MediaType.APPLICATION_JSON).with(csrf()))
                 .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON).with(csrf()))
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.techStack").value("[]"))
                 .andExpect(jsonPath("$.workingDir").value("/test/empty-path"));

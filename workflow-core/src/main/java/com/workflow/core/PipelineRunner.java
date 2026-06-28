@@ -119,6 +119,9 @@ public class PipelineRunner {
     private com.workflow.knowledge.ProjectIndexService projectIndexService;
 
     @Autowired(required = false)
+    private com.workflow.knowledge.ImportGraphService importGraphService;
+
+    @Autowired(required = false)
     private com.workflow.workspace.WorkspaceProvisioner workspaceProvisioner;
 
     @Autowired(required = false)
@@ -1700,6 +1703,25 @@ public class PipelineRunner {
         // with an up-to-date semantic index. Fire-and-forget; failures here must
         // not affect the operator's view of the completed run.
         scheduleProjectReindexDelta(run);
+        scheduleImportGraphDelta(run);
+    }
+
+    /**
+     * After a successful run, refresh the import graph for files the run's commit touched.
+     * Independent of Qdrant (graph lives in Postgres), so this runs even when the semantic
+     * index is disabled. Fire-and-forget.
+     */
+    private void scheduleImportGraphDelta(PipelineRun run) {
+        if (importGraphService == null) return;
+        String slug = run.getProjectSlug();
+        if (slug == null || slug.isBlank()) return;
+        try {
+            java.util.List<String> changed = changedFilesSinceParent(run);
+            if (changed.isEmpty()) return;
+            importGraphService.updateDeltaAsync(slug, changed);
+        } catch (Exception e) {
+            log.debug("Post-run import-graph delta skipped: {}", e.getMessage());
+        }
     }
 
     /**
@@ -1730,8 +1752,7 @@ public class PipelineRunner {
         try {
             // Look up the project's working dir from the same lookup ProjectIndexService uses.
             String slug = run.getProjectSlug();
-            com.workflow.project.Project p = projectIndexService == null ? null
-                : findProjectBySlug(slug);
+            com.workflow.project.Project p = findProjectBySlug(slug);
             String workingDir = p == null ? null : p.getWorkingDir();
             if (workingDir == null || workingDir.isBlank()) return java.util.List.of();
             ProcessBuilder pb = new ProcessBuilder("git", "diff", "--name-only", "HEAD~1", "HEAD");
