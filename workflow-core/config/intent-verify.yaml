@@ -1,0 +1,187 @@
+# =============================================================================
+# Intent-Verify — проверка готовой задачи YouTrack против intent'а
+# =============================================================================
+#
+# Read-only пайплайн в духе Agentic SDLC (см. Obsidian: Проекты/Agent-SDLC/concept.md):
+# берёт ЗАКРЫТУЮ (готовую) задачу из YouTrack и прогоняет 3-уровневую верификацию
+# intent против реального кода. Ничего не пишет и не чинит — на выходе ВЕРДИКТ.
+#
+# Три уровня верификации (по концепции):
+#   (1) Claims verification — каждый claim подтверждается evidence в коде      → agent_verify (живой репо)
+#   (2) Adversarial review  — независимый скептик ищет расхождения по diff     → orchestrator run_review
+#   (3) Non-goals check     — grep diff по Out of Scope                        → внутри adversarial
+#
+# Запуск:
+#   workflow run config/intent-verify.yaml --youtrack-issue PROJ-42 --entry-point from_youtrack
+#   (provider задаётся per-run)
+# =============================================================================
+
+name: intent-verify
+description: Adversarial-проверка готовой YouTrack-задачи против intent (claims/diff/non-goals)
+
+# =============================================================================
+# Entry Points
+# =============================================================================
+entry_points:
+  - id: from_youtrack
+    name: "Готовая задача в YouTrack"
+    description: "Верификация закрытой задачи: claims по живому репо + adversarial по diff"
+    from_block: youtrack_input
+    requires_input: youtrack_issue
+
+# Интеграция YouTrack настраивается в платформе (БД IntegrationConfig,
+# /api/integrations) и резолвится блоком youtrack_input — инлайн-секция не нужна.
+
+# =============================================================================
+# Pipeline
+# =============================================================================
+pipeline:
+  # --- INTENT: читаем готовую задачу из YouTrack ------------------------------
+  - id: youtrack_input
+    block: youtrack_input
+    config:
+      issue_id: ""                # override через --youtrack-issue
+    approval: true                # подтвердить, что это именно та готовая задача
+
+  # --- BRANCH RESOLVER: извлечение PR/MR ссылки из задачи -------------------
+  # Ищет PR/MR URL в description + customFields задачи.
+  # resolved=true  → pr_url и branch заполнены автоматически
+  # resolved=false → operator использует EDIT в approval gate чтобы ввести
+  #                  {branch: "feature/PROJ-42", pr_url: "https://..."} вручную
+  - id: branch_resolver
+    block: branch_resolver
+    depends_on:
+      - youtrack_input
+    approval: true              # human подтверждает auto-resolved или вводит вручную через EDIT
+
+  # --- CLAIMS: извлекаем проверяемые claims из требования/критериев приёмки ---
+  - id: analysis
+    block: analysis
+    depends_on:
+      - branch_resolver
+    agent:
+      model: smart
+      system_prompt: |
+        Ты верификатор. По описанию и критериям приёмки задачи восстанови intent и
+        декомпозируй его на ПРОВЕРЯЕМЫЕ claims (acceptance_checklist) — конкретные
+        наблюдаемые утверждения, которые можно подтвердить по коду или тесту.
+        Зафиксируй Out of Scope и Invariants, если они есть в задаче. НЕ предлагай
+        реализацию — только то, что должно быть истинно у готовой задачи.
+      max_tokens: 8192
+    approval: true                # валидировать claims ДО проверки
+
+  # --- VERIFY уровень 1: claims по ЖИВОМУ репозиторию -------------------------
+  - id: claims_verify
+    block: agent_verify
+    depends_on:
+      - analysis
+    agent:
+      model: smart
+    config:
+      subject: analysis           # проверяем analysis.acceptance_checklist
+      pass_threshold: critical_and_important
+      max_iterations: 12
+      budget_usd_cap: 1.5
+      allowed_tools: [Read, Grep, Glob, Bash]
+      bash_allowlist:
+        - Bash(git diff*)
+        - Bash(git log*)
+        - Bash(./gradlew test*)
+        - Bash(gradle test*)
+        - Bash(npm test*)
+        - Bash(pytest*)
+    approval: false
+
+  # --- ТЕСТЫ: обязательный прогон тест-сьюта ----------------------------------
+  # Результат (stdout/stderr/exit_code) передаётся контекстом в adversarial.
+  # Команду задать под стек проекта; allow_nonzero_exit: true — не прерываем
+  # пайплайн при красных тестах, это сам по себе важный сигнал для adversarial.
+  - id: run_tests
+    block: shell_exec
+    depends_on:
+      - claims_verify
+    config:
+      # Установить команду под стек: gradle test / npm test / pytest / go test ./...
+      command: "./gradlew test 2>&1"
+      timeout_sec: 600
+      allow_nonzero_exit: true   # красные тесты — сигнал, не ошибка блока
+    approval: false
+
+  # --- VERIFY уровни 2-3: adversarial review по diff + non-goals --------------
+  - id: adversarial
+    block: orchestrator
+    depends_on:
+      - analysis
+      - claims_verify
+      - run_tests
+    agent:
+      model: smart
+      temperature: 0.1
+    config:
+      mode: run_review
+      context_blocks: [claims_verify]
+      max_iterations: 6
+      budget_usd_cap: 1.5
+      bash_allowlist:
+        - Bash(git diff*)
+        - Bash(git log*)
+        - Bash(git show*)
+        - Bash(./gradlew test*)
+        - Bash(npm test*)
+      inject_context:
+        test_stdout: "$.run_tests.stdout"
+        test_exit_code: "$.run_tests.exit_code"
+        test_success: "$.run_tests.success"
+      system_prompt_extra: |
+        Ты НЕЗАВИСИМЫЙ скептик. Читай diff готовой задачи (git diff main...HEAD или
+        git log/show нужных коммитов) + восстановленный intent (acceptance_checklist).
+        Твоя задача — найти РАСХОЖДЕНИЯ, а не подтвердить:
+        (2) Adversarial: делает ли код то, что нужно было по intent'у? Где отступления?
+        (3) Non-goals: ничего из Out of Scope не просочилось? (grep diff по запретным темам)
+        Проверь, что Invariants остались истинными. Работай по id из acceptance_checklist,
+        новые id не создавай. Учитывай результаты claims_verify.
+
+        Результаты тест-сьюта (из test_stdout / test_exit_code):
+        - exit_code=0 + вывод без FAILED → тесты зелёные; проверь что они покрывают claims
+        - exit_code≠0 или FAILED в выводе → укажи какие тесты упали и какой claim затронут
+        Упавшие тесты — прямое evidence для failed claims; отражай в checklist_status.
+    approval: false
+
+  # --- ВАРИАНТ для remote-кода (раскомментировать вместо живого репо):
+  #     читать diff из GitLab-ветки или MR вместо локального working_dir.
+  #
+  #   - id: branch_diff
+  #     block: git_branch_input          # diff ветки из GitLab
+  #     depends_on: [youtrack_input]
+  #     config:
+  #       branch: feature/PROJ-42-...
+  #       target_branch: main
+  #   # или mr_input (читает существующий MR):
+  #   - id: mr_diff
+  #     block: mr_input
+  #     depends_on: [youtrack_input]
+  #     config:
+  #       mr_iid: 87                      # или branch: feature/...
+
+  # --- VERDICT WRITE-BACK: комментарий + смена статуса в трекере --------------
+  # Пишет вердикт (passed/failed, failed claims, тесты) как комментарий в задачу.
+  # Статус: passed → status_passed (по умолчанию "In Review" → оставить или изменить)
+  #          failed → status_failed (по умолчанию "In Progress" → вернуть в работу)
+  - id: verdict_writeback
+    block: task_update
+    depends_on:
+      - adversarial
+      - run_tests
+    config:
+      mode: verdict
+      status_passed: "In Review"    # задача прошла верификацию — ждёт финального ревью
+      status_failed: "In Progress"  # задача не прошла — вернуть исполнителю
+      # provider: youtrack           # по умолчанию из youtrack_input.provider
+    approval: false
+
+  # --- REPORT: Intent Verification Report (вердикт) ---------------------------
+  - id: report
+    block: run_report
+    depends_on:
+      - verdict_writeback
+    approval: true                # человек принимает итоговый вердикт

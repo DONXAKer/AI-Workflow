@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { Plus, FolderOpen, AlertCircle, Loader2, X, Save, ChevronRight, Zap, Hand, Check, XCircle, Layers, GitBranch, Wallet } from 'lucide-react'
+import { Plus, FolderOpen, AlertCircle, Loader2, X, Save, ChevronRight, Zap, Hand, Check, XCircle, Layers, GitBranch, Wallet, Play } from 'lucide-react'
 import { api } from '../services/api'
 import { ProjectInfo, ProjectStats } from '../types'
 import PathInput from '../components/PathInput'
@@ -133,6 +133,12 @@ export default function ProjectsListPage() {
               <span className="font-mono">${balanceUsd.toFixed(2)}</span>
             </Link>
           )}
+          <Link
+            to="/wizard"
+            className="flex items-center gap-2 border border-emerald-700/60 hover:border-emerald-500 bg-emerald-900/20 text-emerald-300 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+          >
+            <Play className="w-4 h-4" /> Быстрый старт
+          </Link>
           <button
             type="button"
             onClick={() => navigate('/connect-repo')}

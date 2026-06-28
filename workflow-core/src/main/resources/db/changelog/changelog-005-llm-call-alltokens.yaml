@@ -1,0 +1,17 @@
+databaseChangeLog:
+  - changeSet:
+      id: 2026-06-27-1-llm-call-alltokens-provider
+      author: ai-sdlc
+      comment: Add ALLTOKENS to llm_call_provider_check constraint
+      changes:
+        - sql:
+            sql: |
+              ALTER TABLE llm_call DROP CONSTRAINT IF EXISTS llm_call_provider_check;
+              ALTER TABLE llm_call ADD CONSTRAINT llm_call_provider_check
+                CHECK (provider IN ('OPENROUTER','CLAUDE_CODE_CLI','OLLAMA','AITUNNEL','VLLM','ALLTOKENS'));
+      rollback:
+        - sql:
+            sql: |
+              ALTER TABLE llm_call DROP CONSTRAINT IF EXISTS llm_call_provider_check;
+              ALTER TABLE llm_call ADD CONSTRAINT llm_call_provider_check
+                CHECK (provider IN ('OPENROUTER','CLAUDE_CODE_CLI','OLLAMA','AITUNNEL','VLLM'));
