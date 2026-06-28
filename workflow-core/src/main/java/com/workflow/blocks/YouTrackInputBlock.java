@@ -7,7 +7,6 @@ import com.workflow.integrations.tracker.TaskTracker;
 import com.workflow.integrations.tracker.TaskTrackerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
@@ -20,8 +19,11 @@ public class YouTrackInputBlock implements Block {
 
     private static final Logger log = LoggerFactory.getLogger(YouTrackInputBlock.class);
 
-    @Autowired
-    private TaskTrackerRegistry trackerRegistry;
+    private final TaskTrackerRegistry trackerRegistry;
+
+    public YouTrackInputBlock(TaskTrackerRegistry trackerRegistry) {
+        this.trackerRegistry = trackerRegistry;
+    }
 
     @Override
     public String getName() { return "youtrack_input"; }
@@ -53,16 +55,18 @@ public class YouTrackInputBlock implements Block {
     public Map<String, Object> run(Map<String, Object> input, BlockConfig config, PipelineRun run) throws Exception {
         Map<String, Object> cfg = config.getConfig();
 
-        String provider = resolveProvider(cfg);
+        String provider = resolveProvider(cfg, input);
 
-        // Resolve issue_id
+        // Resolve issue_id: block config → run inputs (several key variants)
         String issueId = null;
         Object cfgIssueId = cfg.get("issue_id");
         if (cfgIssueId instanceof String s && !s.isBlank()) {
             issueId = s;
-        } else if (input.get("youtrack_issue_id") instanceof String s) {
+        } else if (input.get("issue_id") instanceof String s && !s.isBlank()) {
             issueId = s;
-        } else if (input.get("issueId") instanceof String s) {
+        } else if (input.get("youtrack_issue_id") instanceof String s && !s.isBlank()) {
+            issueId = s;
+        } else if (input.get("issueId") instanceof String s && !s.isBlank()) {
             issueId = s;
         }
 
@@ -104,11 +108,14 @@ public class YouTrackInputBlock implements Block {
         return result;
     }
 
-    private String resolveProvider(Map<String, Object> cfg) {
+    private String resolveProvider(Map<String, Object> cfg, Map<String, Object> input) {
         Object explicit = cfg.get("provider");
         if (explicit instanceof String s && !s.isBlank()) return s;
         Object defaultProvider = cfg.get("_default_tracker_provider");
         if (defaultProvider instanceof String s && !s.isBlank()) return s;
+        // tracker_provider in run inputs avoids collision with LLM provider key
+        Object wizardProvider = input.get("tracker_provider");
+        if (wizardProvider instanceof String s && !s.isBlank()) return s;
         return "youtrack";
     }
 

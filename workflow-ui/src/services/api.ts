@@ -165,6 +165,17 @@ export const api = {
   getEntryPoints: (configPath: string): Promise<EntryPoint[]> =>
     request<EntryPoint[]>(`${BASE}/pipelines/entry-points?configPath=${encodeURIComponent(configPath)}`),
 
+  previewTrackerIssue: (params: {
+    issueId: string
+    provider?: string
+    projectSlug?: string
+  }): Promise<{ id: string; readableId: string; summary: string; description: string; status: string; url: string; error?: string }> => {
+    const p = new URLSearchParams({ issueId: params.issueId })
+    if (params.provider) p.set('provider', params.provider)
+    if (params.projectSlug) p.set('projectSlug', params.projectSlug)
+    return request(`${BASE}/tracker/preview?${p}`)
+  },
+
   smartDetect: (body: { rawInput: string; configPath?: string }): Promise<{
     suggested: { entryPointId: string; confidence: number; intentLabel: string }
     explanation: string

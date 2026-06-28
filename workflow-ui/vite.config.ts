@@ -9,8 +9,8 @@ export default defineConfig({
   server: {
     port: 5120,
     proxy: {
-      '/api': 'http://localhost:8025',
-      '/ws': { target: 'http://localhost:8025', ws: true }
+      '/api': 'http://localhost:8020',
+      '/ws': { target: 'http://localhost:8020', ws: true }
     }
   }
 })

@@ -1,0 +1,342 @@
+# =============================================================================
+# Agent-SDLC — рабочий цикл  Intent → Explore → Plan → Chunk → Verify → Commit
+# =============================================================================
+#
+# Быстрый прогон по процессу Agentic SDLC (см. Obsidian: Проекты/Agent-SDLC/concept.md).
+# Человек владеет intent'ом (immutable), агент владеет исполнением, узкое место —
+# верификация против intent, а не реализация.
+#
+# Маппинг шагов концепции на блоки:
+#   Intent   → intent.md передаётся как requirement (человек владеет ВНЕ пайплайна)
+#   Explore  → context_scan + analysis  (analysis выдаёт acceptance_checklist = Claims)
+#   Plan     → orchestrator mode:plan   (definition_of_done, files_to_touch)
+#   Chunk    → agent_with_tools         (files_changed = diff-артефакт)
+#   Verify   → orchestrator mode:review (claims + adversarial + non-goals, с loopback)
+#   Commit   → agent_with_tools (git, локально) + run_report (context handoff)
+#
+# Три human-гейта (роли концепции): claims (analysis), план (plan), приёмка (commit).
+# Остальное автономно. Модели задаются ТИРАМИ (smart/flash/fast), провайдер — per-run.
+#
+# Запуск:
+#   workflow run config/agent-sdlc.yaml --requirement "$(cat intent.md)"
+#   (или из UI: requirement = содержимое intent.md, provider = нужный)
+#
+# Resume-точки: --entry-point chunk_ready  (план уже одобрен)
+#               --entry-point verify_passed (можно сразу коммитить)
+# =============================================================================
+
+name: agent-sdlc
+description: Agentic SDLC — Intent→Explore→Plan→Chunk→Verify→Commit с локальным коммитом
+
+# =============================================================================
+# Entry Points
+# =============================================================================
+entry_points:
+  - id: from_intent
+    name: "Новый intent (текст)"
+    description: "Полный цикл: intent.md → analysis → plan → chunk → verify → commit"
+    from_block: context_scan      # task_input инжектируется как empty — requirement берётся из inputs
+    requires_input: requirement
+    inject:
+      - block_id: task_input
+        source: empty
+
+  - id: from_task
+    name: "Задача из трекера"
+    description: "Полный цикл: читает задачу из таск-менеджера (YouTrack / Jira / GitHub Issues)"
+    from_block: task_input
+    requires_input: issue_id
+
+  - id: chunk_ready
+    name: "План уже одобрен"
+    description: "Стартовать с реализации chunk'а (upstream инъектятся)"
+    from_block: chunk
+    requires_input: requirement
+    inject:
+      - block_id: task_input
+        source: empty
+      - block_id: context_scan
+        source: empty
+      - block_id: analysis
+        source: empty
+      - block_id: plan
+        source: empty
+
+# =============================================================================
+# Pipeline
+# =============================================================================
+pipeline:
+  # --- INTAKE: опциональное чтение задачи из таск-менеджера -------------------
+  # При from_intent: task_input инжектируется как empty, requirement берётся из inputs.
+  # При from_task: блок читает задачу через TaskTrackerRegistry (YouTrack/Jira/GitHub Issues),
+  # возвращает requirement и issue-метаданные для handoff в конце пайплайна.
+  - id: task_input
+    block: youtrack_input
+    approval: true          # человек подтверждает что задача верна перед стартом
+    config:
+      issue_id: ""          # override через input issue_id
+
+  # --- EXPLORE (1/2): скан стека и конвенций целевого репо --------------------
+  - id: context_scan
+    block: context_scan
+    depends_on:
+      - task_input
+    parallel: true
+    approval: false
+    agent:
+      model: fast
+    # working_dir не указан — берётся workingDir проекта (target-репо)
+
+  # --- STACK RULES: загружает файлы правил по обнаруженному стеку --------------
+  # Читает context_scan.tech_stack → сопоставляет с classpath:stack-rules/*.md →
+  # возвращает rules_content (конкатенация) + loaded_rules (список файлов).
+  # chunk и plan используют ${stack_rules.rules_content} вместо встроенного каталога.
+  - id: stack_rules
+    block: stack_rules_loader
+    depends_on:
+      - context_scan
+    parallel: true
+    approval: false
+
+  # --- EXPLORE (2/2) + CLAIMS: анализ intent, декомпозиция на claims ----------
+  # acceptance_checklist здесь — single source of truth для "done".
+  - id: analysis
+    block: analysis
+    depends_on:
+      - context_scan
+      - stack_rules
+    agent:
+      model: smart
+      system_prompt: |
+        Ты senior-архитектор. Анализируешь intent глубоко: затронутые компоненты,
+        технический подход, риски. Декомпозируй intent на ПРОВЕРЯЕМЫЕ claims —
+        конкретные наблюдаемые утверждения (acceptance_checklist), которые можно
+        подтвердить по diff или тесту. Минимум 2 claim'а должны быть edge/негативными.
+        Уважай Out of Scope и Invariants из intent'а — не расширяй scope.
+      max_tokens: 8192
+    approval: true                # Approver валидирует карту + claims
+    # (claims проверяются downstream в review; здесь loopback на себя запрещён фазой)
+
+  # --- PLAN: технический план с definition_of_done ----------------------------
+  - id: plan
+    block: orchestrator
+    depends_on:
+      - analysis
+    agent:
+      model: smart
+      temperature: 0.1
+    config:
+      mode: plan
+      context_blocks: [analysis, context_scan, stack_rules]
+      max_iterations: 10
+      budget_usd_cap: 2.0
+      system_prompt_extra: |
+        Стек и конвенции целевого проекта — из context_scan. Учитывай Invariants
+        из intent'а: каждый план-шаг должен их сохранять. definition_of_done должен
+        покрывать все claims из acceptance_checklist + тесты.
+
+        Стек-специфичные обязательные требования для этого проекта (из stack_rules):
+        ${stack_rules.rules_content}
+    approval: true                # человек одобряет план
+
+  # --- CHUNK: smallest useful chunk, автономно --------------------------------
+  - id: chunk
+    block: agent_with_tools
+    depends_on:
+      - plan
+    agent:
+      model: flash
+      max_tokens: 16384
+    config:
+      preload_from: plan          # преload files_to_touch из плана
+      focus_on_failure: true      # при loopback — узкий промпт на проваленное
+      allowed_tools: [Read, Write, Edit, Glob, Grep, Bash]
+      bash_allowlist:
+        - Bash(grep*)
+        - Bash(find*)
+        - Bash(ls*)
+        - Bash(cat*)
+        - Bash(./gradlew*)
+        - Bash(gradle*)
+        - Bash(mvn*)
+        - Bash(npm*)
+        - Bash(npx*)
+        - Bash(pytest*)
+        - Bash(go test*)
+        - Bash(git diff*)
+        - Bash(git status*)
+        - Bash(git log*)
+      user_message: |
+        Intent: ${analysis.summary}
+
+        Реализуй план (см. контекст plan): подход — ${plan.approach}.
+        Затронуть только файлы из files_to_touch. Соблюдай Invariants intent'а и
+        Out of Scope — не выходи за scope. Доведи до зелёных тестов/сборки.
+        Каждый claim из acceptance_checklist должен стать наблюдаемым в коде/тестах.
+
+        Стек-специфичные обязательные требования для этого проекта:
+        ${stack_rules.rules_content}
+    approval: false
+
+  # --- VERIFY: 3 уровня (claims + adversarial + non-goals), с loopback --------
+  - id: review
+    block: orchestrator
+    depends_on:
+      - chunk
+    agent:
+      model: smart
+      temperature: 0.1
+    config:
+      mode: review
+      plan_block: plan
+      context_blocks: [chunk]
+      max_iterations: 8
+      budget_usd_cap: 2.0
+      bash_allowlist:
+        - Bash(git diff*)
+        - Bash(git log*)
+        - Bash(git show*)
+        - Bash(./gradlew test*)
+        - Bash(gradle test*)
+        - Bash(npm test*)
+        - Bash(pytest*)
+      system_prompt_extra: |
+        Adversarial by default — ищи РАСХОЖДЕНИЯ с intent'ом, не подтверждения.
+        Три уровня проверки:
+        (1) Claims: каждый пункт acceptance_checklist подтверждён по diff или тесту?
+        (2) Adversarial: читай git diff против main — делает ли код то, что нужно было?
+        (3) Non-goals: ничего из Out of Scope не просочилось в diff?
+        Проверь, что Invariants остались истинными. Не создавай новые id —
+        работай строго по id из acceptance_checklist.
+    approval: false
+    verify:
+      on_fail:
+        action: loopback
+        target: chunk
+        max_iterations: 2
+        inject_context:
+          retry_instruction: "$.review.retry_instruction"
+          issues: "$.review.issues"
+          carry_forward: "$.review.carry_forward"
+
+  # --- COMMIT: локальная ветка + conventional commit + handoff в теле ---------
+  - id: commit
+    block: agent_with_tools
+    depends_on:
+      - review
+    agent:
+      model: flash
+      max_tokens: 4096
+    config:
+      allowed_tools: [Read, Bash]
+      bash_allowlist:
+        - Bash(find*)
+        - Bash(git -C*)
+        - Bash(git status*)
+        - Bash(git diff*)
+        - Bash(git add*)
+        - Bash(git checkout*)
+        - Bash(git switch*)
+        - Bash(git branch*)
+        - Bash(git commit*)
+        - Bash(git log*)
+      context_blocks: [task_input, plan, chunk]
+      user_message: |
+        Создай локальные ветки и сделай conventional-commit только в репозиториях, которые изменил chunk.
+
+        Шаг 1 — Определи репозитории для коммита:
+          Из контекста блока chunk возьми список files_changed (поле path каждого элемента).
+          По префиксу пути определи корень репозитория:
+            - Если путь начинается с "crm/crm2/src/..." → репозиторий "crm/crm2"
+            - Общее правило: берёшь сегменты до первого "/src/" или "/main/" или "/test/"
+              Если таких нет — берёшь первые два сегмента пути.
+          Собери уникальный набор корней. Это и есть список репозиториев для коммита.
+          ВАЖНО: НЕ используй find . -name ".git" — это найдёт ВСЕ репо включая лишние.
+          Коммить ТОЛЬКО репозитории из chunk.files_changed.
+
+        Шаг 2 — Определи имя ветки:
+          - Из контекста блока task_input возьми issue.readableId (если есть, например CRM-382).
+            Ветка: feature/<readableId>  (например feature/CRM-382)
+          - Если issue.readableId пуст — создай short-slug из plan.approach (3-5 слов, kebab-case).
+            Ветка: feature/<slug>  (например feature/add-tt-tab-columns)
+
+        Шаг 3 — Для каждого репозитория из Шага 1:
+          a) Проверь наличие изменений: git -C <repo> status --short
+          b) Если изменения есть:
+             - Создай/переключись на ветку:
+               git -C <repo> switch -c <branch> 2>/dev/null || git -C <repo> switch <branch>
+             - Добавь только файлы задачи: git -C <repo> add -A
+             - Сделай коммит:
+               git -C <repo> commit -m "тип(scope): краткое описание" --message="
+               <пустая строка>
+               Что сделано: <список изменений>
+               Что отклонено: <если есть>
+               Открытые вопросы: <если есть>"
+          c) Если изменений нет — пропусти репозиторий, запиши в лог.
+
+        Шаг 4 — Выведи итоговый список в формате таблицы Markdown:
+        | **репозиторий** | `ветка` | `хеш` |
+        НЕ пушить, НЕ мержить — только локальные коммиты.
+    approval: true                # Human accepts / rejects
+
+  # --- PUBLISH: git push + PR/MR (после human-гейта commit) -------------------
+  # Требует gh CLI (GitHub) или glab CLI (GitLab) в PATH целевого репо.
+  # Провайдер определяется по git remote — агент выбирает нужный CLI сам.
+  - id: publish
+    block: agent_with_tools
+    depends_on:
+      - commit
+    agent:
+      model: flash
+      max_tokens: 4096
+    config:
+      allowed_tools: [Read, Bash]
+      bash_allowlist:
+        - Bash(find*)
+        - Bash(git -C*)
+        - Bash(git push*)
+        - Bash(git branch*)
+        - Bash(git remote*)
+        - Bash(git log*)
+        - Bash(gh pr*)
+        - Bash(glab mr*)
+      context_blocks: [chunk, commit]
+      user_message: |
+        Запушь локальные ветки и открой PR/MR только для репозиториев, которые изменил chunk.
+
+        Шаг 1 — Определи репозитории:
+          Из контекста блока commit возьми итоговую таблицу (репозиторий → ветка → хеш).
+          Если таблицы нет — возьми пути из chunk.files_changed и определи корни репо
+          по тому же правилу что и commit (сегменты до /src/, /main/, /test/ или первые два).
+          Работай ТОЛЬКО с этим списком.
+
+        Шаг 2 — Для каждого репозитория из Шага 1:
+          a) Определи текущую ветку: git -C <repo> branch --show-current
+          b) Запушь: git -C <repo> push -u origin <ветка>
+          c) Возьми заголовок и тело коммита: git -C <repo> log -1 --pretty=format:"%s%n%n%b"
+          d) Определи провайдер: git -C <repo> remote -v
+             - github.com → gh pr create --repo <owner/repo> --title "<заголовок>" --body "<тело>" --base main
+             - gitlab     → glab mr create -R <repo> --title "<заголовок>" --description "<тело>" --target-branch main
+
+        Шаг 3 — Выведи таблицу: репозиторий → ветка → URL PR/MR.
+    approval: false
+
+  # --- TASK HANDOFF: запись ветки/PR в таск-менеджер + смена статуса ----------
+  # Активен только при from_task (issue_id есть в task_input.issue.readableId).
+  # При from_intent task_input.issue пуст — блок пишет skip_reason: no issue_id.
+  - id: task_handoff
+    block: task_update
+    depends_on:
+      - publish
+      - task_input
+    config:
+      status: "In Review"   # целевой статус в трекере после открытия PR/MR
+      # provider: youtrack  # по умолчанию берётся из task_input.provider
+    approval: false
+
+  # --- REPORT: финальный отчёт (context summary) ------------------------------
+  - id: report
+    block: run_report
+    depends_on:
+      - task_handoff
+    approval: false

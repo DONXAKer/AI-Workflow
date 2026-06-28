@@ -375,7 +375,8 @@
       "Bash(mkdir -p /c/wf-build/workflow-core)",
       "Bash(cp -r D:/Проекты/AI-Workflow/workflow-core/src /c/wf-build/workflow-core/src)",
       "Bash(cp D:/Проекты/AI-Workflow/workflow-core/build.gradle.kts D:/Проекты/AI-Workflow/workflow-core/settings.gradle.kts /c/wf-build/workflow-core/)",
-      "Bash([ -f \"$S/gradle.properties\" ])"
+      "Bash([ -f \"$S/gradle.properties\" ])",
+      "Bash(perl -i -pe 's/\\\\Qcontent\\(\\).contentType\\(MediaType.APPLICATION_JSON\\).with\\(csrf\\(\\)\\)\\\\E/content\\(\\).contentType\\(MediaType.APPLICATION_JSON\\)/g' src/test/java/com/workflow/api/ProjectControllerDetectStackTest.java)"
     ]
   }
 }

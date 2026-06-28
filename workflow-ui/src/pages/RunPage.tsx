@@ -490,6 +490,16 @@ export default function RunPage() {
     const commit = outputMap.get('commit') as Record<string, unknown> | undefined
     const analysis = outputMap.get('analysis') as Record<string, unknown> | undefined
 
+    // agent-sdlc specific blocks
+    const taskInput = outputMap.get('task_input') as Record<string, unknown> | undefined
+    const chunk = outputMap.get('chunk') as Record<string, unknown> | undefined
+    const review = outputMap.get('review') as Record<string, unknown> | undefined
+
+    // parse repo table from commit.final_text: | **repo** | `branch` | `hash` | ... |
+    const commitText = (commit?.['final_text'] as string) ?? ''
+    const repoMatches = [...commitText.matchAll(/\|\s*\*\*(.+?)\*\*\s*\|\s*`(.+?)`\s*\|\s*`([0-9a-f]+)`/g)]
+    const commitRepos = repoMatches.map(m => ({ repo: m[1].trim(), branch: m[2].trim(), hash: m[3].trim() }))
+
     const writtenFiles = new Set<string>()
     const editedFiles = new Set<string>()
     for (const tc of toolCalls) {
@@ -504,7 +514,8 @@ export default function RunPage() {
       } catch { /* skip */ }
     }
 
-    return { taskMd, impl, commit, analysis, writtenFiles: [...writtenFiles], editedFiles: [...editedFiles] }
+    return { taskMd, impl, commit, analysis, writtenFiles: [...writtenFiles], editedFiles: [...editedFiles],
+             taskInput, chunk, review, commitRepos }
   }, [run?.outputs, toolCalls])
 
   // Redirect global /runs/:runId to project-scoped URL when possible
@@ -1096,6 +1107,111 @@ export default function RunPage() {
       {/* Summary tab */}
       {isHistorical && runSummary && (
         <div className={activeTab === 'summary' ? 'space-y-4' : 'hidden'}>
+
+          {/* agent-sdlc: Task from task_input.issue */}
+          {runSummary.taskInput && (() => {
+            const issue = runSummary.taskInput!['issue'] as Record<string, unknown> | undefined
+            if (!issue) return null
+            return (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Задача</h3>
+                <div className="space-y-1">
+                  {!!issue['readableId'] && (
+                    <p className="text-sm font-mono text-blue-400">
+                      {issue['url']
+                        ? <a href={String(issue['url'])} target="_blank" rel="noreferrer" className="hover:underline">{String(issue['readableId'])}</a>
+                        : String(issue['readableId'])}
+                    </p>
+                  )}
+                  {!!issue['summary'] && (
+                    <p className="text-sm text-slate-200">{String(issue['summary'])}</p>
+                  )}
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* agent-sdlc: Checklist from analysis.acceptance_checklist + review.checklist_status */}
+          {(() => {
+            const checklist = runSummary.analysis?.['acceptance_checklist'] as Array<Record<string, unknown>> | undefined
+            const status = runSummary.review?.['checklist_status'] as Array<Record<string, unknown>> | undefined
+            if (!checklist?.length) return null
+            const statusMap = new Map((status ?? []).map(s => [s['id'], s]))
+            return (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Что сделано</h3>
+                <div className="space-y-2">
+                  {checklist.map((item, i) => {
+                    const s = statusMap.get(item['id'])
+                    const passed = s ? (s['passed'] as boolean) : null
+                    const priority = item['priority'] as string | undefined
+                    return (
+                      <div key={i} className="flex items-start gap-2 text-sm">
+                        <span className={clsx('mt-0.5 shrink-0 text-base leading-none',
+                          passed === true ? 'text-green-400' : passed === false ? 'text-red-400' : 'text-slate-600')}>
+                          {passed === true ? '✅' : passed === false ? '❌' : '○'}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-slate-300">{String(item['description'] ?? item['id'])}</span>
+                          {priority && priority !== 'important' && (
+                            <span className={clsx('ml-2 text-xs px-1.5 rounded',
+                              priority === 'critical' ? 'bg-red-900/40 text-red-300' : 'bg-slate-800 text-slate-500')}>
+                              {priority}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* agent-sdlc: Repos from commit.final_text */}
+          {runSummary.commitRepos.length > 0 && (
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Затронутые репозитории</h3>
+              <div className="space-y-2">
+                {runSummary.commitRepos.map((r, i) => (
+                  <div key={i} className="flex items-center gap-3 text-sm">
+                    <span className="text-lg leading-none">📦</span>
+                    <span className="font-mono text-slate-200 flex-1">{r.repo}</span>
+                    <span className="font-mono text-xs text-blue-400">{r.branch}</span>
+                    <span className="font-mono text-xs text-slate-600">{r.hash.slice(0, 8)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* agent-sdlc: File stats from chunk.files_changed */}
+          {(() => {
+            const files = runSummary.chunk?.['files_changed'] as Array<Record<string, unknown>> | undefined
+            if (!files?.length) return null
+            const totalIns = files.reduce((sum, f) => sum + (Number(f['insertions']) || 0), 0)
+            const totalDel = files.reduce((sum, f) => sum + (Number(f['deletions']) || 0), 0)
+            return (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Изменения в коде</h3>
+                <div className="flex items-center gap-6 text-sm mb-3">
+                  <span className="text-slate-400">{files.length} файлов</span>
+                  {totalIns > 0 && <span className="text-green-400">+{totalIns} строк</span>}
+                  {totalDel > 0 && <span className="text-red-400">−{totalDel} строк</span>}
+                </div>
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {files.map((f, i) => (
+                    <div key={i} className="flex items-center gap-2 text-xs font-mono">
+                      <span className="text-slate-300 truncate flex-1">{String(f['path'] ?? '')}</span>
+                      {Number(f['insertions']) > 0 && <span className="text-green-400 shrink-0">+{Number(f['insertions'])}</span>}
+                      {Number(f['deletions']) > 0 && <span className="text-red-400 shrink-0">−{Number(f['deletions'])}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
+
           {/* Task info */}
           {runSummary.taskMd && (
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">

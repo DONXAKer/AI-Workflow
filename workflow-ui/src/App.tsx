@@ -25,6 +25,7 @@ import ConnectRepoPage from './pages/ConnectRepoPage'
 import OnboardingWizard from './pages/OnboardingWizard'
 import BillingPage from './pages/BillingPage'
 import ActiveRunsPage from './pages/ActiveRunsPage'
+import WizardPage from './pages/WizardPage'
 
 import IntegrationsSettings from './components/IntegrationsSettings'
 import AgentProfilesSettings from './components/AgentProfilesSettings'
@@ -111,6 +112,9 @@ function AppLayout() {
           <Routes>
             {/* Main: projects list */}
             <Route path="/" element={<ProjectsListPage />} />
+
+            {/* ADLC Wizard: task → project → pipeline quick start */}
+            <Route path="/wizard" element={<WizardPage />} />
 
             {/* Self-serve: connect a GitHub/GitLab repository as a new project */}
             <Route path="/connect-repo" element={<ConnectRepoPage />} />

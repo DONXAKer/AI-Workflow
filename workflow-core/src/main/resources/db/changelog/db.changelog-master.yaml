@@ -23,3 +23,5 @@ databaseChangeLog:
       file: db/changelog/changelog-003-pipeline-run-remediation.yaml
   - include:
       file: db/changelog/changelog-004-import-graph.yaml
+  - include:
+      file: db/changelog/changelog-005-llm-call-alltokens.yaml

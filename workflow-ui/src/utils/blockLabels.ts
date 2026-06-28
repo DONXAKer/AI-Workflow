@@ -42,6 +42,7 @@ export const BLOCK_TYPE_LABELS: Record<string, string> = {
   shell_exec:          'Команда Shell',
   claude_code_shell:   'Claude Code',
   http_get:            'HTTP-запрос',
+  task_update:         'Обновление задачи',
 
   // SDLC quality (preflight + intake_assessment + context_scan + test_planning + run_report)
   preflight:           'Предполёт (build/test baseline)',
@@ -115,6 +116,12 @@ const BLOCK_ID_LABELS: Record<string, string> = {
   test_planning:       'План тестов',
   run_report:          'Отчёт по run-у',
   verify_acceptance:   'Acceptance-верификация',
+
+  // Agent-SDLC pipeline block IDs
+  chunk:               'Реализация',
+  publish:             'Публикация ветки',
+  task_handoff:        'Передача в трекер',
+  report:              'Финальный отчёт',
 
   // Generic pipeline templates (feature-generic / bugfix / docs / refactor / write-tests / code-review)
   git_branch:          'Ветка Git',
