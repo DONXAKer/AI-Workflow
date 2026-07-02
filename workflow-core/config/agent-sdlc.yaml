@@ -11,18 +11,41 @@
 #   Explore  → context_scan + analysis  (analysis выдаёт acceptance_checklist = Claims)
 #   Plan     → orchestrator mode:plan   (definition_of_done, files_to_touch)
 #   Chunk    → agent_with_tools         (files_changed = diff-артефакт)
-#   Verify   → orchestrator mode:review (claims + adversarial + non-goals, с loopback)
+#   Verify   → build_gate (compile) + test_gate (тесты) + scope_gate (non-goals enforcement)
+#              + invariant_gate (исполняемые инварианты) + orchestrator mode:review
+#              (claims + adversarial). ЧЕТЫРЕ детерминированных гейта ПЕРЕД LLM-ревью
+#              (концепция: верификация — узкое место, level-2/3 должны быть детерминированными).
 #   Commit   → agent_with_tools (git, локально) + run_report (context handoff)
 #
-# Три human-гейта (роли концепции): claims (analysis), план (plan), приёмка (commit).
-# Остальное автономно. Модели задаются ТИРАМИ (smart/flash/fast), провайдер — per-run.
+# Human-гейты (роли концепции):
+#   - analysis (approval) = DoR + claim-completeness: человек валидирует, что claims ПОЛНЫ
+#     (покрывают всё намерение) и intent готов к циклу. Полноту нельзя проверить структурно.
+#   - plan (approval) = одобрение плана;  commit (approval) = приёмка.
+# Остальное автономно. Модели — ТИРАМИ (smart/flash/fast), провайдер per-run;
+# review СТРОГО сильнее chunk (независимый adversarial-reviewer). LOCAL opt-in: см.
+# закомментированные `model:` над каждым agent-блоком (Ollama-теги для 8GB GPU).
+# Loopback'и (build/test/scope/invariant/review) при исчерпании итераций эскалируют
+# к человеку, а не падают в hard-fail (Stop Conditions концепции).
+#
+# MULTI-CHUNK (концепция: одна intent → несколько chunk'ов): в платформе это моделируется
+#   НЕ циклом внутри одного run'а, а НЕСКОЛЬКИМИ ПОСЛЕДОВАТЕЛЬНЫМИ run'ами (один run = один
+#   smallest-useful-chunk). Sequential-run-gate: следующий run стартует после COMPLETED +
+#   merge предыдущего. Интеграционная верификация между chunk'ами обеспечивается тем, что
+#   test_gate гоняет ВЕСЬ тест-сьют (ловит поломки на стыках), а context_scan/analysis
+#   следующего run'а видят уже смерженный предыдущий chunk.
+#
+# STRUCTURED INTENT (опция для DoR/scope против Affected Areas): вместо сырого requirement
+#   можно завести intake-блок intent_md_input (парсит In/Out Scope, Invariants, Claims →
+#   acceptance_checklist, Affected Areas, Stop Conditions из intent.md по пути-файлу).
+#   Требует отдельного entry point с requires_input: intent_file. Здесь по умолчанию —
+#   сырой requirement (youtrack_input), т.к. это не ломает существующие entry points.
 #
 # Запуск:
 #   workflow run config/agent-sdlc.yaml --requirement "$(cat intent.md)"
 #   (или из UI: requirement = содержимое intent.md, provider = нужный)
 #
-# Resume-точки: --entry-point chunk_ready  (план уже одобрен)
-#               --entry-point verify_passed (можно сразу коммитить)
+# Resume-точки: --entry-point chunk_ready     (план уже одобрен)
+#               --entry-point intent_amended  (intent уточнён после разведки, без рестарта)
 # =============================================================================
 
 name: agent-sdlc
@@ -49,8 +72,8 @@ entry_points:
 
   - id: chunk_ready
     name: "План уже одобрен"
-    description: "Стартовать с реализации chunk'а (upstream инъектятся)"
-    from_block: chunk
+    description: "Стартовать с разведки и реализации (upstream инъектятся)"
+    from_block: explore
     requires_input: requirement
     inject:
       - block_id: task_input
@@ -60,6 +83,19 @@ entry_points:
       - block_id: analysis
         source: empty
       - block_id: plan
+        source: empty
+
+  - id: intent_amended
+    name: "Intent уточнён после разведки"
+    description: "Разведка вскрыла неточность intent'а (цель ТА ЖЕ, описание точнее). Человек внёс правку — переснять claims/план без полного рестарта и пересканирования стека."
+    from_block: analysis
+    requires_input: requirement
+    inject:
+      - block_id: task_input
+        source: empty
+      - block_id: context_scan
+        source: empty
+      - block_id: stack_rules
         source: empty
 
 # =============================================================================
@@ -84,7 +120,10 @@ pipeline:
     parallel: true
     approval: false
     agent:
-      model: fast
+      # Модели — ТИРАМИ (провайдер per-run). LOCAL opt-in (8GB GPU): model: qwen2.5-coder:7b-instruct-q4_K_M
+      model: smart
+      temperature: 0.2
+      max_tokens: 1500
     # working_dir не указан — берётся workingDir проекта (target-репо)
 
   # --- STACK RULES: загружает файлы правил по обнаруженному стеку --------------
@@ -100,22 +139,38 @@ pipeline:
 
   # --- EXPLORE (2/2) + CLAIMS: анализ intent, декомпозиция на claims ----------
   # acceptance_checklist здесь — single source of truth для "done".
+  # approval:true — это DoR-гейт + claim-completeness гейт концепции: человек
+  # валидирует, что claims ПОЛНЫ (покрывают всё намерение, вкл. edge/негативы),
+  # а intent готов к циклу. Полноту claims нельзя проверить структурно (семантика) —
+  # поэтому её судит человек здесь, до кода.
   - id: analysis
     block: analysis
     depends_on:
       - context_scan
       - stack_rules
+    config:
+      require_checklist: true   # пустой checklist после retry = провал блока (fail-loud)
     agent:
+      # LOCAL opt-in (8GB GPU): model: qwen2.5-coder:7b-instruct-q4_K_M
       model: smart
+      temperature: 0.2
       system_prompt: |
         Ты senior-архитектор. Анализируешь intent глубоко: затронутые компоненты,
         технический подход, риски. Декомпозируй intent на ПРОВЕРЯЕМЫЕ claims —
         конкретные наблюдаемые утверждения (acceptance_checklist), которые можно
         подтвердить по diff или тесту. Минимум 2 claim'а должны быть edge/негативными.
         Уважай Out of Scope и Invariants из intent'а — не расширяй scope.
-      max_tokens: 8192
-    approval: true                # Approver валидирует карту + claims
-    # (claims проверяются downstream в review; здесь loopback на себя запрещён фазой)
+
+        ПОЛНОТА (claim completeness): claims должны покрывать ВСЁ намерение, а не
+        только то, что легко удовлетворить. Пройдись по intent'у и проверь: каждое
+        заявленное поведение (включая негативные и граничные случаи) имеет claim.
+        Пропущенный claim = верификация подтвердит "готово" для неполной спеки.
+
+        DEFINITION OF READY: если intent неоднозначен, scope не ограничен (нет
+        Out of Scope) или есть незакрытые блокирующие вопросы — не выдумывай claims,
+        а верни это в поле рисков/вопросов, чтобы человек доработал intent до старта.
+      max_tokens: 2000
+    approval: true                # Approver: DoR + claim-completeness (loopback на себя запрещён фазой)
 
   # --- PLAN: технический план с definition_of_done ----------------------------
   - id: plan
@@ -123,33 +178,79 @@ pipeline:
     depends_on:
       - analysis
     agent:
+      # LOCAL opt-in (8GB GPU): model: hermes3:8b
       model: smart
       temperature: 0.1
     config:
       mode: plan
-      context_blocks: [analysis, context_scan, stack_rules]
-      max_iterations: 10
+      context_blocks: [task_input, analysis, context_scan]
+      max_iterations: 5
       budget_usd_cap: 2.0
       system_prompt_extra: |
         Стек и конвенции целевого проекта — из context_scan. Учитывай Invariants
         из intent'а: каждый план-шаг должен их сохранять. definition_of_done должен
         покрывать все claims из acceptance_checklist + тесты.
 
+        КРИТИЧНО — файлы для files_to_touch:
+        - Если в requirement/intent явно перечислены пути файлов — добавь их НАПРЯМУЮ в files_to_touch.
+          НЕ изменяй имена файлов и классов на основе логических предположений.
+        - Используй ТОЛЬКО имена файлов которые (a) явно указаны в requirement, или
+          (b) найдены через Glob/Read. НИКОГДА не угадывай имена файлов из названия задачи.
+        - context_scan.most_relevant_subproject указывает главный подпроект — начинай Glob оттуда.
+        - При поиске НИКОГДА не ограничивай path= конкретным модулем по имени задачи —
+          используй Glob БЕЗ path (поиск по всему workingDir) или path=${context_scan.most_relevant_subproject}.
+
         Стек-специфичные обязательные требования для этого проекта (из stack_rules):
         ${stack_rules.rules_content}
     approval: true                # человек одобряет план
+
+  # --- EXPLORE: read-only разведка перед правками --------------------------------
+  # Только Read/Glob/Grep — никаких Write/Edit. Цель: найти точное место правки и
+  # показать человеку "вот что сейчас в файле, вот что нужно менять".
+  # approval: true — человек подтверждает что модель нашла правильное место.
+  - id: explore
+    block: agent_with_tools
+    depends_on:
+      - plan
+    agent:
+      # LOCAL opt-in (8GB GPU): model: hermes3:8b
+      model: flash
+      max_tokens: 8192
+      temperature: 0.1
+    config:
+      allowed_tools: [Read, Glob, Grep]   # ТОЛЬКО чтение — никаких Write/Edit
+      max_iterations: 4                   # не более 4 Read-вызовов, иначе OOM
+      context_blocks: [task_input, analysis, plan]
+      user_message: |
+        Intent: ${analysis.summary}
+        Подход из плана: ${plan.approach}
+        Файлы из плана: ${plan.files_to_touch}
+
+        Твоя задача — ТОЛЬКО изучить код, никаких правок.
+        Сделай НЕ БОЛЕЕ 3 вызовов Read — выбери 3 самых важных файла
+        (обычно: Repository, Service, Controller — основная логика).
+        Для каждого прочитанного файла выпиши:
+        - какие классы/методы есть сейчас
+        - что именно нужно добавить/изменить
+
+        ВАЖНО: Используй Read с точными путями из plan.files_to_touch.
+        Если путь не найден — Glob без path по имени файла.
+        После 3 Read — сразу верни итоговый анализ без новых tool-вызовов.
+    approval: true        # Человек видит что в файлах и подтверждает
 
   # --- CHUNK: smallest useful chunk, автономно --------------------------------
   - id: chunk
     block: agent_with_tools
     depends_on:
-      - plan
+      - explore
     agent:
+      # LOCAL opt-in (8GB GPU): model: hermes3:8b
       model: flash
-      max_tokens: 16384
+      max_tokens: 8192
     config:
       preload_from: plan          # преload files_to_touch из плана
       focus_on_failure: true      # при loopback — узкий промпт на проваленное
+      require_file_changes: true  # 0 правок = провал (silent-success слабых моделей)
       allowed_tools: [Read, Write, Edit, Glob, Grep, Bash]
       bash_allowlist:
         - Bash(grep*)
@@ -169,27 +270,172 @@ pipeline:
       user_message: |
         Intent: ${analysis.summary}
 
-        Реализуй план (см. контекст plan): подход — ${plan.approach}.
-        Затронуть только файлы из files_to_touch. Соблюдай Invariants intent'а и
-        Out of Scope — не выходи за scope. Доведи до зелёных тестов/сборки.
+        Реализуй план: ${plan.approach}.
+        Затрагивай только файлы из plan.files_to_touch (они уже загружены в контекст).
+        Соблюдай Invariants intent'а и Out of Scope — не выходи за scope.
         Каждый claim из acceptance_checklist должен стать наблюдаемым в коде/тестах.
-
-        Стек-специфичные обязательные требования для этого проекта:
-        ${stack_rules.rules_content}
     approval: false
+    # Zero-edit гейт: success=false → self-loopback с failure_reason в _loopback.
+    on_failure:
+      action: loopback
+      target: chunk
+      max_iterations: 2
+      inject_context:
+        failure_reason: "$.chunk.failure_reason"
 
-  # --- VERIFY: 3 уровня (claims + adversarial + non-goals), с loopback --------
+  # --- BUILD GATE: детерминированная компиляция перед LLM-ревью ----------------
+  # Ловит галлюцинированные пакеты/классы дешевле и надёжнее любой модели.
+  # allow_nonzero_exit: true → блок выставляет success=false вместо падения,
+  # PipelineRunner видит success=false и запускает on_failure.loopback.
+  # Ключи build_stderr/build_stdout/build_exit — ровно те, что ждёт
+  # focus_on_failure в chunk (узкий root-cause промпт вместо полной спеки).
+  - id: build_gate
+    block: shell_exec
+    depends_on:
+      - chunk
+    approval: false
+    config:
+      command: "./gradlew compileJava compileTestJava --console=plain -q"  # per-project; для не-Java целей менять
+      timeout_sec: 600
+      allow_nonzero_exit: true
+    on_failure:
+      action: loopback
+      target: chunk
+      max_iterations: 2
+      inject_context:
+        build_stderr: "$.build_gate.stderr"
+        build_stdout: "$.build_gate.stdout"
+        build_exit: "$.build_gate.exit_code"
+      # Исчерпан локальный loopback → эскалация (cloud→human) вместо hard-fail (Stop Conditions).
+      escalation:
+        - { tier: cloud, model: smart, max_iterations: 2 }
+        - { tier: human, notify: [ui], timeout: 86400 }
+
+  # --- TEST GATE: детерминированный прогон тестов (claims = diff ИЛИ тест) -----
+  # Концепция: claim подтверждается "по diff или тесту". Раньше тесты гонял сам
+  # review-LLM по своему усмотрению (недетерминированно) — теперь это отдельный
+  # детерминированный гейт. allow_nonzero_exit: true → success=false вместо падения,
+  # PipelineRunner видит success=false и запускает on_failure.loopback на chunk.
+  # Ключи test_stderr/test_stdout/test_exit ловит focus_on_failure в chunk.
+  - id: test_gate
+    block: shell_exec
+    depends_on:
+      - build_gate
+    approval: false
+    config:
+      command: "./gradlew test --console=plain -q"  # per-project; не-Java: npm test / pytest / go test ./...
+      timeout_sec: 900
+      allow_nonzero_exit: true
+    on_failure:
+      action: loopback
+      target: chunk
+      max_iterations: 2
+      inject_context:
+        test_stderr: "$.test_gate.stderr"
+        test_stdout: "$.test_gate.stdout"
+        test_exit: "$.test_gate.exit_code"
+      escalation:
+        - { tier: cloud, model: smart, max_iterations: 2 }
+        - { tier: human, notify: [ui], timeout: 86400 }
+
+  # --- SCOPE GATE: детерминированный non-goals enforcement (level-3 концепции) -
+  # Сравнивает реально изменённые файлы (working tree, до commit) с plan.files_to_touch.
+  # Файлы вне плана → exit 1 → success=false → on_failure.loopback на chunk.
+  # БЛОКИРУЮЩИЙ режим: структурная проверка "изменённые файлы ⊆ Affected Areas"
+  # (концепция: scope enforcement — primary, grep-по-ключевым-словам — вспомогательный).
+  # Матчинг эвристичен (полный путь ИЛИ basename), поэтому при исчерпании loopback'а —
+  # эскалация к человеку: он решает, это scope creep (revert) или незаявленная
+  # зависимость (внести файл в план/intent). Тупик = сигнал, не hard-fail.
+  - id: scope_gate
+    block: shell_exec
+    depends_on:
+      - test_gate
+    approval: false
+    config:
+      allow_nonzero_exit: true
+      timeout_sec: 120
+      command: |
+        # Разрешённые планом пути (по одному в строке; чистим markdown-буллеты и бэктики)
+        allowed=$(printf '%s\n' "${plan.files_to_touch}" | sed -E 's/^[[:space:]]*[-*][[:space:]]+//; s/`//g' | grep -v '^[[:space:]]*$')
+        # Реально изменённые файлы (working tree; chunk ещё не закоммичен)
+        changed=$(git status --porcelain 2>/dev/null | awk '{print $NF}')
+        if [ -z "$changed" ]; then echo "SCOPE OK: git не видит изменений (моно-репо root?)"; exit 0; fi
+        out_of_scope=""
+        for f in $changed; do
+          base=$(basename "$f")
+          # in-scope если полный путь или имя файла встречается в allowed-списке
+          if printf '%s\n' "$allowed" | grep -qF "$f" || printf '%s\n' "$allowed" | grep -qF "$base"; then
+            :
+          else
+            out_of_scope="$out_of_scope$f\n"
+          fi
+        done
+        if [ -n "$out_of_scope" ]; then
+          echo "SCOPE VIOLATION: файлы вне plan.files_to_touch (scope creep или незаявленная зависимость):"
+          printf '%b' "$out_of_scope"
+          exit 1
+        fi
+        echo "SCOPE OK: все изменения в пределах plan.files_to_touch"
+    on_failure:
+      action: loopback
+      target: chunk
+      max_iterations: 2
+      inject_context:
+        scope_violation: "$.scope_gate.stdout"
+      escalation:
+        - { tier: human, notify: [ui], timeout: 86400 }
+
+  # --- INVARIANT GATE: исполняемая проверка инвариантов (концепция) ------------
+  # Инвариант = утверждение + ИСПОЛНЯЕМАЯ проверка. Здесь — grep-ассерты по коду.
+  # Паттерны проектно-специфичны: раскомментируй/добавь под свой стек и intent.Invariants.
+  # Default (без настройки) — пропускает (exit 0). Нарушение → loopback на chunk.
+  # Так soft-инвариант (глазами человека) становится исполняемым (детерминированно).
+  - id: invariant_gate
+    block: shell_exec
+    depends_on:
+      - scope_gate
+    approval: false
+    config:
+      allow_nonzero_exit: true
+      timeout_sec: 120
+      command: |
+        violations=""
+        # --- Примеры (раскомментируй нужные, добавь свои под intent.Invariants) ---
+        # Нет отладочного вывода в production-коде (изменения working tree):
+        # if git diff -U0 2>/dev/null | grep -nE '^\+.*(System\.out\.println|console\.log|debugger)'; then violations="$violations debug-output;"; fi
+        # Нет прямых SQL вне репозиторного слоя:
+        # if grep -rnE '(SELECT|INSERT|UPDATE|DELETE) ' --include=*.java src 2>/dev/null | grep -viE 'repository|dao'; then violations="$violations raw-sql;"; fi
+        # --- Конец примеров ---
+        if [ -n "$violations" ]; then
+          echo "INVARIANT VIOLATION:$violations"
+          exit 1
+        fi
+        echo "INVARIANTS OK (или проверки не сконфигурированы)"
+    on_failure:
+      action: loopback
+      target: chunk
+      max_iterations: 2
+      inject_context:
+        invariant_violation: "$.invariant_gate.stdout"
+      escalation:
+        - { tier: human, notify: [ui], timeout: 86400 }
+
+  # --- VERIFY: claims + adversarial (structural non-goals/invariants уже в гейтах) -
   - id: review
     block: orchestrator
     depends_on:
-      - chunk
+      - invariant_gate
     agent:
+      # Рецензент СТРОГО сильнее chunk (flash) — независимый adversarial-reviewer, принцип #7.
+      # review — заявленное узкое место процесса, поэтому получает самый сильный тир.
+      # LOCAL opt-in (8GB GPU): model: hermes3:8b  (учти: тот же мозг что и chunk — слабее ловит расхождения)
       model: smart
       temperature: 0.1
     config:
       mode: review
       plan_block: plan
-      context_blocks: [chunk]
+      require_checklist: true   # без чеклиста — escalate вместо freeform-ревью
+      context_blocks: [task_input, analysis, chunk, scope_gate, invariant_gate]
       max_iterations: 8
       budget_usd_cap: 2.0
       bash_allowlist:
@@ -206,6 +452,9 @@ pipeline:
         (1) Claims: каждый пункт acceptance_checklist подтверждён по diff или тесту?
         (2) Adversarial: читай git diff против main — делает ли код то, что нужно было?
         (3) Non-goals: ничего из Out of Scope не просочилось в diff?
+            Детерминированный сигнал scope-гейта (файлы вне plan.files_to_touch):
+            ${scope_gate.stdout}
+            Если там есть файлы вне плана — разберись, это scope creep или легитимно.
         Проверь, что Invariants остались истинными. Не создавай новые id —
         работай строго по id из acceptance_checklist.
     approval: false
@@ -218,6 +467,10 @@ pipeline:
           retry_instruction: "$.review.retry_instruction"
           issues: "$.review.issues"
           carry_forward: "$.review.carry_forward"
+        # Исчерпан loopback → эскалация к человеку вместо hard-fail (Stop Conditions концепции).
+        escalation:
+          - { tier: cloud, model: smart, max_iterations: 2 }
+          - { tier: human, notify: [ui], timeout: 86400 }
 
   # --- COMMIT: локальная ветка + conventional commit + handoff в теле ---------
   - id: commit
